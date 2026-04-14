@@ -8,7 +8,7 @@ genai.configure(api_key=settings.GEMINI_API_KEY)
 
 
 def get_gemini_model():
-    return genai.GenerativeModel("gemini-2.0-flash")
+    return genai.GenerativeModel("gemini-3-flash-preview")
 
 
 async def process_note_input(user_input: str, folder_structure: list[dict]) -> dict:
