@@ -58,7 +58,7 @@ async def get_current_user(
 
 
 async def create_admin_user(db: AsyncSession):
-    """Create admin user if not exists."""
+    """Create or update admin user."""
     result = await db.execute(select(User).where(User.email == settings.ADMIN_EMAIL))
     user = result.scalar_one_or_none()
     if not user:
@@ -70,4 +70,7 @@ async def create_admin_user(db: AsyncSession):
         await db.commit()
         print(f"Admin user created: {settings.ADMIN_EMAIL}")
     else:
-        print(f"Admin user already exists: {settings.ADMIN_EMAIL}")
+        # Always sync password from env
+        user.hashed_password = get_password_hash(settings.ADMIN_PASSWORD)
+        await db.commit()
+        print(f"Admin user password synced: {settings.ADMIN_EMAIL}")
