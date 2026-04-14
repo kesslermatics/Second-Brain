@@ -9,7 +9,7 @@ import { markdownComponents } from '@/lib/markdownComponents';
 import { useStore } from '@/lib/store';
 import {
     sendChatMessage, getChatSession, createChatSession,
-    ensureFolderPath, createNote,
+    ensureFolderPath, createNote, getStreamingUrl,
 } from '@/lib/api';
 import type { ChatSessionDetail, ChatMessage } from '@/lib/types';
 
@@ -95,17 +95,75 @@ export default function ChatPanel({ session, type }: Props) {
         }
 
         try {
-            const response = await sendChatMessage(currentSession.id, userMsg.content);
-            setMessages((prev) => [...prev, response]);
+            if (type === 'qa') {
+                // SSE streaming for QA
+                const streamUrl = getStreamingUrl();
+                const token = typeof window !== 'undefined' ? localStorage.getItem('brain_token') : '';
+                const response = await fetch(`${streamUrl}/chat/sessions/${currentSession.id}/messages/stream`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`,
+                    },
+                    body: JSON.stringify({ content: userMsg.content }),
+                });
 
-            // Refresh session
-            const updated = await getChatSession(currentSession.id);
-            if (type === 'notes') {
-                setActiveNotesSession(updated);
-                await loadNotesSessions();
-            } else {
+                if (!response.ok) throw new Error('Stream failed');
+
+                const reader = response.body?.getReader();
+                const decoder = new TextDecoder();
+                let fullContent = '';
+                const streamMsgId = `stream-${Date.now()}`;
+
+                // Add placeholder message
+                setMessages((prev) => [...prev, {
+                    id: streamMsgId,
+                    session_id: currentSession.id,
+                    role: 'assistant',
+                    content: '',
+                    created_at: new Date().toISOString(),
+                }]);
+
+                if (reader) {
+                    let buffer = '';
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop() || '';
+                        for (const line of lines) {
+                            if (line.startsWith('data: ')) {
+                                try {
+                                    const event = JSON.parse(line.slice(6));
+                                    if (event.type === 'chunk') {
+                                        fullContent += event.content;
+                                        setMessages((prev) =>
+                                            prev.map((m) =>
+                                                m.id === streamMsgId ? { ...m, content: fullContent } : m
+                                            )
+                                        );
+                                    }
+                                } catch {
+                                    // skip invalid JSON
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Refresh session after streaming
+                const updated = await getChatSession(currentSession.id);
                 setActiveQASession(updated);
                 await loadQASessions();
+            } else {
+                // Normal request for notes
+                const response = await sendChatMessage(currentSession.id, userMsg.content);
+                setMessages((prev) => [...prev, response]);
+
+                const updated = await getChatSession(currentSession.id);
+                setActiveNotesSession(updated);
+                await loadNotesSessions();
             }
         } catch (e) {
             console.error(e);
@@ -259,8 +317,8 @@ export default function ChatPanel({ session, type }: Props) {
                                                 setTimeout(() => refineInputRef.current?.focus(), 100);
                                             }}
                                             className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${refineMessageId === msg.id
-                                                    ? 'bg-brain-600 text-white'
-                                                    : 'bg-brain-600/20 text-brain-400 hover:bg-brain-600/30'
+                                                ? 'bg-brain-600 text-white'
+                                                : 'bg-brain-600/20 text-brain-400 hover:bg-brain-600/30'
                                                 }`}
                                         >
                                             <FiRefreshCw className="w-3.5 h-3.5" />

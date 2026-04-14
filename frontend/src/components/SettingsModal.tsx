@@ -181,11 +181,10 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                                 <button
                                     key={tab}
                                     onClick={() => setActiveTab(tab)}
-                                    className={`flex-1 py-3 text-sm font-medium transition-colors ${
-                                        activeTab === tab
+                                    className={`flex-1 py-3 text-sm font-medium transition-colors ${activeTab === tab
                                             ? 'text-brain-400 border-b-2 border-brain-400'
                                             : 'text-dark-500 hover:text-dark-300'
-                                    }`}
+                                        }`}
                                 >
                                     {PROMPT_INFO[tab].label}
                                     {(() => {

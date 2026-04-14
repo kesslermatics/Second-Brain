@@ -6,7 +6,7 @@ from typing import List
 from uuid import UUID
 from app.database import get_db
 from app.auth import get_current_user
-from app.models import User, ChatSession, ChatMessage, Note, Folder, UserSettings
+from app.models import User, ChatSession, ChatMessage, Note, Folder, UserSettings, Image
 from app.schemas import (
     ChatSessionCreate, ChatSessionResponse, ChatSessionDetailResponse,
     ChatMessageCreate, ChatMessageResponse,
@@ -194,17 +194,26 @@ AI_NOTE_DATA -->"""
             limit=10,
         )
 
-        # Get full note content for context
+        # Get full note content for context (handle both notes and images)
         context_notes = []
         for sn in similar_notes:
-            note = await db.get(Note, sn["note_id"])
-            if note:
-                folder = await db.get(Folder, note.folder_id)
+            result_type = sn.get("type", "note")
+            if result_type == "image":
+                # Include image description in context
                 context_notes.append({
-                    "title": note.title,
-                    "folder_path": folder.path if folder else "",
-                    "content_preview": note.content[:1000],
+                    "title": sn["title"],
+                    "folder_path": sn.get("folder_path", ""),
+                    "content_preview": sn.get("content_preview", ""),
                 })
+            else:
+                note = await db.get(Note, sn["note_id"])
+                if note:
+                    folder = await db.get(Folder, note.folder_id)
+                    context_notes.append({
+                        "title": note.title,
+                        "folder_path": folder.path if folder else "",
+                        "content_preview": note.content[:1000],
+                    })
 
         custom_qa_prompt = user_settings.qa_prompt if user_settings else None
         ai_response = await answer_with_rag(message.content, context_notes, chat_history, custom_prompt=custom_qa_prompt)

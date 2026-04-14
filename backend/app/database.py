@@ -29,3 +29,34 @@ async def get_db():
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Ensure note_type column exists (for existing databases)
+        try:
+            await conn.execute(
+                __import__('sqlalchemy').text(
+                    "ALTER TABLE notes ADD COLUMN IF NOT EXISTS note_type VARCHAR(50) NOT NULL DEFAULT 'text'"
+                )
+            )
+        except Exception:
+            pass  # Column already exists or DB doesn't support IF NOT EXISTS
+        # Ensure images table exists (for existing databases)
+        try:
+            await conn.execute(
+                __import__('sqlalchemy').text(
+                    "CREATE TABLE IF NOT EXISTS images ("
+                    "id UUID PRIMARY KEY, "
+                    "original_filename VARCHAR(512) NOT NULL, "
+                    "stored_filename VARCHAR(512) NOT NULL, "
+                    "content_type VARCHAR(100) NOT NULL, "
+                    "file_size INTEGER NOT NULL, "
+                    "file_path VARCHAR(1024) NOT NULL, "
+                    "description TEXT, "
+                    "folder_id UUID REFERENCES folders(id) ON DELETE SET NULL, "
+                    "note_id UUID REFERENCES notes(id) ON DELETE SET NULL, "
+                    "user_id UUID NOT NULL REFERENCES users(id), "
+                    "embedded BOOLEAN DEFAULT FALSE, "
+                    "created_at TIMESTAMPTZ DEFAULT NOW()"
+                    ")"
+                )
+            )
+        except Exception:
+            pass

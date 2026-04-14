@@ -7,6 +7,13 @@ import { getMe } from '@/lib/api';
 import Sidebar from '@/components/Sidebar';
 import ChatView from '@/components/ChatView';
 import NotesView from '@/components/NotesView';
+import SearchView from '@/components/SearchView';
+import DashboardView from '@/components/DashboardView';
+import KnowledgeGraphView from '@/components/KnowledgeGraphView';
+import SpacedRepView from '@/components/SpacedRepView';
+import ExportView from '@/components/ExportView';
+import SummaryView from '@/components/SummaryView';
+import ImageGallery from '@/components/ImageGallery';
 
 export default function DashboardPage() {
     const router = useRouter();
@@ -41,11 +48,26 @@ export default function DashboardPage() {
 
     if (!isAuthenticated) return null;
 
+    const renderView = () => {
+        switch (activeView) {
+            case 'chat': return <ChatView />;
+            case 'notes': return <NotesView />;
+            case 'search': return <SearchView />;
+            case 'dashboard': return <DashboardView />;
+            case 'graph': return <KnowledgeGraphView />;
+            case 'learn': return <SpacedRepView />;
+            case 'export': return <ExportView />;
+            case 'summary': return <SummaryView />;
+            case 'images': return <ImageGallery />;
+            default: return <ChatView />;
+        }
+    };
+
     return (
         <div className="h-screen flex overflow-hidden bg-dark-950">
             <Sidebar />
             <main className="flex-1 overflow-hidden">
-                {activeView === 'chat' ? <ChatView /> : <NotesView />}
+                {renderView()}
             </main>
         </div>
     );

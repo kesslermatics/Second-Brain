@@ -1,9 +1,10 @@
 'use client';
 
 import { useState } from 'react';
-import { FiFolder, FiFolderPlus, FiChevronRight, FiChevronDown, FiFile, FiTrash2 } from 'react-icons/fi';
+import { FiFolder, FiFolderPlus, FiChevronRight, FiChevronDown, FiFile, FiTrash2, FiFilePlus } from 'react-icons/fi';
+import { LuPencilRuler } from 'react-icons/lu';
 import { useStore } from '@/lib/store';
-import { createFolder, deleteFolder, getNote } from '@/lib/api';
+import { createFolder, deleteFolder, getNote, createNote } from '@/lib/api';
 import type { FolderTree } from '@/lib/types';
 
 interface Props {
@@ -15,7 +16,7 @@ export default function FolderTreeComponent({ folders, level }: Props) {
     const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
     const [newFolderParent, setNewFolderParent] = useState<string | null>(null);
     const [newFolderName, setNewFolderName] = useState('');
-    const { loadFolderTree, setSelectedNote, setActiveView } = useStore();
+    const { loadFolderTree, setSelectedNote, setActiveView, setPendingEdit } = useStore();
 
     const toggleFolder = (folderId: string) => {
         const next = new Set(expandedFolders);
@@ -60,6 +61,40 @@ export default function FolderTreeComponent({ folders, level }: Props) {
         }
     };
 
+    const handleCreateNote = async (e: React.MouseEvent, folderId: string) => {
+        e.stopPropagation();
+        try {
+            const note = await createNote('Neue Notiz', '', folderId);
+            setSelectedNote(note);
+            setPendingEdit(true);
+            setActiveView('notes');
+            await loadFolderTree();
+            // Expand the folder to see the new note
+            const next = new Set(expandedFolders);
+            next.add(folderId);
+            setExpandedFolders(next);
+        } catch (e) {
+            console.error(e);
+        }
+    };
+
+    const handleCreateExcalidraw = async (e: React.MouseEvent, folderId: string) => {
+        e.stopPropagation();
+        try {
+            const initialData = JSON.stringify({ elements: [], appState: { theme: 'dark' }, files: {} });
+            const note = await createNote('Neue Zeichnung', initialData, folderId, undefined, 'excalidraw');
+            setSelectedNote(note);
+            setPendingEdit(true);
+            setActiveView('notes');
+            await loadFolderTree();
+            const next = new Set(expandedFolders);
+            next.add(folderId);
+            setExpandedFolders(next);
+        } catch (e) {
+            console.error(e);
+        }
+    };
+
     if (folders.length === 0 && level === 0) {
         return (
             <p className="text-xs text-dark-600 px-3 py-2">Keine Ordner vorhanden</p>
@@ -93,6 +128,20 @@ export default function FolderTreeComponent({ folders, level }: Props) {
                                     title="Unterordner erstellen"
                                 >
                                     <FiFolderPlus className="w-3 h-3" />
+                                </button>
+                                <button
+                                    onClick={(e) => handleCreateNote(e, folder.id)}
+                                    className="p-0.5 hover:bg-dark-700 rounded"
+                                    title="Neue Notiz erstellen"
+                                >
+                                    <FiFilePlus className="w-3 h-3 text-brain-400" />
+                                </button>
+                                <button
+                                    onClick={(e) => handleCreateExcalidraw(e, folder.id)}
+                                    className="p-0.5 hover:bg-dark-700 rounded"
+                                    title="Neue Excalidraw Zeichnung"
+                                >
+                                    <LuPencilRuler className="w-3 h-3 text-purple-400" />
                                 </button>
                                 <button
                                     onClick={(e) => handleDeleteFolder(e, folder.id)}
@@ -130,7 +179,11 @@ export default function FolderTreeComponent({ folders, level }: Props) {
                                         className="flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm text-dark-400 hover:text-white hover:bg-dark-800 cursor-pointer transition-colors"
                                         style={{ paddingLeft: `${(level + 1) * 16 + 8}px` }}
                                     >
-                                        <FiFile className="w-3.5 h-3.5 flex-shrink-0 text-brain-400" />
+                                        {(note.note_type || 'text') === 'excalidraw' ? (
+                                            <LuPencilRuler className="w-3.5 h-3.5 flex-shrink-0 text-purple-400" />
+                                        ) : (
+                                            <FiFile className="w-3.5 h-3.5 flex-shrink-0 text-brain-400" />
+                                        )}
                                         <span className="truncate">{note.title}</span>
                                     </div>
                                 ))}

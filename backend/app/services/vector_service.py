@@ -87,12 +87,61 @@ def upsert_note_embedding(note_id: str, user_id: str, title: str, content: str, 
             "title": title,
             "folder_path": folder_path,
             "content_preview": content[:500],
+            "type": "note",
         },
     )
     qdrant_client.upsert(
         collection_name=COLLECTION_NAME,
         points=[point],
     )
+
+
+def upsert_image_embedding(
+    image_id: str,
+    user_id: str,
+    original_filename: str,
+    description: str,
+    folder_path: str = "",
+    note_title: str = "",
+):
+    """Upsert an image description embedding into Qdrant."""
+    embed_text = f"Image: {original_filename}"
+    if note_title:
+        embed_text += f"\nNote: {note_title}"
+    if folder_path:
+        embed_text += f"\nPath: {folder_path}"
+    embed_text += f"\n\n{description}"
+
+    embedding = get_embedding(embed_text)
+
+    point = PointStruct(
+        id=str(image_id),
+        vector=embedding,
+        payload={
+            "image_id": str(image_id),
+            "user_id": str(user_id),
+            "title": f"Bild: {original_filename}",
+            "folder_path": folder_path,
+            "content_preview": description[:500],
+            "type": "image",
+            "original_filename": original_filename,
+        },
+    )
+    qdrant_client.upsert(
+        collection_name=COLLECTION_NAME,
+        points=[point],
+    )
+
+
+def delete_image_embedding(image_id: str):
+    """Delete an image embedding from Qdrant."""
+    try:
+        qdrant_client.delete(
+            collection_name=COLLECTION_NAME,
+            points_selector=[str(image_id)],
+        )
+    except Exception as e:
+        print(f"Error deleting image embedding: {e}")
 
 
 def delete_note_embedding(note_id: str):
@@ -130,11 +179,12 @@ def _vector_search(query: str, user_id: str, limit: int = 20) -> list[dict]:
 
     return [
         {
-            "note_id": hit.payload["note_id"],
+            "note_id": hit.payload.get("note_id", hit.payload.get("image_id", "")),
             "title": hit.payload["title"],
             "folder_path": hit.payload["folder_path"],
             "content_preview": hit.payload["content_preview"],
             "score": hit.score,
+            "type": hit.payload.get("type", "note"),
         }
         for hit in results
     ]

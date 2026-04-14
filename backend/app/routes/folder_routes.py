@@ -30,6 +30,7 @@ def build_tree(folders: list[Folder], notes_by_folder: dict, parent_id=None) -> 
                         NoteListResponse(
                             id=n.id,
                             title=n.title,
+                            note_type=getattr(n, 'note_type', 'text') or 'text',
                             folder_id=n.folder_id,
                             created_at=n.created_at,
                             updated_at=n.updated_at,

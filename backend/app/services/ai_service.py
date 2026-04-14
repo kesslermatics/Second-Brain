@@ -182,3 +182,136 @@ async def edit_note_with_ai(current_content: str, instruction: str, custom_promp
 
     response = model.generate_content(prompt)
     return response.text.strip()
+
+
+# ── AI: Tag suggestion ────────────────────────────────────────────────
+
+async def suggest_tags(title: str, content: str, existing_tags: list[str]) -> list[str]:
+    """Suggest tags for a note, preferring existing tags to avoid duplicates."""
+    model = get_gemini_model()
+
+    existing_str = ", ".join(existing_tags) if existing_tags else "(keine)"
+
+    prompt = f"""Du bist ein Tag-Generator für ein Second Brain System.
+Analysiere die folgende Notiz und schlage 2-5 passende Tags vor.
+
+WICHTIG: Bevorzuge Tags aus der bestehenden Tag-Liste, um Duplikate zu vermeiden!
+Verwende Kleinbuchstaben, keine Leerzeichen (nutze Bindestriche statt Leerzeichen).
+
+Bestehende Tags: {existing_str}
+
+Notiz-Titel: {title}
+Notiz-Inhalt (Auszug): {content[:1500]}
+
+Antworte NUR mit einem JSON-Array von Strings, z.B.: ["tag1", "tag2", "tag3"]"""
+
+    response = model.generate_content(prompt)
+    text = response.text.strip()
+
+    json_match = re.search(r'\[[\s\S]*?\]', text)
+    if json_match:
+        try:
+            tags = json.loads(json_match.group())
+            return [str(t).lower().strip() for t in tags if isinstance(t, str)]
+        except json.JSONDecodeError:
+            pass
+    return []
+
+
+# ── AI: Flashcard generation ──────────────────────────────────────────
+
+async def generate_flashcards(title: str, content: str, max_cards: int = 5) -> list[dict]:
+    """Generate question-answer flashcards from a note."""
+    model = get_gemini_model()
+
+    prompt = f"""Du bist ein Lernkarten-Generator. Erstelle aus der folgenden Notiz {max_cards} Lernkarten 
+im Frage-Antwort-Format. Die Fragen sollen das Verständnis der Kernkonzepte testen.
+
+Notiz-Titel: {title}
+Notiz-Inhalt:
+{content[:3000]}
+
+Antworte NUR mit einem JSON-Array:
+[
+    {{"question": "Frage 1?", "answer": "Antwort 1"}},
+    {{"question": "Frage 2?", "answer": "Antwort 2"}}
+]"""
+
+    response = model.generate_content(prompt)
+    text = response.text.strip()
+
+    json_match = re.search(r'\[[\s\S]*\]', text)
+    if json_match:
+        try:
+            cards = json.loads(json_match.group())
+            return [
+                {"question": c.get("question", ""), "answer": c.get("answer", "")}
+                for c in cards
+                if isinstance(c, dict) and c.get("question") and c.get("answer")
+            ]
+        except json.JSONDecodeError:
+            pass
+    return []
+
+
+# ── AI: Link suggestion (find related notes) ─────────────────────────
+
+async def suggest_links(note_title: str, note_content: str, candidate_notes: list[dict]) -> list[str]:
+    """Suggest which candidate notes are semantically related to the given note."""
+    model = get_gemini_model()
+
+    candidates_str = "\n".join(
+        f"- ID: {c['id']}, Titel: {c['title']}, Auszug: {c['preview'][:200]}"
+        for c in candidate_notes
+    )
+
+    prompt = f"""Analysiere die Hauptnotiz und die Kandidaten. Welche Kandidaten sind inhaltlich verwandt?
+Antworte NUR mit einem JSON-Array der IDs der verwandten Notizen, z.B.: ["id1", "id2"]
+Wähle nur wirklich zusammenhängende Notizen (max 5). Bei keinem Zusammenhang: []
+
+Hauptnotiz:
+Titel: {note_title}
+Inhalt (Auszug): {note_content[:1000]}
+
+Kandidaten:
+{candidates_str}"""
+
+    response = model.generate_content(prompt)
+    text = response.text.strip()
+
+    json_match = re.search(r'\[[\s\S]*?\]', text)
+    if json_match:
+        try:
+            ids = json.loads(json_match.group())
+            return [str(i) for i in ids]
+        except json.JSONDecodeError:
+            pass
+    return []
+
+
+# ── AI: Summarization ─────────────────────────────────────────────────
+
+async def generate_summary(notes: list[dict], scope_label: str) -> str:
+    """Generate a summary across multiple notes."""
+    model = get_gemini_model()
+
+    notes_str = ""
+    for n in notes[:20]:  # limit to 20 notes
+        notes_str += f"\n### {n['title']}\n{n['content'][:500]}\n"
+
+    prompt = f"""Du bist ein Second Brain Assistent. Erstelle eine umfassende Zusammenfassung 
+aller folgenden Notizen aus dem Bereich "{scope_label}".
+
+Die Zusammenfassung soll:
+- Die wichtigsten Themen und Erkenntnisse hervorheben
+- Verbindungen zwischen den Notizen aufzeigen
+- Gut strukturiert und in Markdown formatiert sein
+- Praktische Schlussfolgerungen enthalten
+
+Notizen:
+{notes_str}
+
+Zusammenfassung:"""
+
+    response = model.generate_content(prompt)
+    return response.text

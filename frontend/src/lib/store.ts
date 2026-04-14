@@ -19,6 +19,8 @@ interface AppState {
   selectedNote: Note | null;
   setSelectedNote: (note: Note | null) => void;
   loadNote: (noteId: string) => Promise<void>;
+  pendingEdit: boolean;
+  setPendingEdit: (pending: boolean) => void;
 
   // Chat
   notesSessions: ChatSession[];
@@ -31,8 +33,8 @@ interface AppState {
   setActiveQASession: (session: ChatSessionDetail | null) => void;
 
   // UI
-  activeView: 'chat' | 'notes';
-  setActiveView: (view: 'chat' | 'notes') => void;
+  activeView: 'chat' | 'notes' | 'dashboard' | 'graph' | 'learn' | 'search' | 'export' | 'summary' | 'images';
+  setActiveView: (view: 'chat' | 'notes' | 'dashboard' | 'graph' | 'learn' | 'search' | 'export' | 'summary' | 'images') => void;
   sidebarOpen: boolean;
   setSidebarOpen: (open: boolean) => void;
 }
@@ -78,6 +80,8 @@ export const useStore = create<AppState>((set, get) => ({
       console.error('Failed to load note:', e);
     }
   },
+  pendingEdit: false,
+  setPendingEdit: (pending) => set({ pendingEdit: pending }),
 
   // Chat
   notesSessions: [],

@@ -1,15 +1,36 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from typing import List
 from uuid import UUID
+import json
 from app.database import get_db
 from app.auth import get_current_user
-from app.models import User, Note, Folder
-from app.schemas import NoteCreate, NoteUpdate, NoteResponse, NoteListResponse
+from app.models import User, Note, Folder, Tag, NoteVersion
+from app.schemas import NoteCreate, NoteUpdate, NoteResponse, NoteListResponse, TagResponse
 from app.services.vector_service import upsert_note_embedding, delete_note_embedding
 
 router = APIRouter(prefix="/notes", tags=["notes"])
+
+
+def extract_excalidraw_text(content: str) -> str:
+    """Extract readable text from Excalidraw JSON for embedding."""
+    try:
+        data = json.loads(content)
+        elements = data.get("elements", [])
+        texts = []
+        for el in elements:
+            if el.get("type") == "text" and el.get("text"):
+                texts.append(el["text"])
+            # Also get bound text from containers
+            if el.get("boundElements"):
+                for be in el["boundElements"]:
+                    if be.get("type") == "text":
+                        # text will be in its own element
+                        pass
+        return "\n".join(texts) if texts else "[Excalidraw Zeichnung]"
+    except (json.JSONDecodeError, KeyError):
+        return content[:500]
 
 
 @router.get("/", response_model=List[NoteListResponse])
@@ -37,12 +58,19 @@ async def get_note(
         raise HTTPException(status_code=404, detail="Note not found")
 
     folder = await db.get(Folder, note.folder_id)
+
+    # Load tags
+    await db.refresh(note, ["tags"])
+    tags = [TagResponse(id=t.id, name=t.name, color=t.color) for t in note.tags]
+
     return NoteResponse(
         id=note.id,
         title=note.title,
         content=note.content,
+        note_type=note.note_type or "text",
         folder_id=note.folder_id,
         folder_path=folder.path if folder else None,
+        tags=tags,
         created_at=note.created_at,
         updated_at=note.updated_at,
     )
@@ -61,6 +89,7 @@ async def create_note(
     new_note = Note(
         title=note.title,
         content=note.content,
+        note_type=note.note_type or "text",
         folder_id=note.folder_id,
         user_id=current_user.id,
     )
@@ -68,12 +97,25 @@ async def create_note(
     await db.flush()
     await db.refresh(new_note)
 
+    # Attach tags if provided
+    tags = []
+    if note.tag_ids:
+        for tag_id in note.tag_ids:
+            tag = await db.get(Tag, tag_id)
+            if tag and tag.user_id == current_user.id:
+                new_note.tags.append(tag)
+                tags.append(TagResponse(id=tag.id, name=tag.name, color=tag.color))
+        await db.flush()
+
     try:
+        embed_content = new_note.content
+        if new_note.note_type == "excalidraw":
+            embed_content = extract_excalidraw_text(new_note.content)
         upsert_note_embedding(
             note_id=str(new_note.id),
             user_id=str(current_user.id),
             title=new_note.title,
-            content=new_note.content,
+            content=embed_content,
             folder_path=folder.path,
         )
     except Exception as e:
@@ -83,8 +125,10 @@ async def create_note(
         id=new_note.id,
         title=new_note.title,
         content=new_note.content,
+        note_type=new_note.note_type or "text",
         folder_id=new_note.folder_id,
         folder_path=folder.path,
+        tags=tags,
         created_at=new_note.created_at,
         updated_at=new_note.updated_at,
     )
@@ -101,37 +145,71 @@ async def update_note(
     if not note or note.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Note not found")
 
+    # Save current state as a version before changing
+    if note_update.title is not None or note_update.content is not None:
+        max_ver_result = await db.execute(
+            select(func.coalesce(func.max(NoteVersion.version_number), 0))
+            .where(NoteVersion.note_id == note_id)
+        )
+        next_version = max_ver_result.scalar() + 1
+        version = NoteVersion(
+            note_id=note_id,
+            title=note.title,
+            content=note.content,
+            version_number=next_version,
+        )
+        db.add(version)
+
     if note_update.title is not None:
         note.title = note_update.title
     if note_update.content is not None:
         note.content = note_update.content
+    if note_update.note_type is not None:
+        note.note_type = note_update.note_type
     if note_update.folder_id is not None:
         folder = await db.get(Folder, note_update.folder_id)
         if not folder or folder.user_id != current_user.id:
             raise HTTPException(status_code=404, detail="Target folder not found")
         note.folder_id = note_update.folder_id
 
+    # Update tags if provided
+    if note_update.tag_ids is not None:
+        await db.refresh(note, ["tags"])
+        note.tags.clear()
+        for tag_id in note_update.tag_ids:
+            tag = await db.get(Tag, tag_id)
+            if tag and tag.user_id == current_user.id:
+                note.tags.append(tag)
+
     await db.flush()
     await db.refresh(note)
 
     folder = await db.get(Folder, note.folder_id)
     try:
+        embed_content = note.content
+        if (note.note_type or "text") == "excalidraw":
+            embed_content = extract_excalidraw_text(note.content)
         upsert_note_embedding(
             note_id=str(note.id),
             user_id=str(current_user.id),
             title=note.title,
-            content=note.content,
+            content=embed_content,
             folder_path=folder.path if folder else "",
         )
     except Exception as e:
         print(f"Error updating embedding: {e}")
 
+    await db.refresh(note, ["tags"])
+    tags = [TagResponse(id=t.id, name=t.name, color=t.color) for t in note.tags]
+
     return NoteResponse(
         id=note.id,
         title=note.title,
         content=note.content,
+        note_type=note.note_type or "text",
         folder_id=note.folder_id,
         folder_path=folder.path if folder else None,
+        tags=tags,
         created_at=note.created_at,
         updated_at=note.updated_at,
     )

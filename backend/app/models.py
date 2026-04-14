@@ -1,9 +1,18 @@
-from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Boolean, Integer
+from sqlalchemy import Column, String, Text, DateTime, ForeignKey, Boolean, Integer, Float, Table, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
 from datetime import datetime, timezone
 from app.database import Base
+
+
+# ── Many-to-Many: notes <-> tags ──────────────────────────────────────
+note_tags = Table(
+    "note_tags",
+    Base.metadata,
+    Column("note_id", UUID(as_uuid=True), ForeignKey("notes.id", ondelete="CASCADE"), primary_key=True),
+    Column("tag_id", UUID(as_uuid=True), ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True),
+)
 
 
 class User(Base):
@@ -18,6 +27,9 @@ class User(Base):
     notes = relationship("Note", back_populates="user", cascade="all, delete-orphan")
     chat_sessions = relationship("ChatSession", back_populates="user", cascade="all, delete-orphan")
     settings = relationship("UserSettings", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    tags = relationship("Tag", back_populates="user", cascade="all, delete-orphan")
+    sr_settings = relationship("SRSettings", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    images = relationship("Image", back_populates="user", cascade="all, delete-orphan")
 
 
 class Folder(Base):
@@ -34,6 +46,7 @@ class Folder(Base):
     user = relationship("User", back_populates="folders")
     parent = relationship("Folder", remote_side=[id], backref="children")
     notes = relationship("Note", back_populates="folder", cascade="all, delete-orphan")
+    images = relationship("Image", back_populates="folder")
 
 
 class Note(Base):
@@ -42,6 +55,7 @@ class Note(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     title = Column(String(512), nullable=False)
     content = Column(Text, nullable=False)
+    note_type = Column(String(50), nullable=False, default="text")  # "text" or "excalidraw"
     folder_id = Column(UUID(as_uuid=True), ForeignKey("folders.id"), nullable=False)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
@@ -49,6 +63,12 @@ class Note(Base):
 
     user = relationship("User", back_populates="notes")
     folder = relationship("Folder", back_populates="notes")
+    tags = relationship("Tag", secondary=note_tags, back_populates="notes")
+    versions = relationship("NoteVersion", back_populates="note", cascade="all, delete-orphan", order_by="NoteVersion.version_number.desc()")
+    outgoing_links = relationship("NoteLink", foreign_keys="NoteLink.source_note_id", back_populates="source_note", cascade="all, delete-orphan")
+    incoming_links = relationship("NoteLink", foreign_keys="NoteLink.target_note_id", back_populates="target_note", cascade="all, delete-orphan")
+    flashcards = relationship("FlashCard", back_populates="note", cascade="all, delete-orphan")
+    images = relationship("Image", back_populates="note")
 
 
 class ChatSession(Base):
@@ -89,3 +109,111 @@ class UserSettings(Base):
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     user = relationship("User", back_populates="settings")
+
+
+# ── Tags ──────────────────────────────────────────────────────────────
+class Tag(Base):
+    __tablename__ = "tags"
+    __table_args__ = (
+        UniqueConstraint("name_lower", "user_id", name="uq_tag_name_user"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(100), nullable=False)
+    name_lower = Column(String(100), nullable=False, index=True)
+    color = Column(String(7), nullable=True)  # hex color e.g. #3b82f6
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    user = relationship("User", back_populates="tags")
+    notes = relationship("Note", secondary=note_tags, back_populates="tags")
+
+
+# ── Note Version History ──────────────────────────────────────────────
+class NoteVersion(Base):
+    __tablename__ = "note_versions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="CASCADE"), nullable=False)
+    title = Column(String(512), nullable=False)
+    content = Column(Text, nullable=False)
+    version_number = Column(Integer, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    note = relationship("Note", back_populates="versions")
+
+
+# ── Note Links (Backlinks / Knowledge Graph) ──────────────────────────
+class NoteLink(Base):
+    __tablename__ = "note_links"
+    __table_args__ = (
+        UniqueConstraint("source_note_id", "target_note_id", name="uq_note_link"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="CASCADE"), nullable=False)
+    target_note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="CASCADE"), nullable=False)
+    link_type = Column(String(50), nullable=False, default="related")  # related, references, extends
+    ai_generated = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    source_note = relationship("Note", foreign_keys=[source_note_id], back_populates="outgoing_links")
+    target_note = relationship("Note", foreign_keys=[target_note_id], back_populates="incoming_links")
+
+
+# ── Spaced Repetition ─────────────────────────────────────────────────
+class FlashCard(Base):
+    __tablename__ = "flashcards"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    question = Column(Text, nullable=False)
+    answer = Column(Text, nullable=False)
+    # SM-2 algorithm fields
+    easiness = Column(Float, nullable=False, default=2.5)
+    interval = Column(Integer, nullable=False, default=0)  # days
+    repetitions = Column(Integer, nullable=False, default=0)
+    next_review = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    last_review = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    note = relationship("Note", back_populates="flashcards")
+
+
+class SRSettings(Base):
+    """User-level Spaced Repetition settings."""
+    __tablename__ = "sr_settings"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), unique=True, nullable=False)
+    cards_per_session = Column(Integer, nullable=False, default=20)
+    min_easiness = Column(Float, nullable=False, default=1.3)
+    max_new_cards_per_day = Column(Integer, nullable=False, default=10)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    user = relationship("User", back_populates="sr_settings")
+
+
+# ── Images ─────────────────────────────────────────────────────────────
+class Image(Base):
+    """Uploaded image with AI-generated description for RAG."""
+    __tablename__ = "images"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    original_filename = Column(String(512), nullable=False)
+    stored_filename = Column(String(512), nullable=False)
+    content_type = Column(String(100), nullable=False)
+    file_size = Column(Integer, nullable=False)
+    file_path = Column(String(1024), nullable=False)  # relative path on disk
+    description = Column(Text, nullable=True)  # AI-generated description
+    folder_id = Column(UUID(as_uuid=True), ForeignKey("folders.id", ondelete="SET NULL"), nullable=True)
+    note_id = Column(UUID(as_uuid=True), ForeignKey("notes.id", ondelete="SET NULL"), nullable=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    embedded = Column(Boolean, default=False)  # whether description is in Qdrant
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    user = relationship("User", back_populates="images")
+    folder = relationship("Folder", back_populates="images")
+    note = relationship("Note", back_populates="images")

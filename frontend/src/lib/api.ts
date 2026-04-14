@@ -2,6 +2,9 @@ import axios from 'axios';
 import type {
   User, Folder, FolderTree, Note, NoteListItem,
   ChatSession, ChatSessionDetail, ChatMessage, AIEditResponse, UserSettings,
+  Tag, TagSuggestResponse, SearchResponse, NoteVersion, NoteLink, GraphData,
+  FlashCard, SRSettings, ReviewSession, DashboardData, SummaryRequest, SummaryResponse,
+  ExportRequest, ImageItem, ImageListResponse,
 } from './types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -80,12 +83,12 @@ export const getNote = async (noteId: string) => {
   return data;
 };
 
-export const createNote = async (title: string, content: string, folderId: string) => {
-  const { data } = await api.post<Note>('/notes/', { title, content, folder_id: folderId });
+export const createNote = async (title: string, content: string, folderId: string, tagIds?: string[], noteType?: string) => {
+  const { data } = await api.post<Note>('/notes/', { title, content, folder_id: folderId, tag_ids: tagIds, note_type: noteType || 'text' });
   return data;
 };
 
-export const updateNote = async (noteId: string, updates: { title?: string; content?: string; folder_id?: string }) => {
+export const updateNote = async (noteId: string, updates: { title?: string; content?: string; folder_id?: string; tag_ids?: string[]; note_type?: string }) => {
   const { data } = await api.put<Note>(`/notes/${noteId}`, updates);
   return data;
 };
@@ -93,6 +96,166 @@ export const updateNote = async (noteId: string, updates: { title?: string; cont
 export const deleteNote = async (noteId: string) => {
   await api.delete(`/notes/${noteId}`);
 };
+
+// File Uploads
+export const uploadFile = async (file: File) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  const { data } = await api.post<{ url: string; filename: string; size: number; content_type: string }>(
+    '/uploads/',
+    formData,
+    { headers: { 'Content-Type': 'multipart/form-data' } }
+  );
+  return data;
+};
+
+export const uploadPastedImage = async (file: File) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  const { data } = await api.post<{ url: string; filename: string; size: number; content_type: string }>(
+    '/uploads/paste',
+    formData,
+    { headers: { 'Content-Type': 'multipart/form-data' } }
+  );
+  return data;
+};
+
+// Tags
+export const getTags = async () => {
+  const { data } = await api.get<Tag[]>('/tags');
+  return data;
+};
+
+export const createTag = async (name: string, color?: string) => {
+  const { data } = await api.post<Tag>('/tags', { name, color });
+  return data;
+};
+
+export const deleteTag = async (tagId: string) => {
+  await api.delete(`/tags/${tagId}`);
+};
+
+export const suggestTags = async (title: string, content: string) => {
+  const { data } = await api.post<TagSuggestResponse>('/tags/suggest', { title, content });
+  return data;
+};
+
+// Search
+export const searchNotes = async (query: string, limit?: number) => {
+  const params: Record<string, string | number> = { q: query };
+  if (limit) params.limit = limit;
+  const { data } = await api.get<SearchResponse>('/search', { params });
+  return data;
+};
+
+// Note Versions
+export const getNoteVersions = async (noteId: string) => {
+  const { data } = await api.get<NoteVersion[]>(`/notes/${noteId}/versions`);
+  return data;
+};
+
+export const getNoteVersion = async (noteId: string, versionId: string) => {
+  const { data } = await api.get<NoteVersion>(`/notes/${noteId}/versions/${versionId}`);
+  return data;
+};
+
+export const restoreNoteVersion = async (noteId: string, versionId: string) => {
+  const { data } = await api.post<Note>(`/notes/${noteId}/versions/${versionId}/restore`);
+  return data;
+};
+
+// Note Links
+export const getNoteLinks = async (noteId: string) => {
+  const { data } = await api.get<NoteLink[]>(`/links/note/${noteId}`);
+  return data;
+};
+
+export const createNoteLink = async (noteId: string, targetNoteId: string, linkType?: string) => {
+  const { data } = await api.post<NoteLink>(`/links/note/${noteId}`, { target_note_id: targetNoteId, link_type: linkType || 'related' });
+  return data;
+};
+
+export const deleteNoteLink = async (linkId: string) => {
+  await api.delete(`/links/${linkId}`);
+};
+
+export const autoLinkNote = async (noteId: string) => {
+  const { data } = await api.post<NoteLink[]>(`/links/note/${noteId}/auto-link`);
+  return data;
+};
+
+export const getGraphData = async () => {
+  const { data } = await api.get<GraphData>('/links/graph');
+  return data;
+};
+
+// Spaced Repetition
+export const getSRSettings = async () => {
+  const { data } = await api.get<SRSettings>('/sr/settings');
+  return data;
+};
+
+export const updateSRSettings = async (settings: Partial<SRSettings>) => {
+  const { data } = await api.put<SRSettings>('/sr/settings', settings);
+  return data;
+};
+
+export const generateFlashcards = async (noteId: string) => {
+  const { data } = await api.post<FlashCard[]>(`/sr/generate/${noteId}`);
+  return data;
+};
+
+export const generateFolderFlashcards = async (folderId: string) => {
+  const { data } = await api.post<FlashCard[]>(`/sr/generate-folder/${folderId}`);
+  return data;
+};
+
+export const getReviewSession = async () => {
+  const { data } = await api.get<ReviewSession>('/sr/review');
+  return data;
+};
+
+export const submitReview = async (cardId: string, quality: number) => {
+  const { data } = await api.post<FlashCard>('/sr/review', { card_id: cardId, quality });
+  return data;
+};
+
+export const getAllFlashcards = async () => {
+  const { data } = await api.get<FlashCard[]>('/sr/cards');
+  return data;
+};
+
+export const deleteFlashcard = async (cardId: string) => {
+  await api.delete(`/sr/cards/${cardId}`);
+};
+
+// Dashboard
+export const getDashboard = async () => {
+  const { data } = await api.get<DashboardData>('/dashboard');
+  return data;
+};
+
+// Export
+export const exportNotes = async (request: ExportRequest) => {
+  const response = await api.post('/export', request, { responseType: 'blob' });
+  const url = window.URL.createObjectURL(new Blob([response.data]));
+  const link = document.createElement('a');
+  link.href = url;
+  link.setAttribute('download', 'brain_export.zip');
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+};
+
+// Summary
+export const generateSummary = async (request: SummaryRequest) => {
+  const { data } = await api.post<SummaryResponse>('/summary', request);
+  return data;
+};
+
+// Streaming Chat
+export const getStreamingUrl = () => `${API_URL}/api`;
 
 // Chat
 export const getChatSessions = async (sessionType?: string) => {
@@ -145,6 +308,43 @@ export const updateSettings = async (settings: { note_prompt?: string | null; qa
 export const resetSettings = async () => {
   const { data } = await api.post<UserSettings>('/settings/reset');
   return data;
+};
+
+// Images
+export const getImages = async (folderId?: string, noteId?: string) => {
+  const params: Record<string, string> = {};
+  if (folderId) params.folder_id = folderId;
+  if (noteId) params.note_id = noteId;
+  const { data } = await api.get<ImageListResponse>('/images/', { params });
+  return data;
+};
+
+export const getImage = async (imageId: string) => {
+  const { data } = await api.get<ImageItem>(`/images/${imageId}`);
+  return data;
+};
+
+export const uploadImage = async (file: File, folderId?: string, noteId?: string) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  const params: Record<string, string> = {};
+  if (folderId) params.folder_id = folderId;
+  if (noteId) params.note_id = noteId;
+  const { data } = await api.post<ImageItem>(
+    '/images/upload',
+    formData,
+    { headers: { 'Content-Type': 'multipart/form-data' }, params }
+  );
+  return data;
+};
+
+export const reanalyzeImage = async (imageId: string) => {
+  const { data } = await api.post<ImageItem>(`/images/${imageId}/reanalyze`);
+  return data;
+};
+
+export const deleteImage = async (imageId: string) => {
+  await api.delete(`/images/${imageId}`);
 };
 
 export default api;

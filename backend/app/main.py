@@ -1,5 +1,8 @@
+import os
+from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from app.config import get_settings
 from app.database import init_db, async_session
@@ -12,6 +15,17 @@ from app.routes.note_routes import router as note_router
 from app.routes.chat_routes import router as chat_router
 from app.routes.ai_routes import router as ai_router
 from app.routes.settings_routes import router as settings_router
+from app.routes.tag_routes import router as tag_router
+from app.routes.search_routes import router as search_router
+from app.routes.version_routes import router as version_router
+from app.routes.link_routes import router as link_router
+from app.routes.sr_routes import router as sr_router
+from app.routes.dashboard_routes import router as dashboard_router
+from app.routes.export_routes import router as export_router
+from app.routes.summary_routes import router as summary_router
+from app.routes.stream_routes import router as stream_router
+from app.routes.upload_routes import router as upload_router
+from app.routes.image_routes import router as image_router
 
 settings = get_settings()
 
@@ -69,6 +83,22 @@ app.include_router(note_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(ai_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
+app.include_router(tag_router, prefix="/api")
+app.include_router(search_router, prefix="/api")
+app.include_router(version_router, prefix="/api")
+app.include_router(link_router, prefix="/api")
+app.include_router(sr_router, prefix="/api")
+app.include_router(dashboard_router, prefix="/api")
+app.include_router(export_router, prefix="/api")
+app.include_router(summary_router, prefix="/api")
+app.include_router(stream_router, prefix="/api")
+app.include_router(upload_router, prefix="/api")
+app.include_router(image_router, prefix="/api")
+
+# Serve uploaded files statically
+UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "uploads"))
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
 
 @app.get("/")
