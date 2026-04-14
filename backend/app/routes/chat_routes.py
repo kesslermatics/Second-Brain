@@ -6,7 +6,7 @@ from typing import List
 from uuid import UUID
 from app.database import get_db
 from app.auth import get_current_user
-from app.models import User, ChatSession, ChatMessage, Note, Folder
+from app.models import User, ChatSession, ChatMessage, Note, Folder, UserSettings
 from app.schemas import (
     ChatSessionCreate, ChatSessionResponse, ChatSessionDetailResponse,
     ChatMessageCreate, ChatMessageResponse,
@@ -136,6 +136,12 @@ async def send_message(
     db.add(user_msg)
     await db.flush()
 
+    # Load user's custom prompt settings
+    settings_result = await db.execute(
+        select(UserSettings).where(UserSettings.user_id == current_user.id)
+    )
+    user_settings = settings_result.scalar_one_or_none()
+
     # Generate AI response
     if session.session_type == "notes":
         # Get folder structure for context
@@ -145,7 +151,8 @@ async def send_message(
         folders = folder_result.scalars().all()
         folder_structure = [{"path": f.path, "name": f.name} for f in folders]
 
-        ai_result = await process_note_input(message.content, folder_structure)
+        custom_note_prompt = user_settings.note_prompt if user_settings else None
+        ai_result = await process_note_input(message.content, folder_structure, custom_prompt=custom_note_prompt)
         note_data_json = json.dumps({
             "folder": ai_result['suggested_folder'],
             "title": ai_result['suggested_title'],
@@ -199,7 +206,8 @@ AI_NOTE_DATA -->"""
                     "content_preview": note.content[:1000],
                 })
 
-        ai_response = await answer_with_rag(message.content, context_notes, chat_history)
+        custom_qa_prompt = user_settings.qa_prompt if user_settings else None
+        ai_response = await answer_with_rag(message.content, context_notes, chat_history, custom_prompt=custom_qa_prompt)
 
         if similar_notes:
             sources = "\n\n---\n**Quellen:**\n"

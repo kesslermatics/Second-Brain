@@ -64,3 +64,12 @@ export interface AIEditResponse {
   original_content: string;
   suggested_content: string;
 }
+
+export interface UserSettings {
+  note_prompt: string | null;
+  qa_prompt: string | null;
+  edit_prompt: string | null;
+  note_prompt_default: string;
+  qa_prompt_default: string;
+  edit_prompt_default: string;
+}

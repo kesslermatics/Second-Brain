@@ -11,6 +11,7 @@ from app.routes.folder_routes import router as folder_router
 from app.routes.note_routes import router as note_router
 from app.routes.chat_routes import router as chat_router
 from app.routes.ai_routes import router as ai_router
+from app.routes.settings_routes import router as settings_router
 
 settings = get_settings()
 
@@ -67,6 +68,7 @@ app.include_router(folder_router, prefix="/api")
 app.include_router(note_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(ai_router, prefix="/api")
+app.include_router(settings_router, prefix="/api")
 
 
 @app.get("/")

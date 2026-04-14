@@ -11,28 +11,24 @@ def get_gemini_model():
     return genai.GenerativeModel("gemini-3-flash-preview")
 
 
-async def process_note_input(user_input: str, folder_structure: list[dict]) -> dict:
-    """Process user input and suggest where to save it as a note."""
-    model = get_gemini_model()
-
-    folder_tree_str = json.dumps(folder_structure, indent=2, default=str)
-
-    prompt = f"""Du bist ein Second Brain Assistent. Der Benutzer gibt dir Notizen oder Informationen, 
+# ── Default Prompt Templates ──────────────────────────────────────────
+# Placeholders: {{ORDNERSTRUKTUR}}, {{BENUTZEREINGABE}}
+DEFAULT_NOTE_PROMPT = """Du bist ein Second Brain Assistent. Der Benutzer gibt dir Notizen oder Informationen, 
 und du sollst diese strukturiert aufbereiten und vorschlagen, wo sie in der vorhandenen Ordnerstruktur 
 gespeichert werden sollen.
 
 Aktuelle Ordnerstruktur:
-{folder_tree_str}
+{{ORDNERSTRUKTUR}}
 
 Benutzereingabe:
-{user_input}
+{{BENUTZEREINGABE}}
 
 Bitte antworte im folgenden JSON-Format (NUR das JSON, kein anderer Text):
-{{
+{
     "suggested_folder": "pfad/zum/ordner",
     "suggested_title": "Titel der Notiz",
     "formatted_content": "Der formatierte Inhalt der Notiz in Markdown"
-}}
+}
 
 Regeln:
 - Wenn ein passender Ordner existiert, verwende diesen
@@ -68,7 +64,59 @@ Formatierungsregeln für formatted_content (sehr wichtig!):
 - Trenne logische Abschnitte mit horizontalen Linien (---) wenn sinnvoll
 - Mache KEINEN Blocktext — nutze viele Absätze, Listen und die oben genannten Blöcke
 - Die Notiz soll visuell ansprechend und leicht scanbar sein
-- Schreibe die Notiz IMMER in der Ich-Form (z.B. "Ich habe gelernt...", "Mir ist aufgefallen...", "Ich verstehe das so...") — der Benutzer schreibt sein persönliches Second Brain"""
+- Schreibe die Notiz IMMER in neutraler Form — sachlich, klar und informativ. Vermeide die Ich-Form."""
+
+# Placeholders: {{KONTEXT}}, {{CHATVERLAUF}}, {{FRAGE}}
+DEFAULT_RAG_PROMPT = """Du bist ein intelligenter Second Brain Assistent. Beantworte die Frage des Benutzers 
+basierend auf den folgenden Notizen aus seinem Second Brain. Wenn die Notizen nicht ausreichen, 
+um die Frage vollständig zu beantworten, sage das ehrlich und gib trotzdem dein Bestes.
+
+Relevante Notizen aus dem Second Brain:
+{{KONTEXT}}
+
+{{CHATVERLAUF}}
+
+Aktuelle Frage: {{FRAGE}}
+
+Bitte antworte:
+- Strukturiert und klar
+- Mit Bezug auf die Quellen wenn möglich
+- In der Sprache der Frage
+- Nutze Markdown für Formatierung"""
+
+# Placeholders: {{AKTUELLE_NOTIZ}}, {{ANWEISUNG}}
+DEFAULT_EDIT_PROMPT = """Du bist ein Notiz-Editor. Bearbeite die folgende Notiz gemäß der Anweisung des Benutzers.
+Gib NUR den bearbeiteten Inhalt zurück, keinen anderen Text.
+
+Aktuelle Notiz:
+{{AKTUELLE_NOTIZ}}
+
+Anweisung: {{ANWEISUNG}}
+
+Bearbeitete Notiz:"""
+
+
+def get_default_prompts() -> dict:
+    """Return all default prompt templates."""
+    return {
+        "note_prompt": DEFAULT_NOTE_PROMPT,
+        "qa_prompt": DEFAULT_RAG_PROMPT,
+        "edit_prompt": DEFAULT_EDIT_PROMPT,
+    }
+
+
+async def process_note_input(user_input: str, folder_structure: list[dict], custom_prompt: str = None) -> dict:
+    """Process user input and suggest where to save it as a note."""
+    model = get_gemini_model()
+
+    folder_tree_str = json.dumps(folder_structure, indent=2, default=str)
+
+    prompt_template = custom_prompt or DEFAULT_NOTE_PROMPT
+    prompt = (
+        prompt_template
+        .replace("{{ORDNERSTRUKTUR}}", folder_tree_str)
+        .replace("{{BENUTZEREINGABE}}", user_input)
+    )
 
     response = model.generate_content(prompt)
     text = response.text.strip()
@@ -92,7 +140,7 @@ Formatierungsregeln für formatted_content (sehr wichtig!):
         }
 
 
-async def answer_with_rag(question: str, context_notes: list[dict], chat_history: list[dict] = None) -> str:
+async def answer_with_rag(question: str, context_notes: list[dict], chat_history: list[dict] = None, custom_prompt: str = None) -> str:
     """Answer a question using RAG context."""
     model = get_gemini_model()
 
@@ -107,40 +155,30 @@ async def answer_with_rag(question: str, context_notes: list[dict], chat_history
             role = "Benutzer" if msg["role"] == "user" else "Assistent"
             history_str += f"{role}: {msg['content']}\n"
 
-    prompt = f"""Du bist ein intelligenter Second Brain Assistent. Beantworte die Frage des Benutzers 
-basierend auf den folgenden Notizen aus seinem Second Brain. Wenn die Notizen nicht ausreichen, 
-um die Frage vollständig zu beantworten, sage das ehrlich und gib trotzdem dein Bestes.
+    chat_history_block = f"Bisheriger Chatverlauf:\n{history_str}" if history_str else ""
 
-Relevante Notizen aus dem Second Brain:
-{context_str}
-
-{f'Bisheriger Chatverlauf:{chr(10)}{history_str}' if history_str else ''}
-
-Aktuelle Frage: {question}
-
-Bitte antworte:
-- Strukturiert und klar
-- Mit Bezug auf die Quellen wenn möglich
-- In der Sprache der Frage
-- Nutze Markdown für Formatierung"""
+    prompt_template = custom_prompt or DEFAULT_RAG_PROMPT
+    prompt = (
+        prompt_template
+        .replace("{{KONTEXT}}", context_str)
+        .replace("{{CHATVERLAUF}}", chat_history_block)
+        .replace("{{FRAGE}}", question)
+    )
 
     response = model.generate_content(prompt)
     return response.text
 
 
-async def edit_note_with_ai(current_content: str, instruction: str) -> str:
+async def edit_note_with_ai(current_content: str, instruction: str, custom_prompt: str = None) -> str:
     """Edit a note based on AI instruction."""
     model = get_gemini_model()
 
-    prompt = f"""Du bist ein Notiz-Editor. Bearbeite die folgende Notiz gemäß der Anweisung des Benutzers.
-Gib NUR den bearbeiteten Inhalt zurück, keinen anderen Text.
-
-Aktuelle Notiz:
-{current_content}
-
-Anweisung: {instruction}
-
-Bearbeitete Notiz:"""
+    prompt_template = custom_prompt or DEFAULT_EDIT_PROMPT
+    prompt = (
+        prompt_template
+        .replace("{{AKTUELLE_NOTIZ}}", current_content)
+        .replace("{{ANWEISUNG}}", instruction)
+    )
 
     response = model.generate_content(prompt)
     return response.text.strip()

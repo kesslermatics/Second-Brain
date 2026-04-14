@@ -166,3 +166,19 @@ class RAGAnswerResponse(BaseModel):
 
 
 FolderTreeResponse.model_rebuild()
+
+
+# Settings
+class SettingsUpdate(BaseModel):
+    note_prompt: Optional[str] = None
+    qa_prompt: Optional[str] = None
+    edit_prompt: Optional[str] = None
+
+
+class SettingsResponse(BaseModel):
+    note_prompt: Optional[str] = None
+    qa_prompt: Optional[str] = None
+    edit_prompt: Optional[str] = None
+    note_prompt_default: str
+    qa_prompt_default: str
+    edit_prompt_default: str

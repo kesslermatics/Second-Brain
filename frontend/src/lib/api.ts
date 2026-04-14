@@ -1,7 +1,7 @@
 import axios from 'axios';
 import type {
   User, Folder, FolderTree, Note, NoteListItem,
-  ChatSession, ChatSessionDetail, ChatMessage, AIEditResponse,
+  ChatSession, ChatSessionDetail, ChatMessage, AIEditResponse, UserSettings,
 } from './types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -128,6 +128,22 @@ export const sendChatMessage = async (sessionId: string, content: string) => {
 // AI
 export const aiEditNote = async (noteId: string, instruction: string) => {
   const { data } = await api.post<AIEditResponse>('/ai/edit-note', { note_id: noteId, instruction });
+  return data;
+};
+
+// Settings
+export const getSettings = async () => {
+  const { data } = await api.get<UserSettings>('/settings');
+  return data;
+};
+
+export const updateSettings = async (settings: { note_prompt?: string | null; qa_prompt?: string | null; edit_prompt?: string | null }) => {
+  const { data } = await api.put<UserSettings>('/settings', settings);
+  return data;
+};
+
+export const resetSettings = async () => {
+  const { data } = await api.post<UserSettings>('/settings/reset');
   return data;
 };
 

@@ -5,10 +5,11 @@ import { useStore } from '@/lib/store';
 import { LuBrain } from 'react-icons/lu';
 import {
     FiMessageSquare, FiBookOpen, FiPlus, FiTrash2,
-    FiChevronRight, FiChevronDown, FiLogOut, FiMenu, FiFile,
+    FiChevronRight, FiChevronDown, FiLogOut, FiMenu, FiFile, FiSettings,
 } from 'react-icons/fi';
 import { createChatSession, getChatSession, deleteChatSession } from '@/lib/api';
 import FolderTreeComponent from './FolderTree';
+import SettingsModal from './SettingsModal';
 import type { ChatSession } from '@/lib/types';
 
 export default function Sidebar() {
@@ -22,6 +23,7 @@ export default function Sidebar() {
     const [notesExpanded, setNotesExpanded] = useState(true);
     const [qaExpanded, setQAExpanded] = useState(true);
     const [foldersExpanded, setFoldersExpanded] = useState(true);
+    const [settingsOpen, setSettingsOpen] = useState(false);
 
     useEffect(() => {
         loadNotesSessions();
@@ -235,7 +237,14 @@ export default function Sidebar() {
                 </div>
 
                 {/* Footer */}
-                <div className="p-3 border-t border-dark-800">
+                <div className="p-3 border-t border-dark-800 space-y-1">
+                    <button
+                        onClick={() => setSettingsOpen(true)}
+                        className="flex items-center gap-2 w-full px-3 py-2 text-sm text-dark-500 hover:text-white hover:bg-dark-800 rounded-lg transition-colors"
+                    >
+                        <FiSettings className="w-4 h-4" />
+                        Einstellungen
+                    </button>
                     <button
                         onClick={logout}
                         className="flex items-center gap-2 w-full px-3 py-2 text-sm text-dark-500 hover:text-white hover:bg-dark-800 rounded-lg transition-colors"
@@ -245,6 +254,8 @@ export default function Sidebar() {
                     </button>
                 </div>
             </aside>
+
+            <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
         </>
     );
 }
