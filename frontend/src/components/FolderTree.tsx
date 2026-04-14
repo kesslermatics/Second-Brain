@@ -1,0 +1,145 @@
+'use client';
+
+import { useState } from 'react';
+import { FiFolder, FiFolderPlus, FiChevronRight, FiChevronDown, FiFile, FiTrash2 } from 'react-icons/fi';
+import { useStore } from '@/lib/store';
+import { createFolder, deleteFolder, getNote } from '@/lib/api';
+import type { FolderTree } from '@/lib/types';
+
+interface Props {
+    folders: FolderTree[];
+    level: number;
+}
+
+export default function FolderTreeComponent({ folders, level }: Props) {
+    const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+    const [newFolderParent, setNewFolderParent] = useState<string | null>(null);
+    const [newFolderName, setNewFolderName] = useState('');
+    const { loadFolderTree, setSelectedNote, setActiveView } = useStore();
+
+    const toggleFolder = (folderId: string) => {
+        const next = new Set(expandedFolders);
+        if (next.has(folderId)) {
+            next.delete(folderId);
+        } else {
+            next.add(folderId);
+        }
+        setExpandedFolders(next);
+    };
+
+    const handleCreateFolder = async (parentId: string) => {
+        if (!newFolderName.trim()) return;
+        try {
+            await createFolder(newFolderName.trim(), parentId);
+            setNewFolderName('');
+            setNewFolderParent(null);
+            await loadFolderTree();
+        } catch (e) {
+            console.error(e);
+        }
+    };
+
+    const handleDeleteFolder = async (e: React.MouseEvent, folderId: string) => {
+        e.stopPropagation();
+        if (!confirm('Ordner und alle Inhalte löschen?')) return;
+        try {
+            await deleteFolder(folderId);
+            await loadFolderTree();
+        } catch (e) {
+            console.error(e);
+        }
+    };
+
+    const handleSelectNote = async (noteId: string) => {
+        try {
+            const note = await getNote(noteId);
+            setSelectedNote(note);
+            setActiveView('notes');
+        } catch (e) {
+            console.error(e);
+        }
+    };
+
+    if (folders.length === 0 && level === 0) {
+        return (
+            <p className="text-xs text-dark-600 px-3 py-2">Keine Ordner vorhanden</p>
+        );
+    }
+
+    return (
+        <div>
+            {folders.map((folder) => {
+                const isExpanded = expandedFolders.has(folder.id);
+                const hasChildren = folder.children.length > 0 || folder.notes.length > 0;
+
+                return (
+                    <div key={folder.id}>
+                        <div
+                            className="group flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm text-dark-400 hover:text-white hover:bg-dark-800 cursor-pointer transition-colors"
+                            style={{ paddingLeft: `${level * 16 + 8}px` }}
+                            onClick={() => toggleFolder(folder.id)}
+                        >
+                            {hasChildren ? (
+                                isExpanded ? <FiChevronDown className="w-3.5 h-3.5 flex-shrink-0" /> : <FiChevronRight className="w-3.5 h-3.5 flex-shrink-0" />
+                            ) : (
+                                <span className="w-3.5" />
+                            )}
+                            <FiFolder className="w-3.5 h-3.5 flex-shrink-0 text-yellow-500" />
+                            <span className="truncate flex-1">{folder.name}</span>
+                            <div className="opacity-0 group-hover:opacity-100 flex gap-0.5">
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); setNewFolderParent(folder.id); }}
+                                    className="p-0.5 hover:bg-dark-700 rounded"
+                                    title="Unterordner erstellen"
+                                >
+                                    <FiFolderPlus className="w-3 h-3" />
+                                </button>
+                                <button
+                                    onClick={(e) => handleDeleteFolder(e, folder.id)}
+                                    className="p-0.5 hover:bg-dark-700 rounded"
+                                    title="Ordner löschen"
+                                >
+                                    <FiTrash2 className="w-3 h-3 text-red-400" />
+                                </button>
+                            </div>
+                        </div>
+
+                        {newFolderParent === folder.id && (
+                            <div className="flex items-center gap-1 px-2 py-1" style={{ paddingLeft: `${(level + 1) * 16 + 8}px` }}>
+                                <input
+                                    type="text"
+                                    value={newFolderName}
+                                    onChange={(e) => setNewFolderName(e.target.value)}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') handleCreateFolder(folder.id);
+                                        if (e.key === 'Escape') { setNewFolderParent(null); setNewFolderName(''); }
+                                    }}
+                                    placeholder="Ordnername..."
+                                    className="flex-1 px-2 py-1 text-xs bg-dark-950 border border-dark-700 rounded text-white placeholder-dark-600 focus:outline-none focus:border-brain-500"
+                                    autoFocus
+                                />
+                            </div>
+                        )}
+
+                        {isExpanded && (
+                            <>
+                                {folder.notes.map((note) => (
+                                    <div
+                                        key={note.id}
+                                        onClick={() => handleSelectNote(note.id)}
+                                        className="flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm text-dark-400 hover:text-white hover:bg-dark-800 cursor-pointer transition-colors"
+                                        style={{ paddingLeft: `${(level + 1) * 16 + 8}px` }}
+                                    >
+                                        <FiFile className="w-3.5 h-3.5 flex-shrink-0 text-brain-400" />
+                                        <span className="truncate">{note.title}</span>
+                                    </div>
+                                ))}
+                                <FolderTreeComponent folders={folder.children} level={level + 1} />
+                            </>
+                        )}
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
