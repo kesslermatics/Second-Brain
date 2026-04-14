@@ -5,6 +5,7 @@ from app.config import get_settings
 from app.database import init_db, async_session
 from app.auth import create_admin_user
 from app.services.vector_service import ensure_collection
+from app.services.backup_service import start_backup_scheduler, stop_backup_scheduler
 from app.routes.auth_routes import router as auth_router
 from app.routes.folder_routes import router as folder_router
 from app.routes.note_routes import router as note_router
@@ -24,9 +25,11 @@ async def lifespan(app: FastAPI):
         await create_admin_user(db)
 
     await ensure_collection()
+    start_backup_scheduler()
     print("Brain Backend ready!")
     yield
     # Shutdown
+    stop_backup_scheduler()
     print("Shutting down Brain Backend...")
 
 

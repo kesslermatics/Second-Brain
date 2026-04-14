@@ -67,7 +67,8 @@ Formatierungsregeln für formatted_content (sehr wichtig!):
 - Verwende Code-Blöcke (```) nur wenn tatsächlich Code, Formeln oder technische Inhalte vorkommen
 - Trenne logische Abschnitte mit horizontalen Linien (---) wenn sinnvoll
 - Mache KEINEN Blocktext — nutze viele Absätze, Listen und die oben genannten Blöcke
-- Die Notiz soll visuell ansprechend und leicht scanbar sein"""
+- Die Notiz soll visuell ansprechend und leicht scanbar sein
+- Schreibe die Notiz IMMER in der Ich-Form (z.B. "Ich habe gelernt...", "Mir ist aufgefallen...", "Ich verstehe das so...") — der Benutzer schreibt sein persönliches Second Brain"""
 
     response = model.generate_content(prompt)
     text = response.text.strip()

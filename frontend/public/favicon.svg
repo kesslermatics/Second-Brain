@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#4c6ef5"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+  </defs>
+  <!-- Rounded square background -->
+  <rect width="64" height="64" rx="14" fill="url(#bg)"/>
+  <!-- Brain icon - left hemisphere -->
+  <path d="M32 18c-2.5 0-4.8.9-6.5 2.4C24 19 22 18.2 19.8 18.8c-2.8.7-4.8 3.2-4.8 6.1 0 1.2.3 2.3.9 3.3-1.5 1.4-2.4 3.4-2.4 5.5 0 2.3 1 4.3 2.6 5.7-.4 1-.6 2-.6 3.1 0 4.2 3.4 7.5 7.5 7.5 1.5 0 2.9-.4 4.1-1.2 1.4 1.4 3.3 2.2 5.4 2.2" stroke="white" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+  <!-- Brain icon - right hemisphere -->
+  <path d="M32 18c2.5 0 4.8.9 6.5 2.4C40 19 42 18.2 44.2 18.8c2.8.7 4.8 3.2 4.8 6.1 0 1.2-.3 2.3-.9 3.3 1.5 1.4 2.4 3.4 2.4 5.5 0 2.3-1 4.3-2.6 5.7.4 1 .6 2 .6 3.1 0 4.2-3.4 7.5-7.5 7.5-1.5 0-2.9-.4-4.1-1.2-1.4 1.4-3.3 2.2-5.4 2.2" stroke="white" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+  <!-- Center line -->
+  <line x1="32" y1="18" x2="32" y2="51" stroke="white" stroke-width="2" stroke-linecap="round" opacity="0.6"/>
+  <!-- Neural connection dots -->
+  <circle cx="24" cy="28" r="1.5" fill="white" opacity="0.8"/>
+  <circle cx="40" cy="28" r="1.5" fill="white" opacity="0.8"/>
+  <circle cx="22" cy="37" r="1.5" fill="white" opacity="0.8"/>
+  <circle cx="42" cy="37" r="1.5" fill="white" opacity="0.8"/>
+  <circle cx="27" cy="44" r="1.5" fill="white" opacity="0.8"/>
+  <circle cx="37" cy="44" r="1.5" fill="white" opacity="0.8"/>
+</svg>

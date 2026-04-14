@@ -2,8 +2,12 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-    title: 'Brain - Second Brain',
+    title: 'Second Brain',
     description: 'Your intelligent second brain for managing knowledge',
+    icons: {
+        icon: '/brain.png',
+        apple: '/brain.png',
+    },
 };
 
 export default function RootLayout({
