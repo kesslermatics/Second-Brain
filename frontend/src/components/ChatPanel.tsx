@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { FiSend, FiSave, FiX } from 'react-icons/fi';
+import { FiSend, FiSave, FiX, FiCheck, FiRefreshCw, FiMessageSquare } from 'react-icons/fi';
 import { LuBrain } from 'react-icons/lu';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -22,8 +22,13 @@ export default function ChatPanel({ session, type }: Props) {
     const [loading, setLoading] = useState(false);
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [savingNote, setSavingNote] = useState<string | null>(null);
+    const [dismissedNotes, setDismissedNotes] = useState<Set<string>>(new Set());
+    const [refineMessageId, setRefineMessageId] = useState<string | null>(null);
+    const [refineInput, setRefineInput] = useState('');
+    const [refining, setRefining] = useState(false);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const refineInputRef = useRef<HTMLInputElement>(null);
     const {
         setActiveNotesSession, setActiveQASession,
         loadNotesSessions, loadQASessions, loadFolderTree,
@@ -138,12 +143,54 @@ export default function ChatPanel({ session, type }: Props) {
             const folder = await ensureFolderPath(noteData.folder);
             await createNote(noteData.title, noteData.content, folder.id);
             await loadFolderTree();
+            setDismissedNotes((prev) => new Set(prev).add(content));
             alert('Notiz erfolgreich gespeichert!');
         } catch (e) {
             console.error(e);
             alert('Fehler beim Speichern der Notiz.');
         } finally {
             setSavingNote(null);
+        }
+    };
+
+    const handleDismissNote = (content: string) => {
+        setDismissedNotes((prev) => new Set(prev).add(content));
+    };
+
+    const handleRefine = async (msgContent: string) => {
+        if (!refineInput.trim() || refining || !session) return;
+        setRefining(true);
+
+        // Send a follow-up message asking to improve the note
+        const refinementPrompt = `Bitte überarbeite den letzten Notiz-Vorschlag basierend auf diesem Feedback: ${refineInput}`;
+
+        try {
+            const response = await sendChatMessage(session.id, refinementPrompt);
+            // Add user refinement message + AI response
+            setMessages((prev) => [
+                ...prev,
+                {
+                    id: `refine-user-${Date.now()}`,
+                    session_id: session.id,
+                    role: 'user',
+                    content: `Nachbesserung: ${refineInput}`,
+                    created_at: new Date().toISOString(),
+                },
+                response,
+            ]);
+
+            // Dismiss old suggestion, new one will have buttons
+            setDismissedNotes((prev) => new Set(prev).add(msgContent));
+            setRefineMessageId(null);
+            setRefineInput('');
+
+            const updated = await getChatSession(session.id);
+            setActiveNotesSession(updated);
+            await loadNotesSessions();
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setRefining(false);
         }
     };
 
@@ -190,17 +237,83 @@ export default function ChatPanel({ session, type }: Props) {
                                 </ReactMarkdown>
                             </div>
 
-                            {/* Save note button for assistant messages with note data */}
-                            {msg.role === 'assistant' && type === 'notes' && extractNoteData(msg.content) && (
-                                <div className="mt-3 pt-3 border-t border-dark-600 flex gap-2">
-                                    <button
-                                        onClick={() => handleSaveNote(msg.content)}
-                                        disabled={savingNote === msg.content}
-                                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-green-600 hover:bg-green-500 text-white rounded-lg transition-colors disabled:opacity-50"
-                                    >
-                                        <FiSave className="w-3.5 h-3.5" />
-                                        {savingNote === msg.content ? 'Speichert...' : 'Notiz speichern'}
-                                    </button>
+                            {/* Action buttons for assistant messages with note data */}
+                            {msg.role === 'assistant' && type === 'notes' && extractNoteData(msg.content) && !dismissedNotes.has(msg.content) && (
+                                <div className="mt-3 pt-3 border-t border-dark-600 space-y-2">
+                                    <div className="flex gap-2">
+                                        {/* Accept */}
+                                        <button
+                                            onClick={() => handleSaveNote(msg.content)}
+                                            disabled={savingNote === msg.content}
+                                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-green-600 hover:bg-green-500 text-white rounded-lg transition-colors disabled:opacity-50"
+                                        >
+                                            <FiCheck className="w-3.5 h-3.5" />
+                                            {savingNote === msg.content ? 'Speichert...' : 'Akzeptieren'}
+                                        </button>
+
+                                        {/* Refine */}
+                                        <button
+                                            onClick={() => {
+                                                setRefineMessageId(refineMessageId === msg.id ? null : msg.id);
+                                                setTimeout(() => refineInputRef.current?.focus(), 100);
+                                            }}
+                                            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                                                refineMessageId === msg.id
+                                                    ? 'bg-brain-600 text-white'
+                                                    : 'bg-brain-600/20 text-brain-400 hover:bg-brain-600/30'
+                                            }`}
+                                        >
+                                            <FiRefreshCw className="w-3.5 h-3.5" />
+                                            Nachbessern
+                                        </button>
+
+                                        {/* Dismiss */}
+                                        <button
+                                            onClick={() => handleDismissNote(msg.content)}
+                                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-red-600/10 text-red-400 hover:bg-red-600/20 rounded-lg transition-colors"
+                                        >
+                                            <FiX className="w-3.5 h-3.5" />
+                                            Ablehnen
+                                        </button>
+                                    </div>
+
+                                    {/* Refine chat input */}
+                                    {refineMessageId === msg.id && (
+                                        <div className="flex gap-2 items-center bg-dark-900 rounded-lg p-2 border border-dark-600">
+                                            <FiMessageSquare className="w-4 h-4 text-brain-400 flex-shrink-0" />
+                                            <input
+                                                ref={refineInputRef}
+                                                type="text"
+                                                value={refineInput}
+                                                onChange={(e) => setRefineInput(e.target.value)}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter') handleRefine(msg.content);
+                                                    if (e.key === 'Escape') { setRefineMessageId(null); setRefineInput(''); }
+                                                }}
+                                                placeholder="Was soll geändert werden? z.B. 'Mehr Details zu Kapitel 2'"
+                                                className="flex-1 px-2 py-1 text-xs bg-transparent text-white placeholder-dark-600 focus:outline-none"
+                                                autoFocus
+                                            />
+                                            <button
+                                                onClick={() => handleRefine(msg.content)}
+                                                disabled={!refineInput.trim() || refining}
+                                                className="p-1.5 bg-brain-600 hover:bg-brain-500 text-white rounded-md transition-colors disabled:opacity-50"
+                                            >
+                                                {refining ? (
+                                                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                                ) : (
+                                                    <FiSend className="w-3.5 h-3.5" />
+                                                )}
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* Show "saved" badge for dismissed/saved notes */}
+                            {msg.role === 'assistant' && type === 'notes' && extractNoteData(msg.content) && dismissedNotes.has(msg.content) && (
+                                <div className="mt-3 pt-3 border-t border-dark-600">
+                                    <span className="text-xs text-dark-500 italic">Erledigt</span>
                                 </div>
                             )}
                         </div>
