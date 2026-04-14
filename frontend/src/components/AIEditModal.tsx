@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { FiCheck, FiX, FiZap, FiSend } from 'react-icons/fi';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { markdownComponents } from '@/lib/markdownComponents';
 import { aiEditNote } from '@/lib/api';
 
 interface Props {
@@ -98,7 +99,7 @@ export default function AIEditModal({ noteId, currentContent, onClose, onAccept 
                             Original
                         </div>
                         <div className="p-4 markdown-content text-sm">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{currentContent}</ReactMarkdown>
+                            <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{currentContent}</ReactMarkdown>
                         </div>
                     </div>
 
@@ -109,7 +110,7 @@ export default function AIEditModal({ noteId, currentContent, onClose, onAccept 
                         </div>
                         <div className="p-4 markdown-content text-sm">
                             {suggestedContent ? (
-                                <ReactMarkdown remarkPlugins={[remarkGfm]}>{suggestedContent}</ReactMarkdown>
+                                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{suggestedContent}</ReactMarkdown>
                             ) : (
                                 <p className="text-dark-600 text-center mt-8">
                                     {loading ? 'Generiert...' : 'Gib oben eine Anweisung ein und klicke auf "Generieren"'}

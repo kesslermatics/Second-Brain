@@ -12,7 +12,7 @@ from app.schemas import (
     ChatMessageCreate, ChatMessageResponse,
 )
 from app.services.ai_service import process_note_input, answer_with_rag
-from app.services.vector_service import search_similar_notes
+from app.services.vector_service import hybrid_search
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -179,11 +179,12 @@ AI_NOTE_DATA -->"""
         history = history_result.scalars().all()
         chat_history = [{"role": m.role, "content": m.content} for m in history]
 
-        # RAG search
-        similar_notes = search_similar_notes(
+        # Hybrid search (vector + full-text, RRF fusion)
+        similar_notes = await hybrid_search(
             query=message.content,
             user_id=str(current_user.id),
-            limit=5,
+            db=db,
+            limit=10,
         )
 
         # Get full note content for context

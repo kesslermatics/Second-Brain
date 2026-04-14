@@ -5,6 +5,7 @@ import { FiSend, FiSave, FiX, FiCheck, FiRefreshCw, FiMessageSquare } from 'reac
 import { LuBrain } from 'react-icons/lu';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { markdownComponents } from '@/lib/markdownComponents';
 import { useStore } from '@/lib/store';
 import {
     sendChatMessage, getChatSession, createChatSession,
@@ -22,6 +23,7 @@ export default function ChatPanel({ session, type }: Props) {
     const [loading, setLoading] = useState(false);
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [savingNote, setSavingNote] = useState<string | null>(null);
+    const [savedNotes, setSavedNotes] = useState<Set<string>>(new Set());
     const [dismissedNotes, setDismissedNotes] = useState<Set<string>>(new Set());
     const [refineMessageId, setRefineMessageId] = useState<string | null>(null);
     const [refineInput, setRefineInput] = useState('');
@@ -143,11 +145,10 @@ export default function ChatPanel({ session, type }: Props) {
             const folder = await ensureFolderPath(noteData.folder);
             await createNote(noteData.title, noteData.content, folder.id);
             await loadFolderTree();
+            setSavedNotes((prev) => new Set(prev).add(content));
             setDismissedNotes((prev) => new Set(prev).add(content));
-            alert('Notiz erfolgreich gespeichert!');
         } catch (e) {
             console.error(e);
-            alert('Fehler beim Speichern der Notiz.');
         } finally {
             setSavingNote(null);
         }
@@ -227,12 +228,12 @@ export default function ChatPanel({ session, type }: Props) {
                     >
                         <div
                             className={`max-w-[85%] rounded-2xl px-4 py-3 ${msg.role === 'user'
-                                    ? 'bg-brain-800 text-white'
-                                    : 'bg-dark-800 border border-dark-700'
+                                ? 'bg-brain-800 text-white'
+                                : 'bg-dark-800 border border-dark-700'
                                 }`}
                         >
                             <div className="markdown-content text-sm">
-                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                                     {cleanMessageContent(msg.content)}
                                 </ReactMarkdown>
                             </div>
@@ -257,11 +258,10 @@ export default function ChatPanel({ session, type }: Props) {
                                                 setRefineMessageId(refineMessageId === msg.id ? null : msg.id);
                                                 setTimeout(() => refineInputRef.current?.focus(), 100);
                                             }}
-                                            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-                                                refineMessageId === msg.id
+                                            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${refineMessageId === msg.id
                                                     ? 'bg-brain-600 text-white'
                                                     : 'bg-brain-600/20 text-brain-400 hover:bg-brain-600/30'
-                                            }`}
+                                                }`}
                                         >
                                             <FiRefreshCw className="w-3.5 h-3.5" />
                                             Nachbessern
@@ -313,7 +313,13 @@ export default function ChatPanel({ session, type }: Props) {
                             {/* Show "saved" badge for dismissed/saved notes */}
                             {msg.role === 'assistant' && type === 'notes' && extractNoteData(msg.content) && dismissedNotes.has(msg.content) && (
                                 <div className="mt-3 pt-3 border-t border-dark-600">
-                                    <span className="text-xs text-dark-500 italic">Erledigt</span>
+                                    {savedNotes.has(msg.content) ? (
+                                        <span className="text-xs text-green-400 flex items-center gap-1">
+                                            <FiCheck className="w-3 h-3" /> Gespeichert
+                                        </span>
+                                    ) : (
+                                        <span className="text-xs text-dark-500 italic">Abgelehnt</span>
+                                    )}
                                 </div>
                             )}
                         </div>
@@ -366,8 +372,8 @@ export default function ChatPanel({ session, type }: Props) {
                         onClick={handleSend}
                         disabled={!message.trim() || loading}
                         className={`p-3 rounded-xl transition-colors ${message.trim() && !loading
-                                ? 'bg-brain-600 hover:bg-brain-500 text-white'
-                                : 'bg-dark-800 text-dark-600 cursor-not-allowed'
+                            ? 'bg-brain-600 hover:bg-brain-500 text-white'
+                            : 'bg-dark-800 text-dark-600 cursor-not-allowed'
                             }`}
                     >
                         <FiSend className="w-5 h-5" />

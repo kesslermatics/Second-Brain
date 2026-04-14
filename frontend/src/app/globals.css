@@ -80,6 +80,72 @@ body {
   background: rgba(76, 110, 245, 0.05);
   color: #8b949e;
 }
+
+/* Admonitions */
+.markdown-content .admonition {
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin: 0.75rem 0;
+  border-left: 4px solid;
+}
+.markdown-content .admonition-title {
+  font-weight: 700;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 0.4rem;
+}
+.markdown-content .admonition-content p:first-child { margin-top: 0; }
+.markdown-content .admonition-content p:last-child { margin-bottom: 0; }
+
+/* Merksatz — purple/blue accent */
+.markdown-content .admonition-merksatz {
+  border-color: #7c3aed;
+  background: rgba(124, 58, 237, 0.08);
+}
+.markdown-content .admonition-merksatz .admonition-title { color: #a78bfa; }
+.markdown-content .admonition-merksatz .admonition-content { color: #c4b5fd; font-style: italic; }
+
+/* Tipp — green */
+.markdown-content .admonition-tipp {
+  border-color: #22c55e;
+  background: rgba(34, 197, 94, 0.08);
+}
+.markdown-content .admonition-tipp .admonition-title { color: #4ade80; }
+.markdown-content .admonition-tipp .admonition-content { color: #c9d1d9; }
+
+/* Wichtig — amber/orange */
+.markdown-content .admonition-wichtig {
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.08);
+}
+.markdown-content .admonition-wichtig .admonition-title { color: #fbbf24; }
+.markdown-content .admonition-wichtig .admonition-content { color: #c9d1d9; }
+
+/* Definition — blue */
+.markdown-content .admonition-definition {
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.08);
+}
+.markdown-content .admonition-definition .admonition-title { color: #60a5fa; }
+.markdown-content .admonition-definition .admonition-content { color: #c9d1d9; }
+
+/* Beispiel — neutral gray */
+.markdown-content .admonition-beispiel {
+  border-color: #6b7280;
+  background: rgba(107, 114, 128, 0.08);
+}
+.markdown-content .admonition-beispiel .admonition-title { color: #9ca3af; }
+.markdown-content .admonition-beispiel .admonition-content { color: #c9d1d9; }
+
+/* Warnung — red */
+.markdown-content .admonition-warnung {
+  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.08);
+}
+.markdown-content .admonition-warnung .admonition-title { color: #f87171; }
+.markdown-content .admonition-warnung .admonition-content { color: #c9d1d9; }
+
 .markdown-content hr { border: none; border-top: 1px solid #30363d; margin: 1rem 0; }
 .markdown-content strong { color: #e6edf3; font-weight: 600; }
 .markdown-content a { color: #58a6ff; text-decoration: none; }

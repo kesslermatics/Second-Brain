@@ -37,10 +37,37 @@ Bitte antworte im folgenden JSON-Format (NUR das JSON, kein anderer Text):
 Regeln:
 - Wenn ein passender Ordner existiert, verwende diesen
 - Wenn kein passender Ordner existiert, schlage einen neuen Pfad vor
-- Formatiere den Inhalt schön mit Markdown
 - Der Titel soll kurz und beschreibend sein
-- Der Inhalt soll gut strukturiert und lesbar sein
-- Schreibe den Inhalt in der Sprache der Benutzereingabe"""
+- Schreibe den Inhalt in der Sprache der Benutzereingabe
+
+Formatierungsregeln für formatted_content (sehr wichtig!):
+- Strukturiere den Inhalt gut mit Markdown-Headings (##, ###)
+- Verwende **Fettdruck** für Schlüsselbegriffe und *Kursiv* für Betonungen
+- Verwende Aufzählungslisten und verschachtelte Listen für Hierarchien
+- Verwende Tabellen (| Spalte 1 | Spalte 2 |) für Vergleiche und Übersichten
+- Verwende Admonitions/Callouts im folgenden Format für besondere Inhalte:
+  > [!MERKSATZ]
+  > Für wichtige Zitate oder Kernaussagen
+
+  > [!TIPP]
+  > Für praktische Tipps und Anwendungshinweise
+
+  > [!WICHTIG]
+  > Für kritische Informationen die man sich merken muss
+
+  > [!DEFINITION]
+  > Für Begriffserklärungen und Definitionen
+  
+  > [!BEISPIEL]
+  > Für konkrete Beispiele
+
+  > [!WARNUNG]
+  > Für häufige Fehler oder Missverständnisse
+
+- Verwende Code-Blöcke (```) nur wenn tatsächlich Code, Formeln oder technische Inhalte vorkommen
+- Trenne logische Abschnitte mit horizontalen Linien (---) wenn sinnvoll
+- Mache KEINEN Blocktext — nutze viele Absätze, Listen und die oben genannten Blöcke
+- Die Notiz soll visuell ansprechend und leicht scanbar sein"""
 
     response = model.generate_content(prompt)
     text = response.text.strip()
