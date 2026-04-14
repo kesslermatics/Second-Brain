@@ -227,7 +227,7 @@ export default function ChatPanel({ session, type }: Props) {
                     >
                         <div
                             className={`max-w-[85%] rounded-2xl px-4 py-3 ${msg.role === 'user'
-                                    ? 'bg-brain-600 text-white'
+                                    ? 'bg-brain-800 text-white'
                                     : 'bg-dark-800 border border-dark-700'
                                 }`}
                         >

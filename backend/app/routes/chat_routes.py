@@ -1,3 +1,4 @@
+import json
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -145,6 +146,12 @@ async def send_message(
         folder_structure = [{"path": f.path, "name": f.name} for f in folders]
 
         ai_result = await process_note_input(message.content, folder_structure)
+        note_data_json = json.dumps({
+            "folder": ai_result['suggested_folder'],
+            "title": ai_result['suggested_title'],
+            "content": ai_result['formatted_content']
+        }, ensure_ascii=False)
+
         ai_response = f"""Hier ist mein Vorschlag für deine Notiz:
 
 **Ordner:** `{ai_result['suggested_folder']}`
@@ -159,7 +166,7 @@ async def send_message(
 *Möchtest du diese Notiz so speichern? Du kannst den Vorschlag annehmen oder anpassen.*
 
 <!-- AI_NOTE_DATA
-{{"folder": "{ai_result['suggested_folder']}", "title": "{ai_result['suggested_title']}", "content": {repr(ai_result['formatted_content'])}}}
+{note_data_json}
 AI_NOTE_DATA -->"""
 
     elif session.session_type == "qa":
