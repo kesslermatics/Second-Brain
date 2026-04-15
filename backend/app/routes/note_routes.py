@@ -10,7 +10,6 @@ from app.models import User, Note, Folder, Tag, NoteVersion, NoteLink, Image
 from app.schemas import NoteCreate, NoteUpdate, NoteResponse, NoteListResponse, TagResponse
 from app.services.vector_service import upsert_note_embedding, delete_note_embedding, _vector_search
 from app.services.ai_service import suggest_links
-import asyncio
 import re
 import logging
 from pathlib import Path
@@ -167,16 +166,13 @@ async def _enrich_content_with_image_descriptions(content: str, user_id: str) ->
     return enriched
 
 
-def _embed_and_auto_link(
+async def _embed_and_auto_link(
     note_id: str, user_id: str, title: str, content: str, folder_path: str
 ):
     """Background task: enrich image references with AI descriptions, embed in Qdrant, then auto-link."""
-    async def _run():
-        enriched = await _enrich_content_with_image_descriptions(content, user_id)
-        upsert_note_embedding(note_id, user_id, title, enriched, folder_path)
-        await _auto_link_note(note_id, user_id, title, enriched)
-
-    asyncio.run(_run())
+    enriched = await _enrich_content_with_image_descriptions(content, user_id)
+    upsert_note_embedding(note_id, user_id, title, enriched, folder_path)
+    await _auto_link_note(note_id, user_id, title, enriched)
 
 
 @router.get("/", response_model=List[NoteListResponse])
