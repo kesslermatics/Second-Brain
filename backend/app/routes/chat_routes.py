@@ -239,25 +239,39 @@ AI_NOTE_DATA -->"""
             limit=10,
         )
 
-        # Get full note content for context (handle both notes and images)
+        # Batch-load all notes at once instead of one-by-one
+        note_ids_to_load = [
+            sn["note_id"] for sn in similar_notes
+            if sn.get("type", "note") == "note"
+        ]
+
+        notes_map = {}
+        if note_ids_to_load:
+            notes_result = await db.execute(
+                select(Note, Folder.path)
+                .join(Folder, Note.folder_id == Folder.id)
+                .where(Note.id.in_(note_ids_to_load))
+            )
+            for note_obj, folder_path in notes_result.all():
+                notes_map[str(note_obj.id)] = (note_obj, folder_path)
+
         context_notes = []
         for sn in similar_notes:
             result_type = sn.get("type", "note")
             if result_type == "image":
-                # Include image description in context
                 context_notes.append({
                     "title": sn["title"],
                     "folder_path": sn.get("folder_path", ""),
                     "content_preview": sn.get("content_preview", ""),
                 })
             else:
-                note = await db.get(Note, sn["note_id"])
-                if note:
-                    folder = await db.get(Folder, note.folder_id)
+                entry = notes_map.get(sn["note_id"])
+                if entry:
+                    note_obj, folder_path = entry
                     context_notes.append({
-                        "title": note.title,
-                        "folder_path": folder.path if folder else "",
-                        "content_preview": note.content[:1000],
+                        "title": note_obj.title,
+                        "folder_path": folder_path,
+                        "content_preview": note_obj.content[:2000],
                     })
 
         custom_qa_prompt = user_settings.qa_prompt if user_settings else None

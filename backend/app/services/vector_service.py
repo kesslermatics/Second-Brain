@@ -6,6 +6,10 @@ from sqlalchemy import select, text, func
 from app.config import get_settings
 import uuid
 import numpy as np
+import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
@@ -196,40 +200,49 @@ def _vector_search(query: str, user_id: str, limit: int = 20) -> list[dict]:
 
 async def _fulltext_search(query: str, user_id: str, db: AsyncSession, limit: int = 20) -> list[dict]:
     """PostgreSQL full-text search over notes (title + content)."""
-    # Import here to avoid circular imports
     from app.models import Note, Folder
 
-    sql = text("""
-        SELECT n.id, n.title, n.content, f.path AS folder_path,
-               ts_rank_cd(
-                   setweight(to_tsvector('german', n.title), 'A') ||
-                   setweight(to_tsvector('german', n.content), 'B'),
-                   websearch_to_tsquery('german', :query)
-               ) AS rank
-        FROM notes n
-        JOIN folders f ON n.folder_id = f.id
-        WHERE n.user_id = :user_id
-          AND (
-              setweight(to_tsvector('german', n.title), 'A') ||
-              setweight(to_tsvector('german', n.content), 'B')
-          ) @@ websearch_to_tsquery('german', :query)
-        ORDER BY rank DESC
-        LIMIT :limit
-    """)
+    # Try websearch_to_tsquery first, fall back to plainto_tsquery for complex queries
+    for tsquery_fn in ['websearch_to_tsquery', 'plainto_tsquery']:
+        sql = text(f"""
+            SELECT n.id, n.title, n.content, f.path AS folder_path,
+                   ts_rank_cd(
+                       setweight(to_tsvector('german', n.title), 'A') ||
+                       setweight(to_tsvector('german', n.content), 'B'),
+                       {tsquery_fn}('german', :query)
+                   ) AS rank
+            FROM notes n
+            JOIN folders f ON n.folder_id = f.id
+            WHERE n.user_id = :user_id
+              AND (
+                  setweight(to_tsvector('german', n.title), 'A') ||
+                  setweight(to_tsvector('german', n.content), 'B')
+              ) @@ {tsquery_fn}('german', :query)
+            ORDER BY rank DESC
+            LIMIT :limit
+        """)
 
-    result = await db.execute(sql, {"query": query, "user_id": str(user_id), "limit": limit})
-    rows = result.fetchall()
+        try:
+            result = await db.execute(sql, {"query": query, "user_id": str(user_id), "limit": limit})
+            rows = result.fetchall()
+            if rows:
+                logger.info(f"Fulltext search ({tsquery_fn}) found {len(rows)} results")
+                return [
+                    {
+                        "note_id": str(row.id),
+                        "title": row.title,
+                        "folder_path": row.folder_path,
+                        "content_preview": row.content[:500],
+                        "score": float(row.rank),
+                        "type": "note",
+                    }
+                    for row in rows
+                ]
+        except Exception as e:
+            logger.warning(f"Fulltext search ({tsquery_fn}) failed: {e}")
+            continue
 
-    return [
-        {
-            "note_id": str(row.id),
-            "title": row.title,
-            "folder_path": row.folder_path,
-            "content_preview": row.content[:500],
-            "score": float(row.rank),
-        }
-        for row in rows
-    ]
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -268,25 +281,33 @@ async def hybrid_search(query: str, user_id: str, db: AsyncSession, limit: int =
     Hybrid search: combines Qdrant vector search with PostgreSQL full-text search
     using Reciprocal Rank Fusion (RRF). Returns top `limit` results.
     """
-    # Fetch more candidates from each source, then fuse
     candidate_limit = max(limit * 2, 20)
 
-    # Vector search
-    try:
-        vector_results = _vector_search(query, user_id, limit=candidate_limit)
-    except Exception as e:
-        print(f"Vector search failed: {e}")
-        vector_results = []
+    # Run vector search (sync) in thread executor + fulltext search (async) in parallel
+    loop = asyncio.get_event_loop()
 
-    # Full-text search
-    try:
-        fulltext_results = await _fulltext_search(query, user_id, db, limit=candidate_limit)
-    except Exception as e:
-        print(f"Full-text search failed: {e}")
-        fulltext_results = []
+    async def safe_vector():
+        try:
+            result = await loop.run_in_executor(None, _vector_search, query, user_id, candidate_limit)
+            logger.info(f"Vector search returned {len(result)} results")
+            return result
+        except Exception as e:
+            logger.error(f"Vector search failed: {e}")
+            return []
+
+    async def safe_fulltext():
+        try:
+            result = await _fulltext_search(query, user_id, db, limit=candidate_limit)
+            return result
+        except Exception as e:
+            logger.error(f"Full-text search failed: {e}")
+            return []
+
+    vector_results, fulltext_results = await asyncio.gather(safe_vector(), safe_fulltext())
 
     # Fuse and return top results
     fused = _rrf_fuse(vector_results, fulltext_results)
+    logger.info(f"Hybrid search: {len(vector_results)} vector + {len(fulltext_results)} fulltext → {len(fused)} fused results")
     return fused[:limit]
 
 
