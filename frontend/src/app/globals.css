@@ -178,11 +178,18 @@ body {
 
 /* ── TipTap Rich Text Editor ────────────────────────────────── */
 .tiptap-editor .ProseMirror {
-  min-height: 500px;
-  padding: 2rem;
+  min-height: 300px;
+  padding: 1rem;
   color: #c9d1d9;
   font-size: 0.9375rem;
   line-height: 1.7;
+}
+
+@media (min-width: 640px) {
+  .tiptap-editor .ProseMirror {
+    min-height: 500px;
+    padding: 2rem;
+  }
 }
 
 .tiptap-editor .ProseMirror:focus {

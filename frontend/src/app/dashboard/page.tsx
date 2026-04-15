@@ -68,7 +68,7 @@ export default function DashboardPage() {
     return (
         <div className="h-screen flex overflow-hidden bg-dark-950">
             <Sidebar />
-            <main className="flex-1 overflow-hidden">
+            <main className="flex-1 overflow-hidden pt-12 lg:pt-0">
                 {renderView()}
             </main>
         </div>

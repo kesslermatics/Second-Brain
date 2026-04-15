@@ -59,7 +59,7 @@ export default function DashboardView() {
     return (
         <div className="h-full flex flex-col">
             {/* Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-dark-800 bg-dark-900/50">
+            <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-dark-800 bg-dark-900/50">
                 <div className="flex items-center gap-3">
                     <div className="p-2 bg-brain-600/20 rounded-xl">
                         <LuBrain className="w-5 h-5 text-brain-400" />
@@ -77,7 +77,7 @@ export default function DashboardView() {
                 </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-6">
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6">
                 <div className="max-w-6xl mx-auto space-y-6">
                     {/* Stat cards */}
                     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">

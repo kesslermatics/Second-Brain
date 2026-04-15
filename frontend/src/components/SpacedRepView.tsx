@@ -117,22 +117,23 @@ export default function SpacedRepView() {
     if (view === 'home') {
         return (
             <div className="h-full flex flex-col">
-                <div className="flex items-center justify-between px-6 py-4 border-b border-dark-800 bg-dark-900/50">
+                <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-dark-800 bg-dark-900/50">
                     <div className="flex items-center gap-3">
                         <div className="p-2 bg-green-600/20 rounded-xl">
                             <FiBookOpen className="w-5 h-5 text-green-400" />
                         </div>
                         <div>
-                            <h1 className="text-lg font-semibold text-white">Spaced Repetition</h1>
+                            <h1 className="text-base sm:text-lg font-semibold text-white">Spaced Repetition</h1>
                             <p className="text-xs text-dark-500">Lerne mit dem SM-2 Algorithmus</p>
                         </div>
                     </div>
                     <div className="flex gap-2">
                         <button
                             onClick={() => { loadAllCards(); setView('cards'); }}
-                            className="px-3 py-2 text-sm bg-dark-800 hover:bg-dark-700 text-white rounded-lg transition-colors"
+                            className="px-2 sm:px-3 py-2 text-xs sm:text-sm bg-dark-800 hover:bg-dark-700 text-white rounded-lg transition-colors"
                         >
-                            Alle Karten
+                            <span className="hidden sm:inline">Alle Karten</span>
+                            <span className="sm:hidden">Karten</span>
                         </button>
                         <button
                             onClick={() => setView('settings')}
@@ -149,7 +150,7 @@ export default function SpacedRepView() {
                             <div className="animate-spin w-8 h-8 border-2 border-green-500 border-t-transparent rounded-full mx-auto" />
                         ) : (
                             <>
-                                <div className="grid grid-cols-3 gap-4 mb-8">
+                <div className="grid grid-cols-3 gap-4 mb-8">
                                     <div className="bg-dark-800 rounded-xl p-4 border border-dark-700">
                                         <FiClock className="w-6 h-6 text-orange-400 mx-auto mb-2" />
                                         <p className="text-2xl font-bold text-white">{session?.total_due || 0}</p>
@@ -202,7 +203,7 @@ export default function SpacedRepView() {
         const progress = session ? (currentIdx + 1) / session.cards.length : 0;
         return (
             <div className="h-full flex flex-col">
-                <div className="flex items-center justify-between px-6 py-3 border-b border-dark-800 bg-dark-900/50">
+                <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-dark-800 bg-dark-900/50">
                     <button
                         onClick={() => setView('home')}
                         className="text-sm text-dark-400 hover:text-white transition-colors"
@@ -223,7 +224,7 @@ export default function SpacedRepView() {
                     <span className="text-xs text-dark-500">{reviewed} gelernt</span>
                 </div>
 
-                <div className="flex-1 flex items-center justify-center p-6">
+                <div className="flex-1 flex items-center justify-center p-3 sm:p-6">
                     <div className="w-full max-w-2xl">
                         {/* Card */}
                         <div
@@ -269,7 +270,7 @@ export default function SpacedRepView() {
                         {flipped && (
                             <div className="mt-6">
                                 <p className="text-xs text-dark-500 text-center mb-3">Wie gut hast du die Antwort gewusst?</p>
-                                <div className="grid grid-cols-6 gap-2">
+                                <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
                                     {QUALITY_LABELS.map(({ q, label, color, desc }) => (
                                         <button
                                             key={q}

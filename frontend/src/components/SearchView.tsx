@@ -74,7 +74,7 @@ export default function SearchView() {
     return (
         <div className="h-full flex flex-col">
             {/* Search header */}
-            <div className="px-6 py-6 border-b border-dark-800 bg-dark-900/50">
+            <div className="px-4 sm:px-6 py-4 sm:py-6 border-b border-dark-800 bg-dark-900/50">
                 <div className="max-w-3xl mx-auto">
                     <div className="relative">
                         <FiSearch className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-dark-500" />
@@ -84,7 +84,7 @@ export default function SearchView() {
                             value={query}
                             onChange={(e) => handleInput(e.target.value)}
                             placeholder="Semantische Suche in deinem Second Brain..."
-                            className="w-full pl-12 pr-12 py-4 bg-dark-800 border border-dark-700 rounded-2xl text-white text-lg placeholder-dark-600 focus:outline-none focus:border-brain-500 transition-colors"
+                            className="w-full pl-12 pr-12 py-3 sm:py-4 bg-dark-800 border border-dark-700 rounded-2xl text-white text-base sm:text-lg placeholder-dark-600 focus:outline-none focus:border-brain-500 transition-colors"
                         />
                         {query && (
                             <button
@@ -104,7 +104,7 @@ export default function SearchView() {
             </div>
 
             {/* Results */}
-            <div className="flex-1 overflow-y-auto p-6">
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6">
                 <div className="max-w-3xl mx-auto space-y-3">
                     {loading && (
                         <div className="flex items-center justify-center py-12">

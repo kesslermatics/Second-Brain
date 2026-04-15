@@ -118,37 +118,37 @@ export default function NoteViewer() {
     return (
         <div className="h-full flex flex-col">
             {/* Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-dark-800 bg-dark-900/50">
-                <div className="flex items-center gap-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between px-3 sm:px-6 py-3 sm:py-4 border-b border-dark-800 bg-dark-900/50 gap-2">
+                <div className="flex items-center gap-3 min-w-0">
                     <button
                         onClick={() => setSelectedNote(null)}
-                        className="p-2 hover:bg-dark-800 rounded-lg transition-colors"
+                        className="p-2 hover:bg-dark-800 rounded-lg transition-colors flex-shrink-0"
                     >
                         <FiArrowLeft className="w-4 h-4 text-dark-400" />
                     </button>
-                    <div>
+                    <div className="min-w-0">
                         <div className="flex items-center gap-2">
-                            <h1 className="text-lg font-semibold text-white">{selectedNote.title}</h1>
+                            <h1 className="text-base sm:text-lg font-semibold text-white truncate">{selectedNote.title}</h1>
                         </div>
                         <div className="flex items-center gap-3 text-xs text-dark-500 mt-0.5">
                             {selectedNote.folder_path && (
-                                <span className="flex items-center gap-1">
-                                    <FiFolder className="w-3 h-3" />
-                                    {selectedNote.folder_path}
+                                <span className="flex items-center gap-1 truncate">
+                                    <FiFolder className="w-3 h-3 flex-shrink-0" />
+                                    <span className="truncate">{selectedNote.folder_path}</span>
                                 </span>
                             )}
-                            <span className="flex items-center gap-1">
+                            <span className="flex items-center gap-1 flex-shrink-0">
                                 <FiClock className="w-3 h-3" />
                                 {formatDate(selectedNote.updated_at)}
                             </span>
                         </div>
                     </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto pb-1 sm:pb-0 flex-shrink-0">
                     <button
                         onClick={handleAutoLink}
                         disabled={linking}
-                        className="flex items-center gap-1.5 px-3 py-2 text-sm bg-cyan-600/20 text-cyan-400 hover:bg-cyan-600/30 rounded-lg transition-colors disabled:opacity-50"
+                        className="flex items-center gap-1.5 px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm bg-cyan-600/20 text-cyan-400 hover:bg-cyan-600/30 rounded-lg transition-colors disabled:opacity-50 flex-shrink-0"
                         title="KI-Verknüpfungen erstellen"
                     >
                         {linking ? (
@@ -156,12 +156,12 @@ export default function NoteViewer() {
                         ) : (
                             <FiLink className="w-4 h-4" />
                         )}
-                        {linkResult || 'Verknüpfen'}
+                        <span className="hidden sm:inline">{linkResult || 'Verknüpfen'}</span>
                     </button>
                     <button
                         onClick={handleGenerateCards}
                         disabled={generatingCards}
-                        className="flex items-center gap-1.5 px-3 py-2 text-sm bg-green-600/20 text-green-400 hover:bg-green-600/30 rounded-lg transition-colors disabled:opacity-50"
+                        className="flex items-center gap-1.5 px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm bg-green-600/20 text-green-400 hover:bg-green-600/30 rounded-lg transition-colors disabled:opacity-50 flex-shrink-0"
                         title="Karteikarten generieren"
                     >
                         {generatingCards ? (
@@ -169,35 +169,35 @@ export default function NoteViewer() {
                         ) : (
                             <FiBookOpen className="w-4 h-4" />
                         )}
-                        {cardResult || 'Lernkarten'}
+                        <span className="hidden sm:inline">{cardResult || 'Lernkarten'}</span>
                     </button>
                     <button
                         onClick={() => setShowHistory(true)}
-                        className="flex items-center gap-1.5 px-3 py-2 text-sm bg-orange-600/20 text-orange-400 hover:bg-orange-600/30 rounded-lg transition-colors"
+                        className="flex items-center gap-1.5 px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm bg-orange-600/20 text-orange-400 hover:bg-orange-600/30 rounded-lg transition-colors flex-shrink-0"
                     >
                         <FiClock className="w-4 h-4" />
-                        Verlauf
+                        <span className="hidden sm:inline">Verlauf</span>
                     </button>
                     <button
                         onClick={() => setShowAIEdit(true)}
-                        className="flex items-center gap-1.5 px-3 py-2 text-sm bg-purple-600/20 text-purple-400 hover:bg-purple-600/30 rounded-lg transition-colors"
+                        className="flex items-center gap-1.5 px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm bg-purple-600/20 text-purple-400 hover:bg-purple-600/30 rounded-lg transition-colors flex-shrink-0"
                     >
                         <FiZap className="w-4 h-4" />
-                        KI-Bearbeitung
+                        <span className="hidden sm:inline">KI-Bearbeitung</span>
                     </button>
                     <button
                         onClick={() => setEditing(true)}
-                        className="flex items-center gap-1.5 px-3 py-2 text-sm bg-dark-800 hover:bg-dark-700 text-white rounded-lg transition-colors"
+                        className="flex items-center gap-1.5 px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm bg-dark-800 hover:bg-dark-700 text-white rounded-lg transition-colors flex-shrink-0"
                     >
                         <FiEdit2 className="w-4 h-4" />
-                        Bearbeiten
+                        <span className="hidden sm:inline">Bearbeiten</span>
                     </button>
                     <button
                         onClick={handleDelete}
-                        className="flex items-center gap-1.5 px-3 py-2 text-sm bg-red-600/10 text-red-400 hover:bg-red-600/20 rounded-lg transition-colors"
+                        className="flex items-center gap-1.5 px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm bg-red-600/10 text-red-400 hover:bg-red-600/20 rounded-lg transition-colors flex-shrink-0"
                     >
                         <FiTrash2 className="w-4 h-4" />
-                        Löschen
+                        <span className="hidden sm:inline">Löschen</span>
                     </button>
                 </div>
             </div>
@@ -222,7 +222,7 @@ export default function NoteViewer() {
 
             {/* Content */}
             <div className="flex-1 overflow-y-auto">
-                <div className="max-w-4xl mx-auto px-8 py-8">
+                <div className="max-w-4xl mx-auto px-4 sm:px-8 py-4 sm:py-8">
                     <article className="markdown-content">
                         <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                             {selectedNote.content}

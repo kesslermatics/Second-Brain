@@ -280,10 +280,10 @@ export default function BookPanel() {
     return (
         <div className="h-full flex flex-col">
             {/* Header */}
-            <div className="flex items-center gap-2 px-4 py-3 border-b border-dark-800 bg-dark-900/50">
-                <FiBook className="w-4 h-4 text-amber-400" />
-                <h2 className="text-sm font-semibold text-white">Buch verarbeiten</h2>
-                <span className="text-xs text-dark-500 ml-2">
+            <div className="flex items-center gap-2 px-3 sm:px-4 py-3 border-b border-dark-800 bg-dark-900/50">
+                <FiBook className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                <h2 className="text-sm font-semibold text-white flex-shrink-0">Buch verarbeiten</h2>
+                <span className="text-xs text-dark-500 ml-2 hidden sm:inline">
                     Gib einen Buchtitel ein — die KI erstellt Notizen für jedes Kapitel
                 </span>
                 {step !== 'search' && step !== 'done' && (
@@ -317,7 +317,7 @@ export default function BookPanel() {
             )}
 
             {/* Content */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-4">
                 {/* Step: Search */}
                 {step === 'search' && (
                     <div className="h-full flex items-center justify-center">

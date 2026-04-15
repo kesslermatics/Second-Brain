@@ -110,6 +110,6 @@ export const useStore = create<AppState>((set, get) => ({
   // UI
   activeView: 'chat',
   setActiveView: (view) => set({ activeView: view }),
-  sidebarOpen: true,
+  sidebarOpen: typeof window !== 'undefined' ? window.innerWidth >= 1024 : true,
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
 }));

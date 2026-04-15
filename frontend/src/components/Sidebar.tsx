@@ -26,6 +26,7 @@ export default function Sidebar() {
     const [foldersExpanded, setFoldersExpanded] = useState(true);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [sidebarWidth, setSidebarWidth] = useState(288);
+    const [isDesktop, setIsDesktop] = useState(true);
     const [renamingSession, setRenamingSession] = useState<string | null>(null);
     const [renameValue, setRenameValue] = useState('');
     const isResizing = useRef(false);
@@ -56,7 +57,17 @@ export default function Sidebar() {
         loadNotesSessions();
         loadQASessions();
         loadFolderTree();
-    }, [loadNotesSessions, loadQASessions, loadFolderTree]);
+
+        const mq = window.matchMedia('(min-width: 1024px)');
+        setIsDesktop(mq.matches);
+        if (!mq.matches) setSidebarOpen(false);
+        const handler = (e: MediaQueryListEvent) => {
+            setIsDesktop(e.matches);
+            if (!e.matches) setSidebarOpen(false);
+        };
+        mq.addEventListener('change', handler);
+        return () => mq.removeEventListener('change', handler);
+    }, [loadNotesSessions, loadQASessions, loadFolderTree, setSidebarOpen]);
 
     const handleNewNotesSession = async () => {
         try {
@@ -82,6 +93,10 @@ export default function Sidebar() {
         }
     };
 
+    const closeSidebarOnMobile = () => {
+        if (window.innerWidth < 1024) setSidebarOpen(false);
+    };
+
     const handleSelectSession = async (session: ChatSession, type: 'notes' | 'qa') => {
         try {
             const detail = await getChatSession(session.id);
@@ -91,6 +106,7 @@ export default function Sidebar() {
                 setActiveQASession(detail);
             }
             setActiveView('chat');
+            closeSidebarOnMobile();
         } catch (e) {
             console.error(e);
         }
@@ -151,8 +167,8 @@ export default function Sidebar() {
 
             <aside
                 className={`${sidebarOpen ? 'translate-x-0' : '-translate-x-full'
-                    } lg:translate-x-0 fixed lg:relative z-40 h-full bg-dark-900 border-r border-dark-800 flex flex-col transition-transform duration-200`}
-                style={{ width: `${sidebarWidth}px`, minWidth: `${sidebarWidth}px` }}
+                    } lg:translate-x-0 fixed lg:relative z-40 h-full w-72 lg:w-auto bg-dark-900 border-r border-dark-800 flex flex-col transition-transform duration-200`}
+                style={isDesktop ? { width: `${sidebarWidth}px`, minWidth: `${sidebarWidth}px` } : undefined}
             >
                 {/* Header */}
                 <div className="p-4 border-b border-dark-800">
@@ -167,7 +183,7 @@ export default function Sidebar() {
                 {/* Navigation */}
                 <div className="flex border-b border-dark-800">
                     <button
-                        onClick={() => setActiveView('chat')}
+                        onClick={() => { setActiveView('chat'); closeSidebarOnMobile(); }}
                         className={`flex-1 flex items-center justify-center gap-2 py-3 text-sm font-medium transition-colors ${activeView === 'chat'
                             ? 'text-brain-400 border-b-2 border-brain-400'
                             : 'text-dark-500 hover:text-dark-300'
@@ -177,7 +193,7 @@ export default function Sidebar() {
                         Chat
                     </button>
                     <button
-                        onClick={() => setActiveView('notes')}
+                        onClick={() => { setActiveView('notes'); closeSidebarOnMobile(); }}
                         className={`flex-1 flex items-center justify-center gap-2 py-3 text-sm font-medium transition-colors ${activeView === 'notes'
                             ? 'text-brain-400 border-b-2 border-brain-400'
                             : 'text-dark-500 hover:text-dark-300'
@@ -191,7 +207,7 @@ export default function Sidebar() {
                 {/* Quick Actions */}
                 <div className="grid grid-cols-3 gap-1 p-2 border-b border-dark-800">
                     <button
-                        onClick={() => setActiveView('search')}
+                        onClick={() => { setActiveView('search'); closeSidebarOnMobile(); }}
                         className={`flex flex-col items-center gap-1 py-2 px-1 rounded-lg text-[10px] font-medium transition-colors ${activeView === 'search' ? 'bg-brain-600/20 text-brain-400' : 'text-dark-500 hover:text-white hover:bg-dark-800'
                             }`}
                     >
@@ -199,7 +215,7 @@ export default function Sidebar() {
                         Suche
                     </button>
                     <button
-                        onClick={() => setActiveView('dashboard')}
+                        onClick={() => { setActiveView('dashboard'); closeSidebarOnMobile(); }}
                         className={`flex flex-col items-center gap-1 py-2 px-1 rounded-lg text-[10px] font-medium transition-colors ${activeView === 'dashboard' ? 'bg-brain-600/20 text-brain-400' : 'text-dark-500 hover:text-white hover:bg-dark-800'
                             }`}
                     >
@@ -207,7 +223,7 @@ export default function Sidebar() {
                         Dashboard
                     </button>
                     <button
-                        onClick={() => setActiveView('graph')}
+                        onClick={() => { setActiveView('graph'); closeSidebarOnMobile(); }}
                         className={`flex flex-col items-center gap-1 py-2 px-1 rounded-lg text-[10px] font-medium transition-colors ${activeView === 'graph' ? 'bg-brain-600/20 text-brain-400' : 'text-dark-500 hover:text-white hover:bg-dark-800'
                             }`}
                     >
@@ -215,7 +231,7 @@ export default function Sidebar() {
                         Graph
                     </button>
                     <button
-                        onClick={() => setActiveView('learn')}
+                        onClick={() => { setActiveView('learn'); closeSidebarOnMobile(); }}
                         className={`flex flex-col items-center gap-1 py-2 px-1 rounded-lg text-[10px] font-medium transition-colors ${activeView === 'learn' ? 'bg-green-600/20 text-green-400' : 'text-dark-500 hover:text-white hover:bg-dark-800'
                             }`}
                     >
@@ -223,7 +239,7 @@ export default function Sidebar() {
                         Lernen
                     </button>
                     <button
-                        onClick={() => setActiveView('export')}
+                        onClick={() => { setActiveView('export'); closeSidebarOnMobile(); }}
                         className={`flex flex-col items-center gap-1 py-2 px-1 rounded-lg text-[10px] font-medium transition-colors ${activeView === 'export' ? 'bg-brain-600/20 text-brain-400' : 'text-dark-500 hover:text-white hover:bg-dark-800'
                             }`}
                     >
@@ -231,7 +247,7 @@ export default function Sidebar() {
                         Export
                     </button>
                     <button
-                        onClick={() => setActiveView('summary')}
+                        onClick={() => { setActiveView('summary'); closeSidebarOnMobile(); }}
                         className={`flex flex-col items-center gap-1 py-2 px-1 rounded-lg text-[10px] font-medium transition-colors ${activeView === 'summary' ? 'bg-purple-600/20 text-purple-400' : 'text-dark-500 hover:text-white hover:bg-dark-800'
                             }`}
                     >
@@ -239,7 +255,7 @@ export default function Sidebar() {
                         Zusammen.
                     </button>
                     <button
-                        onClick={() => setActiveView('images')}
+                        onClick={() => { setActiveView('images'); closeSidebarOnMobile(); }}
                         className={`flex flex-col items-center gap-1 py-2 px-1 rounded-lg text-[10px] font-medium transition-colors ${activeView === 'images' ? 'bg-indigo-600/20 text-indigo-400' : 'text-dark-500 hover:text-white hover:bg-dark-800'
                             }`}
                     >
@@ -247,7 +263,7 @@ export default function Sidebar() {
                         Bilder
                     </button>
                     <button
-                        onClick={() => setActiveView('books')}
+                        onClick={() => { setActiveView('books'); closeSidebarOnMobile(); }}
                         className={`flex flex-col items-center gap-1 py-2 px-1 rounded-lg text-[10px] font-medium transition-colors ${activeView === 'books' ? 'bg-amber-600/20 text-amber-400' : 'text-dark-500 hover:text-white hover:bg-dark-800'
                             }`}
                     >
