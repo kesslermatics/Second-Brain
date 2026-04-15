@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from typing import List
@@ -79,6 +79,7 @@ async def get_note(
 @router.post("/", response_model=NoteResponse, status_code=status.HTTP_201_CREATED)
 async def create_note(
     note: NoteCreate,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -107,19 +108,17 @@ async def create_note(
                 tags.append(TagResponse(id=tag.id, name=tag.name, color=tag.color))
         await db.flush()
 
-    try:
-        embed_content = new_note.content
-        if new_note.note_type == "excalidraw":
-            embed_content = extract_excalidraw_text(new_note.content)
-        upsert_note_embedding(
-            note_id=str(new_note.id),
-            user_id=str(current_user.id),
-            title=new_note.title,
-            content=embed_content,
-            folder_path=folder.path,
-        )
-    except Exception as e:
-        print(f"Error creating embedding: {e}")
+    embed_content = new_note.content
+    if new_note.note_type == "excalidraw":
+        embed_content = extract_excalidraw_text(new_note.content)
+    background_tasks.add_task(
+        upsert_note_embedding,
+        note_id=str(new_note.id),
+        user_id=str(current_user.id),
+        title=new_note.title,
+        content=embed_content,
+        folder_path=folder.path,
+    )
 
     return NoteResponse(
         id=new_note.id,
@@ -138,6 +137,7 @@ async def create_note(
 async def update_note(
     note_id: UUID,
     note_update: NoteUpdate,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -185,19 +185,17 @@ async def update_note(
     await db.refresh(note)
 
     folder = await db.get(Folder, note.folder_id)
-    try:
-        embed_content = note.content
-        if (note.note_type or "text") == "excalidraw":
-            embed_content = extract_excalidraw_text(note.content)
-        upsert_note_embedding(
-            note_id=str(note.id),
-            user_id=str(current_user.id),
-            title=note.title,
-            content=embed_content,
-            folder_path=folder.path if folder else "",
-        )
-    except Exception as e:
-        print(f"Error updating embedding: {e}")
+    embed_content = note.content
+    if (note.note_type or "text") == "excalidraw":
+        embed_content = extract_excalidraw_text(note.content)
+    background_tasks.add_task(
+        upsert_note_embedding,
+        note_id=str(note.id),
+        user_id=str(current_user.id),
+        title=note.title,
+        content=embed_content,
+        folder_path=folder.path if folder else "",
+    )
 
     await db.refresh(note, ["tags"])
     tags = [TagResponse(id=t.id, name=t.name, color=t.color) for t in note.tags]
@@ -218,6 +216,7 @@ async def update_note(
 @router.delete("/{note_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_note(
     note_id: UUID,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -225,9 +224,6 @@ async def delete_note(
     if not note or note.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Note not found")
 
-    try:
-        delete_note_embedding(str(note_id))
-    except Exception as e:
-        print(f"Error deleting embedding: {e}")
+    background_tasks.add_task(delete_note_embedding, str(note_id))
 
     await db.delete(note)

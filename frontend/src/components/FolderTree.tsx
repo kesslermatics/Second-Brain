@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { FiFolder, FiFolderPlus, FiChevronRight, FiChevronDown, FiFile, FiTrash2, FiFilePlus } from 'react-icons/fi';
 import { LuPencilRuler } from 'react-icons/lu';
 import { useStore } from '@/lib/store';
-import { createFolder, deleteFolder, getNote, createNote } from '@/lib/api';
+import { createFolder, deleteFolder, getNote, createNote, deleteNote } from '@/lib/api';
 import type { FolderTree } from '@/lib/types';
 
 interface Props {
@@ -16,7 +16,7 @@ export default function FolderTreeComponent({ folders, level }: Props) {
     const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
     const [newFolderParent, setNewFolderParent] = useState<string | null>(null);
     const [newFolderName, setNewFolderName] = useState('');
-    const { loadFolderTree, setSelectedNote, setActiveView, setPendingEdit } = useStore();
+    const { loadFolderTree, setSelectedNote, setActiveView, setPendingEdit, selectedNote } = useStore();
 
     const toggleFolder = (folderId: string) => {
         const next = new Set(expandedFolders);
@@ -90,6 +90,20 @@ export default function FolderTreeComponent({ folders, level }: Props) {
             const next = new Set(expandedFolders);
             next.add(folderId);
             setExpandedFolders(next);
+        } catch (e) {
+            console.error(e);
+        }
+    };
+
+    const handleDeleteNote = async (e: React.MouseEvent, noteId: string) => {
+        e.stopPropagation();
+        if (!confirm('Notiz wirklich löschen?')) return;
+        try {
+            await deleteNote(noteId);
+            if (selectedNote?.id === noteId) {
+                setSelectedNote(null);
+            }
+            await loadFolderTree();
         } catch (e) {
             console.error(e);
         }
@@ -176,7 +190,7 @@ export default function FolderTreeComponent({ folders, level }: Props) {
                                     <div
                                         key={note.id}
                                         onClick={() => handleSelectNote(note.id)}
-                                        className="flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm text-dark-400 hover:text-white hover:bg-dark-800 cursor-pointer transition-colors"
+                                        className="group flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm text-dark-400 hover:text-white hover:bg-dark-800 cursor-pointer transition-colors"
                                         style={{ paddingLeft: `${(level + 1) * 16 + 8}px` }}
                                     >
                                         {(note.note_type || 'text') === 'excalidraw' ? (
@@ -184,7 +198,14 @@ export default function FolderTreeComponent({ folders, level }: Props) {
                                         ) : (
                                             <FiFile className="w-3.5 h-3.5 flex-shrink-0 text-brain-400" />
                                         )}
-                                        <span className="truncate">{note.title}</span>
+                                        <span className="truncate flex-1">{note.title}</span>
+                                        <button
+                                            onClick={(e) => handleDeleteNote(e, note.id)}
+                                            className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-dark-700 rounded flex-shrink-0"
+                                            title="Notiz löschen"
+                                        >
+                                            <FiTrash2 className="w-3 h-3 text-red-400" />
+                                        </button>
                                     </div>
                                 ))}
                                 <FolderTreeComponent folders={folder.children} level={level + 1} />
