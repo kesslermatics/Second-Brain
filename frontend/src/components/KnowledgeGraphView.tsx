@@ -218,7 +218,7 @@ export default function KnowledgeGraphView() {
                             </div>
                             <div className="border-t border-dark-700 pt-2">
                                 <p className="font-medium text-dark-300 mb-1">Wie entstehen Verbindungen?</p>
-                                <p className="leading-relaxed">Verbindungen werden <span className="text-brain-400">nicht</span> automatisch erstellt. Öffne eine Notiz und klicke auf <span className="text-brain-400">&quot;Auto-Verknüpfen&quot;</span> — die KI durchsucht dann per Vektorsuche (Embedding-Ähnlichkeit) alle deine Notizen, findet thematisch verwandte, und erstellt die Verbindungen.</p>
+                                <p className="leading-relaxed">Verbindungen werden <span className="text-brain-400">automatisch</span> erstellt, wenn du eine neue Notiz anlegst. Die KI durchsucht per Vektorsuche alle deine Notizen, findet thematisch verwandte, und erstellt die Verbindungen. Du kannst auch manuell über <span className="text-brain-400">&quot;Auto-Verknüpfen&quot;</span> in einer Notiz neue Verbindungen auslösen.</p>
                             </div>
                             <div className="border-t border-dark-700 pt-2">
                                 <p className="font-medium text-dark-300 mb-1">Steuerung:</p>

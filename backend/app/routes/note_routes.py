@@ -4,13 +4,74 @@ from sqlalchemy import select, func
 from typing import List
 from uuid import UUID
 import json
-from app.database import get_db
+from sqlalchemy import or_
+from app.database import get_db, async_session
 from app.auth import get_current_user
-from app.models import User, Note, Folder, Tag, NoteVersion
+from app.models import User, Note, Folder, Tag, NoteVersion, NoteLink
 from app.schemas import NoteCreate, NoteUpdate, NoteResponse, NoteListResponse, TagResponse
-from app.services.vector_service import upsert_note_embedding, delete_note_embedding
+from app.services.vector_service import upsert_note_embedding, delete_note_embedding, _vector_search
+from app.services.ai_service import suggest_links
+import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/notes", tags=["notes"])
+
+
+async def _auto_link_note(note_id: str, user_id: str, title: str, content: str):
+    """Auto-link a note to related notes using vector search + AI."""
+    try:
+        similar = _vector_search(
+            query=f"{title} {content[:500]}",
+            user_id=user_id,
+            limit=15,
+        )
+        candidates = [
+            {"id": s["note_id"], "title": s["title"], "preview": s["content_preview"]}
+            for s in similar
+            if s["note_id"] != note_id
+        ]
+        if not candidates:
+            return
+
+        related_ids = await suggest_links(title, content, candidates)
+
+        async with async_session() as db:
+            for rid in related_ids:
+                existing = await db.execute(
+                    select(NoteLink).where(
+                        or_(
+                            (NoteLink.source_note_id == note_id) & (NoteLink.target_note_id == rid),
+                            (NoteLink.source_note_id == rid) & (NoteLink.target_note_id == note_id),
+                        )
+                    )
+                )
+                if existing.scalar_one_or_none():
+                    continue
+
+                target = await db.get(Note, rid)
+                if not target or target.user_id != UUID(user_id):
+                    continue
+
+                link = NoteLink(
+                    source_note_id=UUID(note_id),
+                    target_note_id=target.id,
+                    link_type="related",
+                    ai_generated=True,
+                )
+                db.add(link)
+            await db.commit()
+    except Exception as e:
+        logger.error(f"Auto-link failed for note {note_id}: {e}")
+
+
+def _embed_and_auto_link(
+    note_id: str, user_id: str, title: str, content: str, folder_path: str
+):
+    """Background task: embed note in Qdrant, then auto-link."""
+    upsert_note_embedding(note_id, user_id, title, content, folder_path)
+    asyncio.run(_auto_link_note(note_id, user_id, title, content))
 
 
 def extract_excalidraw_text(content: str) -> str:
@@ -112,7 +173,7 @@ async def create_note(
     if new_note.note_type == "excalidraw":
         embed_content = extract_excalidraw_text(new_note.content)
     background_tasks.add_task(
-        upsert_note_embedding,
+        _embed_and_auto_link,
         note_id=str(new_note.id),
         user_id=str(current_user.id),
         title=new_note.title,

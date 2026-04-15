@@ -14,7 +14,7 @@ genai.configure(api_key=settings.GEMINI_API_KEY)
 qdrant_client = QdrantClient(
     url=settings.QDRANT_URL,
     port=settings.QDRANT_PORT,
-    timeout=30,
+    timeout=60,
 )
 
 COLLECTION_NAME = "brain_notes"

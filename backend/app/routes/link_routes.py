@@ -3,12 +3,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_
 from typing import List
 from uuid import UUID
+import logging
 from app.database import get_db
 from app.auth import get_current_user
 from app.models import User, Note, NoteLink, Folder
 from app.schemas import NoteLinkCreate, NoteLinkResponse, GraphDataResponse
 from app.services.ai_service import suggest_links
 from app.services.vector_service import _vector_search
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/links", tags=["links"])
 
@@ -125,11 +128,15 @@ async def auto_link_note(
         raise HTTPException(status_code=404, detail="Note not found")
 
     # Vector search for similar notes
-    similar = _vector_search(
-        query=f"{note.title} {note.content[:500]}",
-        user_id=str(current_user.id),
-        limit=15,
-    )
+    try:
+        similar = _vector_search(
+            query=f"{note.title} {note.content[:500]}",
+            user_id=str(current_user.id),
+            limit=15,
+        )
+    except Exception as e:
+        logger.error(f"Vector search failed for auto-link: {e}")
+        return {"created_links": 0, "error": "Vector search timed out, please try again"}
 
     # Filter out self
     candidates = [
@@ -142,7 +149,11 @@ async def auto_link_note(
         return {"created_links": 0}
 
     # AI selects truly related notes
-    related_ids = await suggest_links(note.title, note.content, candidates)
+    try:
+        related_ids = await suggest_links(note.title, note.content, candidates)
+    except Exception as e:
+        logger.error(f"AI suggest_links failed: {e}")
+        return {"created_links": 0, "error": "AI suggestion failed, please try again"}
 
     created = 0
     for rid in related_ids:
