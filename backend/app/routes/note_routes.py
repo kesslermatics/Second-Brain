@@ -96,7 +96,7 @@ async def create_note(
     )
     db.add(new_note)
     await db.flush()
-    await db.refresh(new_note)
+    await db.refresh(new_note, ["tags"])
 
     # Attach tags if provided
     tags = []
