@@ -13,10 +13,47 @@ from app.services.ai_service import suggest_links
 import asyncio
 import re
 import logging
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/notes", tags=["notes"])
+
+
+def _extract_upload_filenames(content: str) -> set[str]:
+    """Extract stored filenames from /uploads/ URLs in note content (markdown + HTML)."""
+    # Matches /uploads/<user_id>/<filename> in both markdown and HTML
+    pattern = re.compile(r'/uploads/[^/]+/([a-f0-9]+\.[a-zA-Z]+)')
+    return set(pattern.findall(content))
+
+
+async def _cleanup_removed_images(old_content: str, new_content: str, user_id: UUID, db: AsyncSession):
+    """Delete images that were removed from note content (disk + DB)."""
+    old_files = _extract_upload_filenames(old_content)
+    new_files = _extract_upload_filenames(new_content)
+    removed = old_files - new_files
+    if not removed:
+        return
+
+    for filename in removed:
+        result = await db.execute(
+            select(Image).where(
+                Image.stored_filename == filename,
+                Image.user_id == user_id,
+            )
+        )
+        img = result.scalar_one_or_none()
+        if img:
+            # Delete file from disk
+            try:
+                file_path = Path(img.file_path)
+                if file_path.exists():
+                    file_path.unlink()
+            except Exception as e:
+                logger.warning(f"Failed to delete image file {img.file_path}: {e}")
+            # Delete DB record
+            await db.delete(img)
+    logger.info(f"Cleaned up {len(removed)} removed image(s) for user {user_id}")
 
 
 async def _auto_link_note(note_id: str, user_id: str, title: str, content: str):
@@ -252,6 +289,9 @@ async def update_note(
     if not note or note.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Note not found")
 
+    # Track old content for image cleanup
+    old_content = note.content
+
     # Save current state as a version before changing
     if note_update.title is not None or note_update.content is not None:
         max_ver_result = await db.execute(
@@ -291,6 +331,10 @@ async def update_note(
     await db.flush()
     await db.refresh(note)
 
+    # Clean up images removed from content
+    if note_update.content is not None and old_content != note_update.content:
+        await _cleanup_removed_images(old_content, note.content, current_user.id, db)
+
     folder = await db.get(Folder, note.folder_id)
     background_tasks.add_task(
         _embed_and_auto_link,
@@ -327,6 +371,9 @@ async def delete_note(
     note = await db.get(Note, note_id)
     if not note or note.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Note not found")
+
+    # Clean up all images referenced in this note
+    await _cleanup_removed_images(note.content, "", current_user.id, db)
 
     background_tasks.add_task(delete_note_embedding, str(note_id))
 
