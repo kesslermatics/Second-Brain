@@ -2,7 +2,6 @@
 
 import { useState, useRef } from 'react';
 import { FiFolder, FiFolderPlus, FiChevronRight, FiChevronDown, FiFile, FiTrash2, FiFilePlus, FiEdit2 } from 'react-icons/fi';
-import { LuPencilRuler } from 'react-icons/lu';
 import { useStore } from '@/lib/store';
 import { createFolder, deleteFolder, getNote, createNote, deleteNote, updateNote, moveFolder, renameFolder } from '@/lib/api';
 import type { FolderTree } from '@/lib/types';
@@ -75,23 +74,6 @@ export default function FolderTreeComponent({ folders, level }: Props) {
             setActiveView('notes');
             await loadFolderTree();
             // Expand the folder to see the new note
-            const next = new Set(expandedFolders);
-            next.add(folderId);
-            setExpandedFolders(next);
-        } catch (e) {
-            console.error(e);
-        }
-    };
-
-    const handleCreateExcalidraw = async (e: React.MouseEvent, folderId: string) => {
-        e.stopPropagation();
-        try {
-            const initialData = JSON.stringify({ elements: [], appState: { theme: 'dark' }, files: {} });
-            const note = await createNote('Neue Zeichnung', initialData, folderId, undefined, 'excalidraw');
-            setSelectedNote(note);
-            setPendingEdit(true);
-            setActiveView('notes');
-            await loadFolderTree();
             const next = new Set(expandedFolders);
             next.add(folderId);
             setExpandedFolders(next);
@@ -235,7 +217,7 @@ export default function FolderTreeComponent({ folders, level }: Props) {
                     <div key={folder.id}>
                         <div
                             className={`group flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm text-dark-400 hover:text-white hover:bg-dark-800 cursor-pointer transition-colors ${isDragOver ? 'bg-brain-600/20 ring-1 ring-brain-500/50' : ''}`}
-                            style={{ paddingLeft: `${level * 16 + 8}px` }}
+                            style={{ paddingLeft: `${level * 20 + 8}px` }}
                             onClick={() => toggleFolder(folder.id)}
                             draggable
                             onDragStart={(e) => handleDragStart(e, 'folder', folder.id)}
@@ -290,13 +272,6 @@ export default function FolderTreeComponent({ folders, level }: Props) {
                                     <FiFilePlus className="w-3 h-3 text-brain-400" />
                                 </button>
                                 <button
-                                    onClick={(e) => handleCreateExcalidraw(e, folder.id)}
-                                    className="p-0.5 hover:bg-dark-700 rounded"
-                                    title="Neue Excalidraw Zeichnung"
-                                >
-                                    <LuPencilRuler className="w-3 h-3 text-purple-400" />
-                                </button>
-                                <button
                                     onClick={(e) => handleDeleteFolder(e, folder.id)}
                                     className="p-0.5 hover:bg-dark-700 rounded"
                                     title="Ordner löschen"
@@ -307,7 +282,7 @@ export default function FolderTreeComponent({ folders, level }: Props) {
                         </div>
 
                         {newFolderParent === folder.id && (
-                            <div className="flex items-center gap-1 px-2 py-1" style={{ paddingLeft: `${(level + 1) * 16 + 8}px` }}>
+                            <div className="flex items-center gap-1 px-2 py-1" style={{ paddingLeft: `${(level + 1) * 20 + 28}px` }}>
                                 <input
                                     type="text"
                                     value={newFolderName}
@@ -330,16 +305,12 @@ export default function FolderTreeComponent({ folders, level }: Props) {
                                         key={note.id}
                                         onClick={() => handleSelectNote(note.id)}
                                         className="group flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm text-dark-400 hover:text-white hover:bg-dark-800 cursor-pointer transition-colors"
-                                        style={{ paddingLeft: `${(level + 1) * 16 + 8}px` }}
+                                        style={{ paddingLeft: `${(level + 1) * 20 + 28}px` }}
                                         draggable
                                         onDragStart={(e) => handleDragStart(e, 'note', note.id)}
                                         onDragEnd={handleDragEnd}
                                     >
-                                        {(note.note_type || 'text') === 'excalidraw' ? (
-                                            <LuPencilRuler className="w-3.5 h-3.5 flex-shrink-0 text-purple-400" />
-                                        ) : (
-                                            <FiFile className="w-3.5 h-3.5 flex-shrink-0 text-brain-400" />
-                                        )}
+                                        <FiFile className="w-3.5 h-3.5 flex-shrink-0 text-brain-400" />
                                         {renamingNote === note.id ? (
                                             <input
                                                 type="text"

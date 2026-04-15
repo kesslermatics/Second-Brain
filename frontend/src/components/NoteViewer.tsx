@@ -1,15 +1,13 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { FiEdit2, FiTrash2, FiFolder, FiClock, FiArrowLeft, FiZap, FiLink, FiBookOpen } from 'react-icons/fi';
-import { LuPencilRuler } from 'react-icons/lu';
+import { FiEdit2, FiTrash2, FiFolder, FiClock, FiArrowLeft, FiZap, FiLink, FiBookOpen, FiChevronDown, FiChevronRight, FiTag } from 'react-icons/fi';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { markdownComponents } from '@/lib/markdownComponents';
 import { useStore } from '@/lib/store';
 import { deleteNote, updateNote, autoLinkNote, generateFlashcards } from '@/lib/api';
 import RichTextEditor from './RichTextEditor';
-import ExcalidrawEditor from './ExcalidrawEditor';
 import AIEditModal from './AIEditModal';
 import TagEditor from './TagEditor';
 import VersionHistory from './VersionHistory';
@@ -24,6 +22,7 @@ export default function NoteViewer() {
     const [generatingCards, setGeneratingCards] = useState(false);
     const [linkResult, setLinkResult] = useState<string | null>(null);
     const [cardResult, setCardResult] = useState<string | null>(null);
+    const [tagsCollapsed, setTagsCollapsed] = useState(true);
 
     // Auto-open editor for newly created notes
     useEffect(() => {
@@ -88,27 +87,6 @@ export default function NoteViewer() {
     };
 
     if (editing) {
-        const isExcalidraw = (selectedNote.note_type || 'text') === 'excalidraw';
-
-        if (isExcalidraw) {
-            return (
-                <ExcalidrawEditor
-                    note={selectedNote}
-                    onClose={() => setEditing(false)}
-                    onSave={async (title, content) => {
-                        try {
-                            const updated = await updateNote(selectedNote.id, { title, content });
-                            setSelectedNote(updated);
-                            setEditing(false);
-                            await loadFolderTree();
-                        } catch (e) {
-                            console.error(e);
-                        }
-                    }}
-                />
-            );
-        }
-
         return (
             <RichTextEditor
                 note={selectedNote}
@@ -151,11 +129,6 @@ export default function NoteViewer() {
                     <div>
                         <div className="flex items-center gap-2">
                             <h1 className="text-lg font-semibold text-white">{selectedNote.title}</h1>
-                            {(selectedNote.note_type || 'text') === 'excalidraw' && (
-                                <span className="text-[10px] text-purple-400 bg-purple-500/10 px-1.5 py-0.5 rounded font-medium">
-                                    Excalidraw
-                                </span>
-                            )}
                         </div>
                         <div className="flex items-center gap-3 text-xs text-dark-500 mt-0.5">
                             {selectedNote.folder_path && (
@@ -231,42 +204,31 @@ export default function NoteViewer() {
 
             {/* Tags */}
             <div className="px-6 py-2 border-b border-dark-800 bg-dark-900/30">
-                <TagEditor
-                    note={selectedNote}
-                    onUpdate={(updated) => setSelectedNote(updated)}
-                />
+                <button
+                    onClick={() => setTagsCollapsed(!tagsCollapsed)}
+                    className="flex items-center gap-1.5 text-xs text-dark-500 hover:text-white transition-colors mb-1"
+                >
+                    {tagsCollapsed ? <FiChevronRight className="w-3 h-3" /> : <FiChevronDown className="w-3 h-3" />}
+                    <FiTag className="w-3 h-3" />
+                    Tags ({(selectedNote.tags || []).length})
+                </button>
+                {!tagsCollapsed && (
+                    <TagEditor
+                        note={selectedNote}
+                        onUpdate={(updated) => setSelectedNote(updated)}
+                    />
+                )}
             </div>
 
             {/* Content */}
             <div className="flex-1 overflow-y-auto">
-                {(selectedNote.note_type || 'text') === 'excalidraw' ? (
-                    <div className="flex items-center justify-center h-full">
-                        <div className="text-center">
-                            <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-purple-600/10 mb-6">
-                                <LuPencilRuler className="w-10 h-10 text-purple-400" />
-                            </div>
-                            <h3 className="text-lg font-semibold text-white mb-2">Excalidraw Zeichnung</h3>
-                            <p className="text-sm text-dark-500 mb-4 max-w-sm">
-                                Klicke auf &quot;Bearbeiten&quot; um die Zeichnung im Excalidraw Editor zu öffnen.
-                            </p>
-                            <button
-                                onClick={() => setEditing(true)}
-                                className="flex items-center gap-2 px-4 py-2 text-sm bg-purple-600/20 text-purple-400 hover:bg-purple-600/30 rounded-lg transition-colors mx-auto"
-                            >
-                                <LuPencilRuler className="w-4 h-4" />
-                                Zeichnung öffnen
-                            </button>
-                        </div>
-                    </div>
-                ) : (
-                    <div className="max-w-4xl mx-auto px-8 py-8">
-                        <article className="markdown-content">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                                {selectedNote.content}
-                            </ReactMarkdown>
-                        </article>
-                    </div>
-                )}
+                <div className="max-w-4xl mx-auto px-8 py-8">
+                    <article className="markdown-content">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                            {selectedNote.content}
+                        </ReactMarkdown>
+                    </article>
+                </div>
             </div>
 
             {/* AI Edit Modal */}

@@ -423,8 +423,8 @@ export default function ChatPanel({ session, type }: Props) {
                                 ? 'Notiz hinzufügen... (z.B. "Zusammenfassung von Atomic Habits: Die Macht der Gewohnheiten...")'
                                 : 'Frage stellen... (z.B. "Wie kann mir Atomic Habits helfen, ins Gym zu gehen?")'
                         }
-                        className="flex-1 px-4 py-3 bg-dark-800 border border-dark-700 rounded-xl text-white text-sm placeholder-dark-600 focus:outline-none focus:border-brain-500 resize-none min-h-[44px] max-h-[200px]"
-                        rows={1}
+                        className="flex-1 px-4 py-3 bg-dark-800 border border-dark-700 rounded-xl text-white text-sm placeholder-dark-600 focus:outline-none focus:border-brain-500 resize-none min-h-[80px] max-h-[200px]"
+                        rows={3}
                     />
                     <button
                         onClick={handleSend}

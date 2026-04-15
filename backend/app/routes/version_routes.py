@@ -1,12 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from typing import List
 from uuid import UUID
 from app.database import get_db
 from app.auth import get_current_user
-from app.models import User, Note, NoteVersion
-from app.schemas import NoteVersionResponse
+from app.models import User, Note, NoteVersion, Folder, Tag
+from app.schemas import NoteVersionResponse, NoteResponse, TagResponse
+from app.services.vector_service import upsert_note_embedding
 
 router = APIRouter(prefix="/notes", tags=["versions"])
 
@@ -47,10 +48,11 @@ async def get_version(
     return version
 
 
-@router.post("/{note_id}/versions/{version_id}/restore", response_model=NoteVersionResponse)
+@router.post("/{note_id}/versions/{version_id}/restore", response_model=NoteResponse)
 async def restore_version(
     note_id: UUID,
     version_id: UUID,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -83,6 +85,31 @@ async def restore_version(
     note.title = version.title
     note.content = version.content
     await db.flush()
-    await db.refresh(current_snapshot)
+    await db.refresh(note)
 
-    return current_snapshot
+    # Load folder and tags for response
+    folder = await db.get(Folder, note.folder_id)
+    await db.refresh(note, ["tags"])
+    tags = [TagResponse(id=t.id, name=t.name, color=t.color) for t in note.tags]
+
+    # Re-embed the restored note
+    background_tasks.add_task(
+        upsert_note_embedding,
+        note_id=str(note.id),
+        user_id=str(current_user.id),
+        title=note.title,
+        content=note.content,
+        folder_path=folder.path if folder else "",
+    )
+
+    return NoteResponse(
+        id=note.id,
+        title=note.title,
+        content=note.content,
+        note_type=note.note_type or "text",
+        folder_id=note.folder_id,
+        folder_path=folder.path if folder else None,
+        tags=tags,
+        created_at=note.created_at,
+        updated_at=note.updated_at,
+    )

@@ -3,7 +3,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from typing import List
 from uuid import UUID
-import json
 from sqlalchemy import or_
 from app.database import get_db, async_session
 from app.auth import get_current_user
@@ -72,26 +71,6 @@ def _embed_and_auto_link(
     """Background task: embed note in Qdrant, then auto-link."""
     upsert_note_embedding(note_id, user_id, title, content, folder_path)
     asyncio.run(_auto_link_note(note_id, user_id, title, content))
-
-
-def extract_excalidraw_text(content: str) -> str:
-    """Extract readable text from Excalidraw JSON for embedding."""
-    try:
-        data = json.loads(content)
-        elements = data.get("elements", [])
-        texts = []
-        for el in elements:
-            if el.get("type") == "text" and el.get("text"):
-                texts.append(el["text"])
-            # Also get bound text from containers
-            if el.get("boundElements"):
-                for be in el["boundElements"]:
-                    if be.get("type") == "text":
-                        # text will be in its own element
-                        pass
-        return "\n".join(texts) if texts else "[Excalidraw Zeichnung]"
-    except (json.JSONDecodeError, KeyError):
-        return content[:500]
 
 
 @router.get("/", response_model=List[NoteListResponse])
@@ -170,8 +149,6 @@ async def create_note(
         await db.flush()
 
     embed_content = new_note.content
-    if new_note.note_type == "excalidraw":
-        embed_content = extract_excalidraw_text(new_note.content)
     background_tasks.add_task(
         _embed_and_auto_link,
         note_id=str(new_note.id),
@@ -247,8 +224,6 @@ async def update_note(
 
     folder = await db.get(Folder, note.folder_id)
     embed_content = note.content
-    if (note.note_type or "text") == "excalidraw":
-        embed_content = extract_excalidraw_text(note.content)
     background_tasks.add_task(
         upsert_note_embedding,
         note_id=str(note.id),
