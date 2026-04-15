@@ -33,15 +33,26 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    import time
+    t0 = time.time()
     print("Starting up Brain Backend...")
     await init_db()
+    print(f"  DB init: {time.time()-t0:.1f}s")
 
+    t1 = time.time()
     async with async_session() as db:
         await create_admin_user(db)
+    print(f"  Admin user: {time.time()-t1:.1f}s")
 
+    t2 = time.time()
     await ensure_collection()
+    print(f"  Qdrant collection: {time.time()-t2:.1f}s")
+
+    t3 = time.time()
     start_backup_scheduler()
-    print("Brain Backend ready!")
+    print(f"  Backup scheduler: {time.time()-t3:.1f}s")
+
+    print(f"Brain Backend ready! (total: {time.time()-t0:.1f}s)")
     yield
     # Shutdown
     stop_backup_scheduler()

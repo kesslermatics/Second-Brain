@@ -44,8 +44,8 @@ class Folder(Base):
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     user = relationship("User", back_populates="folders")
-    parent = relationship("Folder", remote_side=[id])
-    children = relationship("Folder", cascade="all, delete-orphan", passive_deletes=True)
+    parent = relationship("Folder", remote_side=[id], back_populates="children")
+    children = relationship("Folder", back_populates="parent", cascade="all, delete-orphan", passive_deletes=True)
     notes = relationship("Note", back_populates="folder", cascade="all, delete-orphan")
     images = relationship("Image", back_populates="folder")
 
