@@ -1,10 +1,14 @@
 """Book processing service — search, TOC extraction, chapter note generation."""
 
 import google.generativeai as genai
+from google.ai.generativelanguage_v1beta import types as glm_types
 from app.services.ai_service import get_gemini_model, DEFAULT_NOTE_PROMPT
 from app.config import get_settings
 import json
 import re
+
+# Google Search grounding tool (google_search_retrieval is deprecated)
+GOOGLE_SEARCH_TOOL = glm_types.Tool(google_search=glm_types.Tool.GoogleSearch())
 
 settings = get_settings()
 
@@ -12,11 +16,6 @@ settings = get_settings()
 async def search_book(query: str) -> dict:
     """Search for a book using Gemini with Google Search grounding and return structured info."""
     model = get_gemini_model()
-
-    # Use Google Search grounding to find accurate book info
-    search_tool = genai.protos.Tool(
-        google_search_retrieval=genai.protos.GoogleSearchRetrieval()
-    )
 
     prompt = f"""Suche nach dem Buch: "{query}"
 
@@ -41,7 +40,7 @@ Wenn kein passendes Buch gefunden wird:
     "suggestion": "Meintest du vielleicht...?"
 }}"""
 
-    response = model.generate_content(prompt, tools=[search_tool])
+    response = model.generate_content(prompt, tools=[GOOGLE_SEARCH_TOOL])
     text = response.text.strip()
 
     json_match = re.search(r'\{[\s\S]*\}', text)
@@ -57,10 +56,6 @@ Wenn kein passendes Buch gefunden wird:
 async def get_book_toc(book_title: str, authors: list[str]) -> dict:
     """Get the full table of contents for a book using Gemini with grounding."""
     model = get_gemini_model()
-
-    search_tool = genai.protos.Tool(
-        google_search_retrieval=genai.protos.GoogleSearchRetrieval()
-    )
 
     authors_str = ", ".join(authors)
 
@@ -85,7 +80,7 @@ Antworte NUR mit dem JSON:
 WICHTIG: Gib ALLE Kapitel, Unterkapitel und Unterunterkapitel an, nicht nur die Hauptkapitel.
 Sei so vollständig wie möglich basierend auf dem tatsächlichen Inhaltsverzeichnis des Buches."""
 
-    response = model.generate_content(prompt, tools=[search_tool])
+    response = model.generate_content(prompt, tools=[GOOGLE_SEARCH_TOOL])
     text = response.text.strip()
 
     json_match = re.search(r'\{[\s\S]*\}', text)
@@ -111,11 +106,6 @@ async def generate_chapter_note(
 
     authors_str = ", ".join(authors)
     tags_str = ", ".join(existing_tags) if existing_tags else "(keine)"
-
-    # Use grounding to get accurate chapter content
-    search_tool = genai.protos.Tool(
-        google_search_retrieval=genai.protos.GoogleSearchRetrieval()
-    )
 
     chapter_ref = f"Kapitel {chapter['chapter_number']}: {chapter['title']}"
 
@@ -156,7 +146,7 @@ Formatierungsregeln für formatted_content (sehr wichtig!):
 - Die Notiz soll wie eine gute Zusammenfassung sein, die man zum Lernen nutzen kann
 - Schreibe in der Sprache des Buches"""
 
-    response = model.generate_content(prompt, tools=[search_tool])
+    response = model.generate_content(prompt, tools=[GOOGLE_SEARCH_TOOL])
     text = response.text.strip()
 
     json_match = re.search(r'\{[\s\S]*\}', text)
