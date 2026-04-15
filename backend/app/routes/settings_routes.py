@@ -61,6 +61,7 @@ async def update_settings(
 
     defaults = get_default_prompts()
 
+    await db.commit()
     return SettingsResponse(
         note_prompt=user_settings.note_prompt,
         qa_prompt=user_settings.qa_prompt,
@@ -91,6 +92,7 @@ async def reset_settings(
 
     defaults = get_default_prompts()
 
+    await db.commit()
     return SettingsResponse(
         note_prompt=None,
         qa_prompt=None,

@@ -88,6 +88,7 @@ async def create_link(
     db.add(link)
     await db.flush()
     await db.refresh(link)
+    await db.commit()
 
     return NoteLinkResponse(
         id=link.id,
@@ -115,6 +116,7 @@ async def delete_link(
     if not source or source.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Link not found")
     await db.delete(link)
+    await db.commit()
 
 
 @router.post("/note/{note_id}/auto-link")
@@ -184,6 +186,7 @@ async def auto_link_note(
         created += 1
 
     await db.flush()
+    await db.commit()
     return {"created_links": created}
 
 

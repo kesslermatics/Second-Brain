@@ -93,6 +93,7 @@ async def restore_version(
     tags = [TagResponse(id=t.id, name=t.name, color=t.color) for t in note.tags]
 
     # Re-embed the restored note
+    await db.commit()
     background_tasks.add_task(
         upsert_note_embedding,
         note_id=str(note.id),

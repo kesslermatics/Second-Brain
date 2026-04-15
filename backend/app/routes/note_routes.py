@@ -251,6 +251,7 @@ async def create_note(
         await db.flush()
 
     embed_content = new_note.content
+    await db.commit()
     background_tasks.add_task(
         _embed_and_auto_link,
         note_id=str(new_note.id),
@@ -344,6 +345,7 @@ async def update_note(
     await db.refresh(note, ["tags"])
     tags = [TagResponse(id=t.id, name=t.name, color=t.color) for t in note.tags]
 
+    await db.commit()
     return NoteResponse(
         id=note.id,
         title=note.title,
@@ -374,3 +376,4 @@ async def delete_note(
     background_tasks.add_task(delete_note_embedding, str(note_id))
 
     await db.delete(note)
+    await db.commit()

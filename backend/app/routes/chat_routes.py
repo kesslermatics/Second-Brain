@@ -48,6 +48,7 @@ async def create_session(
     db.add(new_session)
     await db.flush()
     await db.refresh(new_session)
+    await db.commit()
     return new_session
 
 
@@ -97,6 +98,7 @@ async def delete_session(
     if not session or session.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Session not found")
     await db.delete(session)
+    await db.commit()
 
 
 @router.put("/sessions/{session_id}", response_model=ChatSessionResponse)
@@ -113,6 +115,7 @@ async def update_session(
         session.title = data["title"]
     await db.flush()
     await db.refresh(session)
+    await db.commit()
     return session
 
 
@@ -307,6 +310,7 @@ AI_NOTE_DATA -->"""
             session.title = message.content[:50] + ("..." if len(message.content) > 50 else "")
         await db.flush()
 
+    await db.commit()
     return ChatMessageResponse(
         id=assistant_msg.id,
         session_id=assistant_msg.session_id,

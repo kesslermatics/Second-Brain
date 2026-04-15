@@ -178,6 +178,7 @@ async def upload_image(
         image_url,
     )
 
+    await db.commit()
     return ImageResponse(
         id=img.id,
         original_filename=img.original_filename,
@@ -256,6 +257,7 @@ async def paste_image(
         _build_url(str(current_user.id), stored_name),
     )
 
+    await db.commit()
     return ImageResponse(
         id=img.id,
         original_filename=img.original_filename,
@@ -422,3 +424,4 @@ async def delete_image(
         print(f"Error deleting image embedding: {e}")
 
     await db.delete(img)
+    await db.commit()

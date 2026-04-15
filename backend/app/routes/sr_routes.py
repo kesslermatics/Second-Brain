@@ -89,6 +89,7 @@ async def update_sr_settings(
 
     await db.flush()
     await db.refresh(settings)
+    await db.commit()
     return settings
 
 
@@ -132,6 +133,7 @@ async def generate_cards_for_note(
             note_title=note.title,
         ))
 
+    await db.commit()
     return created_cards
 
 
@@ -178,6 +180,7 @@ async def generate_cards_for_folder(
                 note_title=note.title,
             ))
 
+    await db.commit()
     return all_cards
 
 
@@ -280,6 +283,7 @@ async def submit_review(
 
     note = await db.get(Note, card.note_id)
 
+    await db.commit()
     return FlashCardResponse(
         id=card.id,
         note_id=card.note_id,
@@ -340,3 +344,4 @@ async def delete_card(
     if not card or card.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Card not found")
     await db.delete(card)
+    await db.commit()

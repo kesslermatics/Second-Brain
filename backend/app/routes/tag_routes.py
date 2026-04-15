@@ -56,6 +56,7 @@ async def create_tag(
     db.add(tag)
     await db.flush()
     await db.refresh(tag)
+    await db.commit()
     return TagResponse(id=tag.id, name=tag.name, color=tag.color, note_count=0)
 
 
@@ -69,6 +70,7 @@ async def delete_tag(
     if not tag or tag.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Tag not found")
     await db.delete(tag)
+    await db.commit()
 
 
 @router.post("/suggest", response_model=TagSuggestResponse)

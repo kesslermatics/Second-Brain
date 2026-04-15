@@ -50,6 +50,7 @@ async def stream_message(
     user_msg = ChatMessage(session_id=session_id, role="user", content=content)
     db.add(user_msg)
     await db.flush()
+    await db.commit()
 
     # Load custom prompts
     settings_result = await db.execute(

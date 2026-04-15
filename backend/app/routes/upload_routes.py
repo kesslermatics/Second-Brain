@@ -93,6 +93,7 @@ async def upload_file(
             file_url,
         )
 
+    await db.commit()
     return {
         "url": file_url,
         "filename": file.filename,
@@ -156,6 +157,7 @@ async def upload_pasted_image(
         file_url,
     )
 
+    await db.commit()
     return {
         "url": file_url,
         "filename": unique_name,

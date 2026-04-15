@@ -105,6 +105,7 @@ async def create_folder(
     db.add(new_folder)
     await db.flush()
     await db.refresh(new_folder)
+    await db.commit()
     return new_folder
 
 
@@ -149,6 +150,7 @@ async def ensure_folder_path(
         parent_id = folder.id
         last_folder = folder
 
+    await db.commit()
     return last_folder
 
 
@@ -207,6 +209,7 @@ async def update_folder(
 
     await db.flush()
     await db.refresh(folder)
+    await db.commit()
     return folder
 
 
@@ -276,3 +279,5 @@ async def delete_folder(
         f = await db.get(Folder, fid)
         if f:
             await db.delete(f)
+
+    await db.commit()
