@@ -16,7 +16,21 @@ export default function KnowledgeGraphView() {
     const [loading, setLoading] = useState(true);
     const [fullscreen, setFullscreen] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
+    const graphContainerRef = useRef<HTMLDivElement>(null);
+    const [graphDimensions, setGraphDimensions] = useState({ width: 0, height: 0 });
     const { setSelectedNote, setActiveView } = useStore();
+
+    // Measure graph container so ForceGraph2D stays within bounds
+    useEffect(() => {
+        const el = graphContainerRef.current;
+        if (!el) return;
+        const ro = new ResizeObserver(([entry]) => {
+            const { width, height } = entry.contentRect;
+            setGraphDimensions({ width, height });
+        });
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, []);
 
     const loadGraph = useCallback(async () => {
         setLoading(true);
@@ -142,7 +156,7 @@ export default function KnowledgeGraphView() {
             </div>
 
             {/* Graph */}
-            <div className="flex-1 relative">
+            <div ref={graphContainerRef} className="flex-1 relative overflow-hidden min-h-0">
                 {loading && (
                     <div className="absolute inset-0 flex items-center justify-center z-10">
                         <div className="animate-spin w-8 h-8 border-2 border-brain-500 border-t-transparent rounded-full" />
@@ -164,6 +178,8 @@ export default function KnowledgeGraphView() {
                 {!loading && graphData && graphData.nodes.length > 0 && (
                     <ForceGraph2D
                         graphData={fgData}
+                        width={graphDimensions.width || undefined}
+                        height={graphDimensions.height || undefined}
                         nodeLabel="name"
                         nodeColor={() => '#8b5cf6'}
                         nodeRelSize={6}
@@ -184,30 +200,31 @@ export default function KnowledgeGraphView() {
 
                 {/* Legend */}
                 {!loading && graphData && graphData.nodes.length > 0 && (
-                    <div className="absolute bottom-4 left-4 bg-dark-900/90 border border-dark-700 rounded-xl p-4 text-xs text-dark-400 backdrop-blur-sm max-w-xs">
+                    <div className="absolute bottom-3 left-3 bg-dark-900/95 border border-dark-700 rounded-xl p-3 text-[11px] text-dark-400 backdrop-blur-sm max-w-[280px] max-h-[calc(100%-24px)] overflow-y-auto">
                         <div className="flex items-center gap-2 mb-2">
-                            <FiInfo className="w-3.5 h-3.5 text-brain-400" />
-                            <span className="font-semibold text-dark-200">Legende & Steuerung</span>
+                            <FiInfo className="w-3.5 h-3.5 text-brain-400 flex-shrink-0" />
+                            <span className="font-semibold text-dark-200">Legende</span>
                         </div>
                         <div className="space-y-2">
                             <div>
-                                <p className="font-medium text-dark-300 mb-1">Was du siehst:</p>
                                 <div className="flex items-center gap-2 mb-0.5">
                                     <span className="w-2.5 h-2.5 rounded-full bg-purple-500 flex-shrink-0" />
-                                    <span>Jeder Punkt = eine Notiz</span>
+                                    <span>Punkt = Notiz</span>
                                 </div>
                                 <div className="flex items-center gap-2 mb-0.5">
                                     <span className="w-4 h-px bg-dark-500 flex-shrink-0" />
-                                    <span>Linien = KI-erkannte Verbindungen zwischen Notizen</span>
+                                    <span>Linie = Verbindung zwischen Notizen</span>
                                 </div>
-                                <p className="text-dark-500 mt-1">Nah beieinander liegende Notizen teilen ähnliche Themen. Cluster zeigen zusammengehörige Wissensbereiche.</p>
+                            </div>
+                            <div className="border-t border-dark-700 pt-2">
+                                <p className="font-medium text-dark-300 mb-1">Wie entstehen Verbindungen?</p>
+                                <p className="leading-relaxed">Verbindungen werden <span className="text-brain-400">nicht</span> automatisch erstellt. Öffne eine Notiz und klicke auf <span className="text-brain-400">&quot;Auto-Verknüpfen&quot;</span> — die KI durchsucht dann per Vektorsuche (Embedding-Ähnlichkeit) alle deine Notizen, findet thematisch verwandte, und erstellt die Verbindungen.</p>
                             </div>
                             <div className="border-t border-dark-700 pt-2">
                                 <p className="font-medium text-dark-300 mb-1">Steuerung:</p>
-                                <p>🖱️ Klick auf Notiz → öffnet sie</p>
+                                <p>🖱️ Klick → Notiz öffnen</p>
                                 <p>🔍 Scrollen → Zoomen</p>
-                                <p>✋ Ziehen auf Hintergrund → Bewegen</p>
-                                <p>📌 Ziehen auf Notiz → Fixieren</p>
+                                <p>✋ Ziehen → Bewegen/Fixieren</p>
                             </div>
                         </div>
                     </div>
