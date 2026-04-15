@@ -6,7 +6,15 @@ from pathlib import Path
 from app.config import get_settings
 
 settings = get_settings()
-genai.configure(api_key=settings.GEMINI_API_KEY)
+_genai_configured = False
+
+
+def _ensure_genai():
+    global _genai_configured
+    if not _genai_configured:
+        genai.configure(api_key=settings.GEMINI_API_KEY)
+        _genai_configured = True
+
 
 VISION_MODEL = "gemini-3-flash-preview"
 
@@ -39,6 +47,7 @@ async def describe_image(file_path: str, custom_prompt: str | None = None) -> st
         raise FileNotFoundError(f"Image not found: {file_path}")
 
     # Upload the file to Gemini
+    _ensure_genai()
     uploaded = genai.upload_file(path)
 
     model = genai.GenerativeModel(VISION_MODEL)
@@ -63,6 +72,7 @@ async def describe_image_from_bytes(
     """
     Describe an image from raw bytes (useful for inline / pasted images).
     """
+    _ensure_genai()
     model = genai.GenerativeModel(VISION_MODEL)
     prompt = custom_prompt or DESCRIBE_PROMPT
 

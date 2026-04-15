@@ -13,26 +13,44 @@ logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
-genai.configure(api_key=settings.GEMINI_API_KEY)
-
-qdrant_client = QdrantClient(
-    url=settings.QDRANT_URL,
-    port=settings.QDRANT_PORT,
-    timeout=60,
-)
-
 COLLECTION_NAME = "brain_notes"
 EMBEDDING_DIMENSION = 768
 EMBEDDING_MODEL = "models/gemini-embedding-001"
+
+# Lazy initialization — avoid blocking at import time during cold starts
+_qdrant_client = None
+_genai_configured = False
+
+
+def _get_qdrant():
+    global _qdrant_client
+    if _qdrant_client is None:
+        url = settings.QDRANT_URL
+        # Railway HTTPS proxy handles TLS on port 443 — don't specify port for https URLs
+        port = None if url.startswith("https://") else settings.QDRANT_PORT
+        _qdrant_client = QdrantClient(
+            url=url,
+            port=port,
+            timeout=30,
+        )
+    return _qdrant_client
+
+
+def _ensure_genai():
+    global _genai_configured
+    if not _genai_configured:
+        genai.configure(api_key=settings.GEMINI_API_KEY)
+        _genai_configured = True
 
 
 async def ensure_collection():
     """Ensure the Qdrant collection exists."""
     try:
-        collections = qdrant_client.get_collections().collections
+        client = _get_qdrant()
+        collections = client.get_collections().collections
         collection_names = [c.name for c in collections]
         if COLLECTION_NAME not in collection_names:
-            qdrant_client.create_collection(
+            client.create_collection(
                 collection_name=COLLECTION_NAME,
                 vectors_config=VectorParams(
                     size=EMBEDDING_DIMENSION,
@@ -57,6 +75,7 @@ def _normalize(vec: list[float]) -> list[float]:
 
 def get_embedding(text: str) -> list[float]:
     """Get document embedding using gemini-embedding-001."""
+    _ensure_genai()
     result = genai.embed_content(
         model=EMBEDDING_MODEL,
         content=text,
@@ -68,6 +87,7 @@ def get_embedding(text: str) -> list[float]:
 
 def get_query_embedding(text: str) -> list[float]:
     """Get query embedding using gemini-embedding-001."""
+    _ensure_genai()
     result = genai.embed_content(
         model=EMBEDDING_MODEL,
         content=text,
@@ -94,7 +114,7 @@ def upsert_note_embedding(note_id: str, user_id: str, title: str, content: str, 
             "type": "note",
         },
     )
-    qdrant_client.upsert(
+    _get_qdrant().upsert(
         collection_name=COLLECTION_NAME,
         points=[point],
     )
@@ -131,7 +151,7 @@ def upsert_image_embedding(
             "original_filename": original_filename,
         },
     )
-    qdrant_client.upsert(
+    _get_qdrant().upsert(
         collection_name=COLLECTION_NAME,
         points=[point],
     )
@@ -140,7 +160,7 @@ def upsert_image_embedding(
 def delete_image_embedding(image_id: str):
     """Delete an image embedding from Qdrant."""
     try:
-        qdrant_client.delete(
+        _get_qdrant().delete(
             collection_name=COLLECTION_NAME,
             points_selector=[str(image_id)],
         )
@@ -151,7 +171,7 @@ def delete_image_embedding(image_id: str):
 def delete_note_embedding(note_id: str):
     """Delete a note embedding from Qdrant."""
     try:
-        qdrant_client.delete(
+        _get_qdrant().delete(
             collection_name=COLLECTION_NAME,
             points_selector=[str(note_id)],
         )
@@ -167,7 +187,7 @@ def _vector_search(query: str, user_id: str, limit: int = 20) -> list[dict]:
     """Search Qdrant for semantically similar notes."""
     query_embedding = get_query_embedding(query)
 
-    results = qdrant_client.search(
+    results = _get_qdrant().search(
         collection_name=COLLECTION_NAME,
         query_vector=query_embedding,
         query_filter=Filter(

@@ -235,11 +235,10 @@ export default function KnowledgeGraphView() {
                 <div className="flex items-center gap-2">
                     <button
                         onClick={() => setTagCluster(!tagCluster)}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                            tagCluster
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${tagCluster
                                 ? 'bg-brain-600/30 text-brain-300 border border-brain-500/40'
                                 : 'bg-dark-800 text-dark-400 hover:text-white border border-transparent'
-                        }`}
+                            }`}
                         title="Nach Tags clustern"
                     >
                         <HiTag className="w-3.5 h-3.5" />

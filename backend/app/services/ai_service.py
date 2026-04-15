@@ -4,10 +4,18 @@ import json
 import re
 
 settings = get_settings()
-genai.configure(api_key=settings.GEMINI_API_KEY)
+_genai_configured = False
+
+
+def _ensure_genai():
+    global _genai_configured
+    if not _genai_configured:
+        genai.configure(api_key=settings.GEMINI_API_KEY)
+        _genai_configured = True
 
 
 def get_gemini_model():
+    _ensure_genai()
     return genai.GenerativeModel("gemini-3-flash-preview")
 
 
