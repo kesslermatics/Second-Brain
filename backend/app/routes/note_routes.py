@@ -67,16 +67,43 @@ async def _auto_link_note(note_id: str, user_id: str, title: str, content: str):
 
 
 async def _enrich_content_with_image_descriptions(content: str, user_id: str) -> str:
-    """Replace ![image](url) markdown with AI descriptions from Image DB for embedding."""
-    image_pattern = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
-    matches = image_pattern.findall(content)
-    if not matches:
-        return content
+    """Replace image references (markdown ![](url) and HTML <img> / attachment links) with AI descriptions for embedding."""
+    # Pattern 1: Markdown images ![alt](url)
+    md_pattern = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
+    # Pattern 2: HTML img tags <img src="url" ...>
+    img_tag_pattern = re.compile(r'<img[^>]+src="([^"]+)"[^>]*>')
+    # Pattern 3: Attachment links with /uploads/ URLs (📎 links)
+    attach_pattern = re.compile(r'\[📎\s*([^\]]*)\]\(([^)]+/uploads/[^)]+)\)')
+    # Pattern 4: HTML <a> attachment links
+    html_attach_pattern = re.compile(r'<a[^>]+href="([^"]*?/uploads/[^"]*?)"[^>]*>📎\s*([^<]*)</a>')
 
     enriched = content
+
+    # Collect all URLs to look up in one batch
+    urls_to_check: list[tuple[str, str, str]] = []  # (full_match, url, alt)
+
+    for alt, url in md_pattern.findall(content):
+        urls_to_check.append((f'![{alt}]({url})', url, alt))
+
+    for url in img_tag_pattern.findall(content):
+        match = img_tag_pattern.search(content)
+        if match:
+            urls_to_check.append((match.group(0), url, ''))
+
+    for alt, url in attach_pattern.findall(content):
+        urls_to_check.append((f'[📎 {alt}]({url})', url, alt))
+
+    for url, alt in html_attach_pattern.findall(content):
+        match_str = f'<a' # will do exact replacement below
+        urls_to_check.append(('', url, alt))
+
+    if not urls_to_check:
+        return content
+
     async with async_session() as db:
-        for alt_text, url in matches:
-            # Extract stored filename from URL (last path segment)
+        for full_match, url, alt_text in urls_to_check:
+            if '/uploads/' not in url:
+                continue
             filename = url.rsplit('/', 1)[-1] if '/' in url else url
             result = await db.execute(
                 select(Image).where(
@@ -86,10 +113,20 @@ async def _enrich_content_with_image_descriptions(content: str, user_id: str) ->
             )
             img = result.scalar_one_or_none()
             if img and img.description:
-                enriched = enriched.replace(
-                    f'![{alt_text}]({url})',
-                    f'[Bild: {alt_text}] {img.description}',
-                )
+                if full_match:
+                    enriched = enriched.replace(
+                        full_match,
+                        f'[Bild: {alt_text or img.original_filename}] {img.description}',
+                    )
+                else:
+                    # HTML <a> tag — find and replace the full tag
+                    html_tag = html_attach_pattern.search(enriched)
+                    if html_tag:
+                        enriched = enriched.replace(
+                            html_tag.group(0),
+                            f'[Bild: {img.original_filename}] {img.description}',
+                        )
+
     return enriched
 
 

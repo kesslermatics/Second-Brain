@@ -171,6 +171,14 @@ export default function RichTextEditor({ note, onClose, onSave }: Props) {
     const handleAttachmentSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file || !editor) return;
+
+        // If it's an image, insert as image (not attachment link)
+        if (file.type.startsWith('image/')) {
+            await handleImageUpload(file);
+            e.target.value = '';
+            return;
+        }
+
         setUploading(true);
         try {
             const result = await uploadFile(file);
