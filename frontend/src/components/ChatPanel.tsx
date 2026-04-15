@@ -23,8 +23,14 @@ export default function ChatPanel({ session, type }: Props) {
     const [loading, setLoading] = useState(false);
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [savingNote, setSavingNote] = useState<string | null>(null);
-    const [savedNotes, setSavedNotes] = useState<Set<string>>(new Set());
-    const [dismissedNotes, setDismissedNotes] = useState<Set<string>>(new Set());
+    const [savedNotes, setSavedNotes] = useState<Set<string>>(() => {
+        if (typeof window === 'undefined') return new Set();
+        try { return new Set(JSON.parse(localStorage.getItem('brain_saved_notes') || '[]')); } catch { return new Set(); }
+    });
+    const [dismissedNotes, setDismissedNotes] = useState<Set<string>>(() => {
+        if (typeof window === 'undefined') return new Set();
+        try { return new Set(JSON.parse(localStorage.getItem('brain_dismissed_notes') || '[]')); } catch { return new Set(); }
+    });
     const [refineMessageId, setRefineMessageId] = useState<string | null>(null);
     const [refineInput, setRefineInput] = useState('');
     const [refining, setRefining] = useState(false);
@@ -203,8 +209,17 @@ export default function ChatPanel({ session, type }: Props) {
             const folder = await ensureFolderPath(noteData.folder);
             const note = await createNote(noteData.title, noteData.content, folder.id, noteData.tag_ids);
             await loadFolderTree();
-            setSavedNotes((prev) => new Set(prev).add(content));
-            setDismissedNotes((prev) => new Set(prev).add(content));
+            const msgId = messages.find(m => m.content === content)?.id || content;
+            setSavedNotes((prev) => {
+                const next = new Set(prev).add(msgId);
+                localStorage.setItem('brain_saved_notes', JSON.stringify([...next]));
+                return next;
+            });
+            setDismissedNotes((prev) => {
+                const next = new Set(prev).add(msgId);
+                localStorage.setItem('brain_dismissed_notes', JSON.stringify([...next]));
+                return next;
+            });
         } catch (e) {
             console.error(e);
         } finally {
@@ -212,11 +227,15 @@ export default function ChatPanel({ session, type }: Props) {
         }
     };
 
-    const handleDismissNote = (content: string) => {
-        setDismissedNotes((prev) => new Set(prev).add(content));
+    const handleDismissNote = (content: string, msgId: string) => {
+        setDismissedNotes((prev) => {
+            const next = new Set(prev).add(msgId);
+            localStorage.setItem('brain_dismissed_notes', JSON.stringify([...next]));
+            return next;
+        });
     };
 
-    const handleRefine = async (msgContent: string) => {
+    const handleRefine = async (msgContent: string, msgId: string) => {
         if (!refineInput.trim() || refining || !session) return;
         setRefining(true);
 
@@ -239,7 +258,11 @@ export default function ChatPanel({ session, type }: Props) {
             ]);
 
             // Dismiss old suggestion, new one will have buttons
-            setDismissedNotes((prev) => new Set(prev).add(msgContent));
+            setDismissedNotes((prev) => {
+                const next = new Set(prev).add(msgId);
+                localStorage.setItem('brain_dismissed_notes', JSON.stringify([...next]));
+                return next;
+            });
             setRefineMessageId(null);
             setRefineInput('');
 
@@ -297,7 +320,7 @@ export default function ChatPanel({ session, type }: Props) {
                             </div>
 
                             {/* Action buttons for assistant messages with note data */}
-                            {msg.role === 'assistant' && type === 'notes' && extractNoteData(msg.content) && !dismissedNotes.has(msg.content) && (
+                            {msg.role === 'assistant' && type === 'notes' && extractNoteData(msg.content) && !dismissedNotes.has(msg.id) && !savedNotes.has(msg.id) && (
                                 <div className="mt-3 pt-3 border-t border-dark-600 space-y-2">
                                     <div className="flex gap-2">
                                         {/* Accept */}
@@ -327,7 +350,7 @@ export default function ChatPanel({ session, type }: Props) {
 
                                         {/* Dismiss */}
                                         <button
-                                            onClick={() => handleDismissNote(msg.content)}
+                                            onClick={() => handleDismissNote(msg.content, msg.id)}
                                             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-red-600/10 text-red-400 hover:bg-red-600/20 rounded-lg transition-colors"
                                         >
                                             <FiX className="w-3.5 h-3.5" />
@@ -345,7 +368,7 @@ export default function ChatPanel({ session, type }: Props) {
                                                 value={refineInput}
                                                 onChange={(e) => setRefineInput(e.target.value)}
                                                 onKeyDown={(e) => {
-                                                    if (e.key === 'Enter') handleRefine(msg.content);
+                                                    if (e.key === 'Enter') handleRefine(msg.content, msg.id);
                                                     if (e.key === 'Escape') { setRefineMessageId(null); setRefineInput(''); }
                                                 }}
                                                 placeholder="Was soll geändert werden? z.B. 'Mehr Details zu Kapitel 2'"
@@ -353,7 +376,7 @@ export default function ChatPanel({ session, type }: Props) {
                                                 autoFocus
                                             />
                                             <button
-                                                onClick={() => handleRefine(msg.content)}
+                                                onClick={() => handleRefine(msg.content, msg.id)}
                                                 disabled={!refineInput.trim() || refining}
                                                 className="p-1.5 bg-brain-600 hover:bg-brain-500 text-white rounded-md transition-colors disabled:opacity-50"
                                             >
@@ -369,9 +392,9 @@ export default function ChatPanel({ session, type }: Props) {
                             )}
 
                             {/* Show "saved" badge for dismissed/saved notes */}
-                            {msg.role === 'assistant' && type === 'notes' && extractNoteData(msg.content) && dismissedNotes.has(msg.content) && (
+                            {msg.role === 'assistant' && type === 'notes' && extractNoteData(msg.content) && (dismissedNotes.has(msg.id) || savedNotes.has(msg.id)) && (
                                 <div className="mt-3 pt-3 border-t border-dark-600">
-                                    {savedNotes.has(msg.content) ? (
+                                    {savedNotes.has(msg.id) ? (
                                         <span className="text-xs text-green-400 flex items-center gap-1">
                                             <FiCheck className="w-3 h-3" /> Gespeichert
                                         </span>
