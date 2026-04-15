@@ -10,7 +10,7 @@ Uses Qdrant's built-in snapshot API:
 from datetime import datetime, timezone, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from app.services.vector_service import qdrant_client, COLLECTION_NAME
+from app.services.vector_service import _get_qdrant, COLLECTION_NAME
 
 RETENTION_DAYS = 60
 
@@ -20,6 +20,7 @@ scheduler = AsyncIOScheduler()
 async def create_backup():
     """Create a Qdrant collection snapshot."""
     try:
+        qdrant_client = _get_qdrant()
         snapshot = qdrant_client.create_snapshot(collection_name=COLLECTION_NAME)
         print(f"[Backup] Snapshot created: {snapshot.name}")
         return snapshot
@@ -31,6 +32,7 @@ async def create_backup():
 async def rotate_backups():
     """Delete snapshots older than RETENTION_DAYS."""
     try:
+        qdrant_client = _get_qdrant()
         snapshots = qdrant_client.list_snapshots(collection_name=COLLECTION_NAME)
         if not snapshots:
             print("[Backup] No snapshots found, nothing to rotate.")
