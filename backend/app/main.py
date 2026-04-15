@@ -62,11 +62,13 @@ origins = [
 ]
 if settings.FRONTEND_URLS:
     for url in settings.FRONTEND_URLS.split(","):
-        url = url.strip()
+        url = url.strip().rstrip("/")
         if url:
             origins.append(url)
             if not url.startswith("http"):
                 origins.append(f"https://{url}")
+
+print(f"[CORS] Allowed origins: {origins}")
 
 app.add_middleware(
     CORSMiddleware,

@@ -70,11 +70,18 @@ export interface NoteLink {
   created_at: string;
 }
 
+export interface GraphNodeTag {
+  id: string;
+  name: string;
+  color: string | null;
+}
+
 export interface GraphNode {
   id: string;
   title: string;
   folder_path: string;
   val: number;
+  tags?: GraphNodeTag[];
 }
 
 export interface GraphEdge {

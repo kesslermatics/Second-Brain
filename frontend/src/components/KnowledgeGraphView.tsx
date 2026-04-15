@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { FiRefreshCw, FiMaximize2, FiMinimize2, FiInfo } from 'react-icons/fi';
 import { LuBrain } from 'react-icons/lu';
+import { HiTag } from 'react-icons/hi2';
 import { getGraphData, getNote } from '@/lib/api';
 import { useStore } from '@/lib/store';
 import type { GraphData } from '@/lib/types';
@@ -15,8 +16,10 @@ export default function KnowledgeGraphView() {
     const [graphData, setGraphData] = useState<GraphData | null>(null);
     const [loading, setLoading] = useState(true);
     const [fullscreen, setFullscreen] = useState(false);
+    const [tagCluster, setTagCluster] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
     const graphContainerRef = useRef<HTMLDivElement>(null);
+    const fgRef = useRef<unknown>(null);
     const [graphDimensions, setGraphDimensions] = useState({ width: 0, height: 0 });
     const { setSelectedNote, setActiveView } = useStore();
 
@@ -65,6 +68,7 @@ export default function KnowledgeGraphView() {
             name: n.title,
             folder: n.folder_path,
             val: n.val || 1,
+            tags: n.tags || [],
         })),
         links: graphData.edges.map((e) => ({
             source: e.source,
@@ -74,30 +78,82 @@ export default function KnowledgeGraphView() {
         })),
     } : { nodes: [], links: [] }, [graphData]);
 
+    // Build tag color map
+    const TAG_PALETTE = [
+        '#8b5cf6', '#3b82f6', '#10b981', '#f59e0b', '#ef4444',
+        '#ec4899', '#06b6d4', '#84cc16', '#f97316', '#6366f1',
+        '#14b8a6', '#e879f9', '#22d3ee', '#a3e635', '#fb923c',
+    ];
+
+    const { tagColorMap, allTags } = useMemo(() => {
+        if (!graphData) return { tagColorMap: new Map<string, string>(), allTags: [] as { id: string; name: string; color: string }[] };
+        const tagMap = new Map<string, { name: string; color: string | null; count: number }>();
+        for (const node of graphData.nodes) {
+            for (const t of (node.tags || [])) {
+                const existing = tagMap.get(t.id);
+                if (existing) {
+                    existing.count++;
+                } else {
+                    tagMap.set(t.id, { name: t.name, color: t.color, count: 1 });
+                }
+            }
+        }
+        // Sort by count descending
+        const sorted = Array.from(tagMap.entries()).sort((a, b) => b[1].count - a[1].count);
+        const colorMap = new Map<string, string>();
+        const tags: { id: string; name: string; color: string }[] = [];
+        sorted.forEach(([id, { name, color }], i) => {
+            const c = color || TAG_PALETTE[i % TAG_PALETTE.length];
+            colorMap.set(id, c);
+            tags.push({ id, name, color: c });
+        });
+        return { tagColorMap: colorMap, allTags: tags };
+    }, [graphData]);
+
+    // Get color for a node based on its primary tag
+    const getNodeColor = useCallback((node: { tags?: { id: string }[] }) => {
+        if (!tagCluster || !node.tags || node.tags.length === 0) return '#8b5cf6';
+        // Use the first tag's color
+        for (const t of node.tags) {
+            const c = tagColorMap.get(t.id);
+            if (c) return c;
+        }
+        return '#6b7280'; // gray for untagged
+    }, [tagCluster, tagColorMap]);
+
     const hoveredNodeRef = useRef<string | null>(null);
 
     const handleNodeHover = useCallback((node: { id?: string | number } | null) => {
         hoveredNodeRef.current = node?.id ? String(node.id) : null;
     }, []);
 
-    const nodeCanvasObject = useCallback((node: { x?: number; y?: number; name?: string; id?: string | number;[others: string]: unknown }, ctx: CanvasRenderingContext2D, globalScale: number) => {
+    const nodeCanvasObject = useCallback((node: { x?: number; y?: number; name?: string; id?: string | number; tags?: { id: string }[];[others: string]: unknown }, ctx: CanvasRenderingContext2D, globalScale: number) => {
         const label = (node as { name?: string }).name || '';
         const fontSize = 12 / globalScale;
         const isHovered = hoveredNodeRef.current === String(node.id);
         const size = isHovered ? 8 : 5;
+        const baseColor = getNodeColor(node);
+
+        // Parse hex to rgba helper
+        const hexToRgba = (hex: string, alpha: number) => {
+            const r = parseInt(hex.slice(1, 3), 16);
+            const g = parseInt(hex.slice(3, 5), 16);
+            const b = parseInt(hex.slice(5, 7), 16);
+            return `rgba(${r},${g},${b},${alpha})`;
+        };
 
         // Glow
         ctx.beginPath();
         ctx.arc(node.x || 0, node.y || 0, size + 4, 0, 2 * Math.PI);
-        ctx.fillStyle = isHovered ? 'rgba(139, 92, 246, 0.3)' : 'rgba(139, 92, 246, 0.1)';
+        ctx.fillStyle = hexToRgba(baseColor, isHovered ? 0.3 : 0.1);
         ctx.fill();
 
         // Node
         ctx.beginPath();
         ctx.arc(node.x || 0, node.y || 0, size, 0, 2 * Math.PI);
-        ctx.fillStyle = isHovered ? '#a78bfa' : '#8b5cf6';
+        ctx.fillStyle = isHovered ? hexToRgba(baseColor, 0.85) : baseColor;
         ctx.fill();
-        ctx.strokeStyle = '#c4b5fd';
+        ctx.strokeStyle = hexToRgba(baseColor, 0.6);
         ctx.lineWidth = isHovered ? 2 / globalScale : 0.5 / globalScale;
         ctx.stroke();
 
@@ -109,7 +165,7 @@ export default function KnowledgeGraphView() {
             ctx.fillStyle = isHovered ? '#ffffff' : '#9ca3af';
             ctx.fillText(label.length > 25 ? label.slice(0, 25) + '...' : label, node.x || 0, (node.y || 0) + size + 3);
         }
-    }, []);
+    }, [getNodeColor]);
 
     const nodePointerAreaPaint = useCallback((node: { x?: number; y?: number;[others: string]: unknown }, color: string, ctx: CanvasRenderingContext2D) => {
         ctx.beginPath();
@@ -117,6 +173,46 @@ export default function KnowledgeGraphView() {
         ctx.fillStyle = color;
         ctx.fill();
     }, []);
+
+    // Apply tag-based clustering force
+    useEffect(() => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const fg = fgRef.current as any;
+        if (!fg) return;
+
+        if (tagCluster && graphData && graphData.nodes.length > 0) {
+            // Build tag → center position map
+            const tagCenters = new Map<string, { x: number; y: number }>();
+            const angle = (2 * Math.PI) / Math.max(allTags.length, 1);
+            const radius = Math.min(graphDimensions.width, graphDimensions.height) * 0.25 || 200;
+            allTags.forEach((t, i) => {
+                tagCenters.set(t.id, {
+                    x: Math.cos(angle * i) * radius,
+                    y: Math.sin(angle * i) * radius,
+                });
+            });
+
+            // Custom clustering force - pull nodes toward their primary tag center
+            const clusterForce = (alpha: number) => {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const nodes: any[] = fg.graphData?.()?.nodes || [];
+                for (const node of nodes) {
+                    if (!node.tags || node.tags.length === 0) continue;
+                    const center = tagCenters.get(node.tags[0].id);
+                    if (!center) continue;
+                    const k = alpha * 0.3;
+                    node.vx += (center.x - (node.x || 0)) * k;
+                    node.vy += (center.y - (node.y || 0)) * k;
+                }
+            };
+
+            fg.d3Force('cluster', clusterForce);
+            fg.d3Force('charge')?.strength(-120);
+        } else if (fg) {
+            fg.d3Force('cluster', null);
+            fg.d3Force('charge')?.strength(-50);
+        }
+    }, [tagCluster, graphData, allTags, graphDimensions]);
 
     return (
         <div
@@ -137,6 +233,18 @@ export default function KnowledgeGraphView() {
                     </div>
                 </div>
                 <div className="flex items-center gap-2">
+                    <button
+                        onClick={() => setTagCluster(!tagCluster)}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                            tagCluster
+                                ? 'bg-brain-600/30 text-brain-300 border border-brain-500/40'
+                                : 'bg-dark-800 text-dark-400 hover:text-white border border-transparent'
+                        }`}
+                        title="Nach Tags clustern"
+                    >
+                        <HiTag className="w-3.5 h-3.5" />
+                        Tag-Cluster
+                    </button>
                     <button
                         onClick={loadGraph}
                         disabled={loading}
@@ -177,6 +285,7 @@ export default function KnowledgeGraphView() {
 
                 {!loading && graphData && graphData.nodes.length > 0 && (
                     <ForceGraph2D
+                        ref={fgRef as React.MutableRefObject<undefined>}
                         graphData={fgData}
                         width={graphDimensions.width || undefined}
                         height={graphDimensions.height || undefined}
@@ -196,6 +305,28 @@ export default function KnowledgeGraphView() {
                         warmupTicks={50}
                         cooldownTime={3000}
                     />
+                )}
+
+                {/* Tag Legend (when cluster mode active) */}
+                {tagCluster && allTags.length > 0 && !loading && (
+                    <div className="absolute top-3 right-3 bg-dark-900/95 border border-dark-700 rounded-xl p-3 text-[11px] text-dark-400 backdrop-blur-sm max-w-[220px] max-h-[calc(100%-24px)] overflow-y-auto">
+                        <div className="flex items-center gap-2 mb-2">
+                            <HiTag className="w-3.5 h-3.5 text-brain-400 flex-shrink-0" />
+                            <span className="font-semibold text-dark-200">Tags</span>
+                        </div>
+                        <div className="space-y-1">
+                            {allTags.map((t) => (
+                                <div key={t.id} className="flex items-center gap-2">
+                                    <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: t.color }} />
+                                    <span className="truncate">{t.name}</span>
+                                </div>
+                            ))}
+                            <div className="flex items-center gap-2 mt-1 pt-1 border-t border-dark-700">
+                                <span className="w-2.5 h-2.5 rounded-full flex-shrink-0 bg-gray-500" />
+                                <span className="text-dark-500">Ohne Tags</span>
+                            </div>
+                        </div>
+                    </div>
                 )}
 
                 {/* Legend */}

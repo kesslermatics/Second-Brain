@@ -1,12 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_
+from sqlalchemy.orm import selectinload
 from typing import List
 from uuid import UUID
 import logging
 from app.database import get_db
 from app.auth import get_current_user
-from app.models import User, Note, NoteLink, Folder
+from app.models import User, Note, NoteLink, Folder, Tag, note_tags
 from app.schemas import NoteLinkCreate, NoteLinkResponse, GraphDataResponse
 from app.services.ai_service import suggest_links
 from app.services.vector_service import _vector_search
@@ -192,13 +193,14 @@ async def get_knowledge_graph(
     current_user: User = Depends(get_current_user),
 ):
     """Get all notes and links as graph nodes/edges for knowledge graph visualization."""
-    # Get all notes
+    # Get all notes with their tags eagerly loaded
     notes_result = await db.execute(
         select(Note, Folder.path)
         .join(Folder, Note.folder_id == Folder.id)
         .where(Note.user_id == current_user.id)
+        .options(selectinload(Note.tags))
     )
-    notes_data = notes_result.all()
+    notes_data = notes_result.unique().all()
 
     nodes = []
     for note, folder_path in notes_data:
@@ -207,7 +209,8 @@ async def get_knowledge_graph(
             "title": note.title,
             "folder_path": folder_path,
             "group": folder_path.split("/")[0] if folder_path else "Unsorted",
-            "size": min(max(len(note.content) // 200, 3), 15),  # size by content length
+            "size": min(max(len(note.content) // 200, 3), 15),
+            "tags": [{"id": str(t.id), "name": t.name, "color": t.color} for t in note.tags],
         })
 
     # Get all links
