@@ -19,17 +19,25 @@ interface Props {
 }
 
 export default function ChatPanel({ session, type }: Props) {
+    const addToPersistedSet = (prev: Set<string>, value: string, storageKey: string): Set<string> => {
+        const next = new Set<string>();
+        prev.forEach(v => next.add(v));
+        next.add(value);
+        localStorage.setItem(storageKey, JSON.stringify(Array.from(next)));
+        return next;
+    };
+
     const [message, setMessage] = useState('');
     const [loading, setLoading] = useState(false);
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [savingNote, setSavingNote] = useState<string | null>(null);
     const [savedNotes, setSavedNotes] = useState<Set<string>>(() => {
         if (typeof window === 'undefined') return new Set();
-        try { return new Set(JSON.parse(localStorage.getItem('brain_saved_notes') || '[]')); } catch { return new Set(); }
+        try { const arr: string[] = JSON.parse(localStorage.getItem('brain_saved_notes') || '[]'); const s = new Set<string>(); arr.forEach(x => s.add(x)); return s; } catch { return new Set(); }
     });
     const [dismissedNotes, setDismissedNotes] = useState<Set<string>>(() => {
         if (typeof window === 'undefined') return new Set();
-        try { return new Set(JSON.parse(localStorage.getItem('brain_dismissed_notes') || '[]')); } catch { return new Set(); }
+        try { const arr: string[] = JSON.parse(localStorage.getItem('brain_dismissed_notes') || '[]'); const s = new Set<string>(); arr.forEach(x => s.add(x)); return s; } catch { return new Set(); }
     });
     const [refineMessageId, setRefineMessageId] = useState<string | null>(null);
     const [refineInput, setRefineInput] = useState('');
@@ -210,16 +218,8 @@ export default function ChatPanel({ session, type }: Props) {
             const note = await createNote(noteData.title, noteData.content, folder.id, noteData.tag_ids);
             await loadFolderTree();
             const msgId = messages.find(m => m.content === content)?.id || content;
-            setSavedNotes((prev) => {
-                const next = new Set(prev).add(msgId);
-                localStorage.setItem('brain_saved_notes', JSON.stringify([...next]));
-                return next;
-            });
-            setDismissedNotes((prev) => {
-                const next = new Set(prev).add(msgId);
-                localStorage.setItem('brain_dismissed_notes', JSON.stringify([...next]));
-                return next;
-            });
+            setSavedNotes((prev) => addToPersistedSet(prev, msgId, 'brain_saved_notes'));
+            setDismissedNotes((prev) => addToPersistedSet(prev, msgId, 'brain_dismissed_notes'));
         } catch (e) {
             console.error(e);
         } finally {
@@ -228,11 +228,7 @@ export default function ChatPanel({ session, type }: Props) {
     };
 
     const handleDismissNote = (content: string, msgId: string) => {
-        setDismissedNotes((prev) => {
-            const next = new Set(prev).add(msgId);
-            localStorage.setItem('brain_dismissed_notes', JSON.stringify([...next]));
-            return next;
-        });
+        setDismissedNotes((prev) => addToPersistedSet(prev, msgId, 'brain_dismissed_notes'));
     };
 
     const handleRefine = async (msgContent: string, msgId: string) => {
@@ -258,11 +254,7 @@ export default function ChatPanel({ session, type }: Props) {
             ]);
 
             // Dismiss old suggestion, new one will have buttons
-            setDismissedNotes((prev) => {
-                const next = new Set(prev).add(msgId);
-                localStorage.setItem('brain_dismissed_notes', JSON.stringify([...next]));
-                return next;
-            });
+            setDismissedNotes((prev) => addToPersistedSet(prev, msgId, 'brain_dismissed_notes'));
             setRefineMessageId(null);
             setRefineInput('');
 
