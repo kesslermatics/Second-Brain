@@ -78,7 +78,19 @@ Antworte NUR mit dem JSON:
 }}
 
 WICHTIG: Gib ALLE Kapitel, Unterkapitel und Unterunterkapitel an, nicht nur die Hauptkapitel.
-Sei so vollständig wie möglich basierend auf dem tatsächlichen Inhaltsverzeichnis des Buches."""
+Sei so vollständig wie möglich basierend auf dem tatsächlichen Inhaltsverzeichnis des Buches.
+
+Lasse folgende Einträge KOMPLETT WEG (sie haben keinen inhaltlichen Mehrwert):
+- Präambel, Vorwort, Geleitwort, Danksagung
+- Inhaltsverzeichnis, Abbildungsverzeichnis, Tabellenverzeichnis
+- Index, Stichwortverzeichnis, Register
+- Glossar, Abkürzungsverzeichnis
+- Literaturverzeichnis, Quellenverzeichnis, Bibliografie
+- Anhang, Appendix
+- Nachwort, Endwort, Schlusswort
+- Über den Autor, About the Author
+
+Nur inhaltliche Kapitel mit echtem Lerninhalt sollen aufgelistet werden."""
 
     response = model.generate_content(prompt, tools=[GOOGLE_SEARCH_TOOL])
     text = response.text.strip()

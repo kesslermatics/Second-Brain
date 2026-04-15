@@ -378,7 +378,7 @@ export default function BookPanel() {
 
                 {/* Step: Generating notes one by one */}
                 {step === 'generating' && (
-                    <div className="max-w-2xl mx-auto">
+                    <div>
                         {/* Current chapter info */}
                         <div className="mb-4 flex items-center gap-3 text-sm">
                             <span className="px-2 py-1 bg-amber-900/30 text-amber-400 rounded-lg font-mono text-xs">
@@ -429,7 +429,7 @@ export default function BookPanel() {
                                 </div>
 
                                 {/* Note content preview */}
-                                <div className="px-4 py-4 max-h-[400px] overflow-y-auto">
+                                <div className="px-6 py-5 overflow-y-auto">
                                     <div className="markdown-content text-sm">
                                         <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                                             {currentNote.content}
