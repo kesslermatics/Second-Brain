@@ -7,12 +7,12 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { markdownComponents } from '@/lib/markdownComponents';
 import { useStore } from '@/lib/store';
-import { searchBook, getBookToc, generateChapterNote, ensureFolderPath, createNote } from '@/lib/api';
+import { searchBook, getBookToc, generateChapterNote, ensureFolderPath, createNote, getUserState, putUserState, deleteUserState } from '@/lib/api';
 import type { BookSearchResult, BookChapter, BookChapterNoteResult } from '@/lib/types';
 
 type Step = 'search' | 'confirm-book' | 'confirm-toc' | 'generating' | 'done';
 
-const STORAGE_KEY = 'book-generation-state';
+const STATE_KEY = 'book-generation-state';
 
 interface PersistedState {
     step: Step;
@@ -27,14 +27,12 @@ interface PersistedState {
 }
 
 function saveState(state: PersistedState) {
-    try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch { /* quota exceeded – ignore */ }
+    putUserState(STATE_KEY, JSON.stringify(state)).catch(() => {});
 }
 
-function loadState(): PersistedState | null {
+async function loadState(): Promise<PersistedState | null> {
     try {
-        const raw = localStorage.getItem(STORAGE_KEY);
+        const raw = await getUserState(STATE_KEY);
         if (!raw) return null;
         return JSON.parse(raw) as PersistedState;
     } catch {
@@ -43,7 +41,7 @@ function loadState(): PersistedState | null {
 }
 
 function clearState() {
-    localStorage.removeItem(STORAGE_KEY);
+    deleteUserState(STATE_KEY).catch(() => {});
 }
 
 export default function BookPanel() {
@@ -95,18 +93,21 @@ export default function BookPanel() {
 
     // ── Restore state on mount ───────────────────────────────────────
     useEffect(() => {
-        const saved = loadState();
-        if (saved) {
-            setStep(saved.step);
-            setQuery(saved.query);
-            setBookInfo(saved.bookInfo);
-            setChapters(saved.chapters);
-            setEnabledChapters(saved.enabledChapters);
-            setCurrentEnabledIdx(saved.currentEnabledIdx);
-            setCompletedCount(saved.completedCount);
-            setSkippedCount(saved.skippedCount);
-        }
-        setRestored(true);
+        const restore = async () => {
+            const saved = await loadState();
+            if (saved) {
+                setStep(saved.step);
+                setQuery(saved.query);
+                setBookInfo(saved.bookInfo);
+                setChapters(saved.chapters);
+                setEnabledChapters(saved.enabledChapters);
+                setCurrentEnabledIdx(saved.currentEnabledIdx);
+                setCompletedCount(saved.completedCount);
+                setSkippedCount(saved.skippedCount);
+            }
+            setRestored(true);
+        };
+        restore();
     }, []);
 
     useEffect(() => {

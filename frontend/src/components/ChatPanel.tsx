@@ -10,6 +10,7 @@ import { useStore } from '@/lib/store';
 import {
     sendChatMessage, getChatSession, createChatSession,
     ensureFolderPath, createNote, getStreamingUrl,
+    getUserState, putUserState,
 } from '@/lib/api';
 import type { ChatSessionDetail, ChatMessage } from '@/lib/types';
 
@@ -19,11 +20,12 @@ interface Props {
 }
 
 export default function ChatPanel({ session, type }: Props) {
-    const addToPersistedSet = (prev: Set<string>, value: string, storageKey: string): Set<string> => {
+    const addToPersistedSet = (prev: Set<string>, value: string, stateKey: string): Set<string> => {
         const next = new Set<string>();
         prev.forEach(v => next.add(v));
         next.add(value);
-        localStorage.setItem(storageKey, JSON.stringify(Array.from(next)));
+        // Fire-and-forget server persist
+        putUserState(stateKey, JSON.stringify(Array.from(next))).catch(() => {});
         return next;
     };
 
@@ -31,14 +33,8 @@ export default function ChatPanel({ session, type }: Props) {
     const [loading, setLoading] = useState(false);
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [savingNote, setSavingNote] = useState<string | null>(null);
-    const [savedNotes, setSavedNotes] = useState<Set<string>>(() => {
-        if (typeof window === 'undefined') return new Set();
-        try { const arr: string[] = JSON.parse(localStorage.getItem('brain_saved_notes') || '[]'); const s = new Set<string>(); arr.forEach(x => s.add(x)); return s; } catch { return new Set(); }
-    });
-    const [dismissedNotes, setDismissedNotes] = useState<Set<string>>(() => {
-        if (typeof window === 'undefined') return new Set();
-        try { const arr: string[] = JSON.parse(localStorage.getItem('brain_dismissed_notes') || '[]'); const s = new Set<string>(); arr.forEach(x => s.add(x)); return s; } catch { return new Set(); }
-    });
+    const [savedNotes, setSavedNotes] = useState<Set<string>>(new Set());
+    const [dismissedNotes, setDismissedNotes] = useState<Set<string>>(new Set());
     const [refineMessageId, setRefineMessageId] = useState<string | null>(null);
     const [refineInput, setRefineInput] = useState('');
     const [refining, setRefining] = useState(false);
@@ -57,6 +53,31 @@ export default function ChatPanel({ session, type }: Props) {
             setMessages([]);
         }
     }, [session]);
+
+    // Load saved/dismissed note sets from server
+    useEffect(() => {
+        const loadSets = async () => {
+            try {
+                const [savedRaw, dismissedRaw] = await Promise.all([
+                    getUserState('brain_saved_notes'),
+                    getUserState('brain_dismissed_notes'),
+                ]);
+                if (savedRaw) {
+                    const arr: string[] = JSON.parse(savedRaw);
+                    const s = new Set<string>();
+                    arr.forEach(x => s.add(x));
+                    setSavedNotes(s);
+                }
+                if (dismissedRaw) {
+                    const arr: string[] = JSON.parse(dismissedRaw);
+                    const s = new Set<string>();
+                    arr.forEach(x => s.add(x));
+                    setDismissedNotes(s);
+                }
+            } catch { /* ignore — sets stay empty */ }
+        };
+        loadSets();
+    }, []);
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });

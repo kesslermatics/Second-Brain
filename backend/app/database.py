@@ -75,3 +75,19 @@ async def init_db():
             )
         except Exception:
             pass
+        # Ensure user_states table exists (for existing databases)
+        try:
+            await conn.execute(
+                __import__('sqlalchemy').text(
+                    "CREATE TABLE IF NOT EXISTS user_states ("
+                    "id UUID PRIMARY KEY, "
+                    "user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, "
+                    "key VARCHAR(255) NOT NULL, "
+                    "value TEXT NOT NULL DEFAULT '{}', "
+                    "updated_at TIMESTAMPTZ DEFAULT NOW(), "
+                    "CONSTRAINT uq_user_state_key UNIQUE (user_id, key)"
+                    ")"
+                )
+            )
+        except Exception:
+            pass

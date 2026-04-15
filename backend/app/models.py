@@ -30,6 +30,7 @@ class User(Base):
     tags = relationship("Tag", back_populates="user", cascade="all, delete-orphan")
     sr_settings = relationship("SRSettings", back_populates="user", uselist=False, cascade="all, delete-orphan")
     images = relationship("Image", back_populates="user", cascade="all, delete-orphan")
+    states = relationship("UserState", back_populates="user", cascade="all, delete-orphan")
 
 
 class Folder(Base):
@@ -218,3 +219,20 @@ class Image(Base):
     user = relationship("User", back_populates="images")
     folder = relationship("Folder", back_populates="images")
     note = relationship("Note", back_populates="images")
+
+
+# ── User State (cross-device key-value store) ──────────────────────────
+class UserState(Base):
+    """Arbitrary per-user key/value state, synced across devices."""
+    __tablename__ = "user_states"
+    __table_args__ = (
+        UniqueConstraint("user_id", "key", name="uq_user_state_key"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    key = Column(String(255), nullable=False)
+    value = Column(Text, nullable=False, default="{}")  # JSON blob
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    user = relationship("User", back_populates="states")

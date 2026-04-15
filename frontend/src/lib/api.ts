@@ -378,4 +378,18 @@ export const generateChapterNote = async (bookTitle: string, authors: string[], 
   return data;
 };
 
+// User State (cross-device key-value persistence)
+export const getUserState = async (key: string): Promise<string | null> => {
+  const { data } = await api.get<{ key: string; value: string | null }>(`/state/${encodeURIComponent(key)}`);
+  return data.value;
+};
+
+export const putUserState = async (key: string, value: string): Promise<void> => {
+  await api.put(`/state/${encodeURIComponent(key)}`, { value });
+};
+
+export const deleteUserState = async (key: string): Promise<void> => {
+  await api.delete(`/state/${encodeURIComponent(key)}`);
+};
+
 export default api;
