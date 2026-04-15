@@ -77,14 +77,12 @@ async def get_dashboard(
 
     # Activity heatmap (last 365 days) — notes created per day
     year_ago = now - timedelta(days=365)
+    day_trunc = func.date_trunc('day', Note.created_at).label("day")
     heatmap_result = await db.execute(
-        select(
-            func.date_trunc('day', Note.created_at).label("day"),
-            func.count(Note.id).label("cnt"),
-        )
+        select(day_trunc, func.count(Note.id).label("cnt"))
         .where(Note.user_id == uid, Note.created_at >= year_ago)
-        .group_by(func.date_trunc('day', Note.created_at))
-        .order_by(func.date_trunc('day', Note.created_at))
+        .group_by(day_trunc)
+        .order_by(day_trunc)
     )
     activity_heatmap = [
         {"date": r.day.strftime("%Y-%m-%d"), "count": r.cnt}

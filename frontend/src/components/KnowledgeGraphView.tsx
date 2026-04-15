@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { FiRefreshCw, FiMaximize2, FiMinimize2, FiInfo } from 'react-icons/fi';
 import { LuBrain } from 'react-icons/lu';
 import { getGraphData, getNote } from '@/lib/api';
@@ -14,7 +14,6 @@ const ForceGraph2D = dynamic(() => import('react-force-graph-2d'), { ssr: false 
 export default function KnowledgeGraphView() {
     const [graphData, setGraphData] = useState<GraphData | null>(null);
     const [loading, setLoading] = useState(true);
-    const [hoveredNode, setHoveredNode] = useState<string | null>(null);
     const [fullscreen, setFullscreen] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
     const { setSelectedNote, setActiveView } = useStore();
@@ -46,7 +45,7 @@ export default function KnowledgeGraphView() {
         }
     };
 
-    const fgData = graphData ? {
+    const fgData = useMemo(() => graphData ? {
         nodes: graphData.nodes.map((n) => ({
             id: n.id,
             name: n.title,
@@ -59,7 +58,51 @@ export default function KnowledgeGraphView() {
             linkType: e.link_type,
             aiGenerated: e.ai_generated,
         })),
-    } : { nodes: [], links: [] };
+    } : { nodes: [], links: [] }, [graphData]);
+
+    const hoveredNodeRef = useRef<string | null>(null);
+
+    const handleNodeHover = useCallback((node: { id?: string | number } | null) => {
+        hoveredNodeRef.current = node?.id ? String(node.id) : null;
+    }, []);
+
+    const nodeCanvasObject = useCallback((node: { x?: number; y?: number; name?: string; id?: string | number;[others: string]: unknown }, ctx: CanvasRenderingContext2D, globalScale: number) => {
+        const label = (node as { name?: string }).name || '';
+        const fontSize = 12 / globalScale;
+        const isHovered = hoveredNodeRef.current === String(node.id);
+        const size = isHovered ? 8 : 5;
+
+        // Glow
+        ctx.beginPath();
+        ctx.arc(node.x || 0, node.y || 0, size + 4, 0, 2 * Math.PI);
+        ctx.fillStyle = isHovered ? 'rgba(139, 92, 246, 0.3)' : 'rgba(139, 92, 246, 0.1)';
+        ctx.fill();
+
+        // Node
+        ctx.beginPath();
+        ctx.arc(node.x || 0, node.y || 0, size, 0, 2 * Math.PI);
+        ctx.fillStyle = isHovered ? '#a78bfa' : '#8b5cf6';
+        ctx.fill();
+        ctx.strokeStyle = '#c4b5fd';
+        ctx.lineWidth = isHovered ? 2 / globalScale : 0.5 / globalScale;
+        ctx.stroke();
+
+        // Label
+        if (globalScale > 0.7 || isHovered) {
+            ctx.font = `${isHovered ? 'bold ' : ''}${fontSize}px Inter, sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+            ctx.fillStyle = isHovered ? '#ffffff' : '#9ca3af';
+            ctx.fillText(label.length > 25 ? label.slice(0, 25) + '...' : label, node.x || 0, (node.y || 0) + size + 3);
+        }
+    }, []);
+
+    const nodePointerAreaPaint = useCallback((node: { x?: number; y?: number;[others: string]: unknown }, color: string, ctx: CanvasRenderingContext2D) => {
+        ctx.beginPath();
+        ctx.arc(node.x || 0, node.y || 0, 10, 0, 2 * Math.PI);
+        ctx.fillStyle = color;
+        ctx.fill();
+    }, []);
 
     return (
         <div
@@ -131,56 +174,42 @@ export default function KnowledgeGraphView() {
                         linkDirectionalParticleColor={() => '#8b5cf660'}
                         backgroundColor="#030712"
                         onNodeClick={handleNodeClick}
-                        onNodeHover={(node: { id?: string | number } | null) => setHoveredNode(node?.id ? String(node.id) : null)}
-                        nodeCanvasObject={(node: { x?: number; y?: number; name?: string; id?: string | number;[others: string]: unknown }, ctx: CanvasRenderingContext2D, globalScale: number) => {
-                            const label = (node as { name?: string }).name || '';
-                            const fontSize = 12 / globalScale;
-                            const isHovered = hoveredNode === String(node.id);
-                            const size = isHovered ? 8 : 5;
-
-                            // Glow
-                            ctx.beginPath();
-                            ctx.arc(node.x || 0, node.y || 0, size + 4, 0, 2 * Math.PI);
-                            ctx.fillStyle = isHovered ? 'rgba(139, 92, 246, 0.3)' : 'rgba(139, 92, 246, 0.1)';
-                            ctx.fill();
-
-                            // Node
-                            ctx.beginPath();
-                            ctx.arc(node.x || 0, node.y || 0, size, 0, 2 * Math.PI);
-                            ctx.fillStyle = isHovered ? '#a78bfa' : '#8b5cf6';
-                            ctx.fill();
-                            ctx.strokeStyle = '#c4b5fd';
-                            ctx.lineWidth = isHovered ? 2 / globalScale : 0.5 / globalScale;
-                            ctx.stroke();
-
-                            // Label
-                            if (globalScale > 0.7 || isHovered) {
-                                ctx.font = `${isHovered ? 'bold ' : ''}${fontSize}px Inter, sans-serif`;
-                                ctx.textAlign = 'center';
-                                ctx.textBaseline = 'top';
-                                ctx.fillStyle = isHovered ? '#ffffff' : '#9ca3af';
-                                ctx.fillText(label.length > 25 ? label.slice(0, 25) + '...' : label, node.x || 0, (node.y || 0) + size + 3);
-                            }
-                        }}
-                        nodePointerAreaPaint={(node: { x?: number; y?: number;[others: string]: unknown }, color: string, ctx: CanvasRenderingContext2D) => {
-                            ctx.beginPath();
-                            ctx.arc(node.x || 0, node.y || 0, 10, 0, 2 * Math.PI);
-                            ctx.fillStyle = color;
-                            ctx.fill();
-                        }}
+                        onNodeHover={handleNodeHover}
+                        nodeCanvasObject={nodeCanvasObject}
+                        nodePointerAreaPaint={nodePointerAreaPaint}
+                        warmupTicks={50}
+                        cooldownTime={3000}
                     />
                 )}
 
                 {/* Legend */}
                 {!loading && graphData && graphData.nodes.length > 0 && (
-                    <div className="absolute bottom-4 left-4 bg-dark-900/90 border border-dark-700 rounded-xl p-3 text-xs text-dark-400 backdrop-blur-sm">
-                        <div className="flex items-center gap-2 mb-1">
-                            <FiInfo className="w-3 h-3" />
-                            <span className="font-medium text-dark-300">Steuerung</span>
+                    <div className="absolute bottom-4 left-4 bg-dark-900/90 border border-dark-700 rounded-xl p-4 text-xs text-dark-400 backdrop-blur-sm max-w-xs">
+                        <div className="flex items-center gap-2 mb-2">
+                            <FiInfo className="w-3.5 h-3.5 text-brain-400" />
+                            <span className="font-semibold text-dark-200">Legende & Steuerung</span>
                         </div>
-                        <p>Klick auf Notiz → öffnet Notiz</p>
-                        <p>Scrollen → Zoomen</p>
-                        <p>Ziehen → Bewegen</p>
+                        <div className="space-y-2">
+                            <div>
+                                <p className="font-medium text-dark-300 mb-1">Was du siehst:</p>
+                                <div className="flex items-center gap-2 mb-0.5">
+                                    <span className="w-2.5 h-2.5 rounded-full bg-purple-500 flex-shrink-0" />
+                                    <span>Jeder Punkt = eine Notiz</span>
+                                </div>
+                                <div className="flex items-center gap-2 mb-0.5">
+                                    <span className="w-4 h-px bg-dark-500 flex-shrink-0" />
+                                    <span>Linien = KI-erkannte Verbindungen zwischen Notizen</span>
+                                </div>
+                                <p className="text-dark-500 mt-1">Nah beieinander liegende Notizen teilen ähnliche Themen. Cluster zeigen zusammengehörige Wissensbereiche.</p>
+                            </div>
+                            <div className="border-t border-dark-700 pt-2">
+                                <p className="font-medium text-dark-300 mb-1">Steuerung:</p>
+                                <p>🖱️ Klick auf Notiz → öffnet sie</p>
+                                <p>🔍 Scrollen → Zoomen</p>
+                                <p>✋ Ziehen auf Hintergrund → Bewegen</p>
+                                <p>📌 Ziehen auf Notiz → Fixieren</p>
+                            </div>
+                        </div>
                     </div>
                 )}
             </div>
