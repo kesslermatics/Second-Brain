@@ -59,7 +59,7 @@ async def _process_image_ai(image_id: str, file_path: str, original_filename: st
 
     # If uploaded to a folder (not attached to an existing note), create a Note
     if folder_id and not note_title:
-        note_content = f"![{original_filename}]({image_url})\n\n---\n\n**KI-Beschreibung:**\n\n{description}"
+        note_content = f"![{original_filename}]({image_url})"
         note_title_text = original_filename.rsplit(".", 1)[0] if "." in original_filename else original_filename
 
         async with async_session() as db:

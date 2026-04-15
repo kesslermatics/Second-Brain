@@ -6,11 +6,12 @@ from uuid import UUID
 from sqlalchemy import or_
 from app.database import get_db, async_session
 from app.auth import get_current_user
-from app.models import User, Note, Folder, Tag, NoteVersion, NoteLink
+from app.models import User, Note, Folder, Tag, NoteVersion, NoteLink, Image
 from app.schemas import NoteCreate, NoteUpdate, NoteResponse, NoteListResponse, TagResponse
 from app.services.vector_service import upsert_note_embedding, delete_note_embedding, _vector_search
 from app.services.ai_service import suggest_links
 import asyncio
+import re
 import logging
 
 logger = logging.getLogger(__name__)
@@ -65,12 +66,43 @@ async def _auto_link_note(note_id: str, user_id: str, title: str, content: str):
         logger.error(f"Auto-link failed for note {note_id}: {e}")
 
 
+async def _enrich_content_with_image_descriptions(content: str, user_id: str) -> str:
+    """Replace ![image](url) markdown with AI descriptions from Image DB for embedding."""
+    image_pattern = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
+    matches = image_pattern.findall(content)
+    if not matches:
+        return content
+
+    enriched = content
+    async with async_session() as db:
+        for alt_text, url in matches:
+            # Extract stored filename from URL (last path segment)
+            filename = url.rsplit('/', 1)[-1] if '/' in url else url
+            result = await db.execute(
+                select(Image).where(
+                    Image.stored_filename == filename,
+                    Image.user_id == UUID(user_id),
+                )
+            )
+            img = result.scalar_one_or_none()
+            if img and img.description:
+                enriched = enriched.replace(
+                    f'![{alt_text}]({url})',
+                    f'[Bild: {alt_text}] {img.description}',
+                )
+    return enriched
+
+
 def _embed_and_auto_link(
     note_id: str, user_id: str, title: str, content: str, folder_path: str
 ):
-    """Background task: embed note in Qdrant, then auto-link."""
-    upsert_note_embedding(note_id, user_id, title, content, folder_path)
-    asyncio.run(_auto_link_note(note_id, user_id, title, content))
+    """Background task: enrich image references with AI descriptions, embed in Qdrant, then auto-link."""
+    async def _run():
+        enriched = await _enrich_content_with_image_descriptions(content, user_id)
+        upsert_note_embedding(note_id, user_id, title, enriched, folder_path)
+        await _auto_link_note(note_id, user_id, title, enriched)
+
+    asyncio.run(_run())
 
 
 @router.get("/", response_model=List[NoteListResponse])
@@ -223,13 +255,12 @@ async def update_note(
     await db.refresh(note)
 
     folder = await db.get(Folder, note.folder_id)
-    embed_content = note.content
     background_tasks.add_task(
-        upsert_note_embedding,
+        _embed_and_auto_link,
         note_id=str(note.id),
         user_id=str(current_user.id),
         title=note.title,
-        content=embed_content,
+        content=note.content,
         folder_path=folder.path if folder else "",
     )
 
