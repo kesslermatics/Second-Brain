@@ -139,9 +139,9 @@ def _vector_search(query: str, user_id: str, limit: int = 20) -> list[dict]:
     """Search Qdrant for semantically similar notes."""
     query_embedding = get_query_embedding(query)
 
-    results = _get_qdrant().search(
+    results = _get_qdrant().query_points(
         collection_name=COLLECTION_NAME,
-        query_vector=query_embedding,
+        query=query_embedding,
         query_filter=Filter(
             must=[
                 FieldCondition(
@@ -155,14 +155,14 @@ def _vector_search(query: str, user_id: str, limit: int = 20) -> list[dict]:
 
     return [
         {
-            "note_id": hit.payload.get("note_id", hit.payload.get("image_id", "")),
-            "title": hit.payload["title"],
-            "folder_path": hit.payload["folder_path"],
-            "content_preview": hit.payload["content_preview"],
-            "score": hit.score,
-            "type": hit.payload.get("type", "note"),
+            "note_id": pt.payload.get("note_id", pt.payload.get("image_id", "")),
+            "title": pt.payload["title"],
+            "folder_path": pt.payload["folder_path"],
+            "content_preview": pt.payload["content_preview"],
+            "score": pt.score,
+            "type": pt.payload.get("type", "note"),
         }
-        for hit in results
+        for pt in results.points
     ]
 
 
@@ -224,26 +224,35 @@ async def _fulltext_search(query: str, user_id: str, db: AsyncSession, limit: in
 def _rrf_fuse(vector_results: list[dict], fulltext_results: list[dict], k: int = 60) -> list[dict]:
     """
     Reciprocal Rank Fusion: merges two ranked lists into one.
-    Score = sum( 1 / (k + rank_i) ) for each list the document appears in.
+    RRF is used only for ordering. The displayed score is the original
+    cosine similarity from the vector search (0-1 range, shown as %).
     """
-    scores: dict[str, float] = {}
+    rrf_scores: dict[str, float] = {}
     meta: dict[str, dict] = {}
+    vector_scores: dict[str, float] = {}  # original cosine similarity
 
     for rank, item in enumerate(vector_results):
         nid = item["note_id"]
-        scores[nid] = scores.get(nid, 0.0) + 1.0 / (k + rank + 1)
+        rrf_scores[nid] = rrf_scores.get(nid, 0.0) + 1.0 / (k + rank + 1)
         meta[nid] = item
+        vector_scores[nid] = item["score"]  # cosine similarity 0-1
 
     for rank, item in enumerate(fulltext_results):
         nid = item["note_id"]
-        scores[nid] = scores.get(nid, 0.0) + 1.0 / (k + rank + 1)
+        rrf_scores[nid] = rrf_scores.get(nid, 0.0) + 1.0 / (k + rank + 1)
         if nid not in meta:
             meta[nid] = item
+        # Boost vector score slightly if also found in fulltext
+        if nid in vector_scores:
+            vector_scores[nid] = min(1.0, vector_scores[nid] + 0.05)
+        elif item["score"] > 0:
+            # No vector score — estimate from fulltext rank
+            vector_scores[nid] = max(0.3, 0.7 - rank * 0.05)
 
-    sorted_ids = sorted(scores, key=lambda nid: scores[nid], reverse=True)
+    sorted_ids = sorted(rrf_scores, key=lambda nid: rrf_scores[nid], reverse=True)
 
     return [
-        {**meta[nid], "score": round(scores[nid], 6)}
+        {**meta[nid], "score": round(vector_scores.get(nid, 0.5), 4)}
         for nid in sorted_ids
     ]
 
