@@ -60,3 +60,18 @@ async def init_db():
             )
         except Exception:
             pass
+        # Ensure folders.parent_id has ON DELETE CASCADE (for existing databases)
+        try:
+            await conn.execute(
+                __import__('sqlalchemy').text(
+                    "ALTER TABLE folders DROP CONSTRAINT IF EXISTS folders_parent_id_fkey"
+                )
+            )
+            await conn.execute(
+                __import__('sqlalchemy').text(
+                    "ALTER TABLE folders ADD CONSTRAINT folders_parent_id_fkey "
+                    "FOREIGN KEY (parent_id) REFERENCES folders(id) ON DELETE CASCADE"
+                )
+            )
+        except Exception:
+            pass

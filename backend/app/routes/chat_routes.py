@@ -6,7 +6,7 @@ from typing import List
 from uuid import UUID
 from app.database import get_db
 from app.auth import get_current_user
-from app.models import User, ChatSession, ChatMessage, Note, Folder, UserSettings, Image
+from app.models import User, ChatSession, ChatMessage, Note, Folder, UserSettings, Image, Tag
 from app.schemas import (
     ChatSessionCreate, ChatSessionResponse, ChatSessionDetailResponse,
     ChatMessageCreate, ChatMessageResponse,
@@ -151,18 +151,63 @@ async def send_message(
         folders = folder_result.scalars().all()
         folder_structure = [{"path": f.path, "name": f.name} for f in folders]
 
+        # Get existing tags for AI context
+        tag_result = await db.execute(
+            select(Tag).where(Tag.user_id == current_user.id).order_by(Tag.name)
+        )
+        all_tags = tag_result.scalars().all()
+        existing_tag_names = [t.name for t in all_tags]
+
         custom_note_prompt = user_settings.note_prompt if user_settings else None
-        ai_result = await process_note_input(message.content, folder_structure, custom_prompt=custom_note_prompt)
+        ai_result = await process_note_input(
+            message.content, folder_structure,
+            custom_prompt=custom_note_prompt,
+            existing_tags=existing_tag_names,
+        )
+
+        # Resolve suggested tags to IDs (create new ones if needed)
+        tag_ids = []
+        tag_display = []
+        for tag_name in ai_result.get('suggested_tags', []):
+            tag_lower = tag_name.strip().lower()
+            if not tag_lower:
+                continue
+            # Check if tag already exists
+            found_tag = None
+            for t in all_tags:
+                if t.name_lower == tag_lower:
+                    found_tag = t
+                    break
+            if not found_tag:
+                # Create new tag with a random color
+                import random
+                colors = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16']
+                found_tag = Tag(
+                    name=tag_name.strip(),
+                    name_lower=tag_lower,
+                    color=random.choice(colors),
+                    user_id=current_user.id,
+                )
+                db.add(found_tag)
+                await db.flush()
+                await db.refresh(found_tag)
+                all_tags.append(found_tag)
+            tag_ids.append(str(found_tag.id))
+            tag_display.append(found_tag.name)
+
         note_data_json = json.dumps({
             "folder": ai_result['suggested_folder'],
             "title": ai_result['suggested_title'],
-            "content": ai_result['formatted_content']
+            "content": ai_result['formatted_content'],
+            "tag_ids": tag_ids,
         }, ensure_ascii=False)
+
+        tags_line = f"\n**Tags:** {', '.join(f'`{t}`' for t in tag_display)}" if tag_display else ""
 
         ai_response = f"""Hier ist mein Vorschlag für deine Notiz:
 
 **Ordner:** `{ai_result['suggested_folder']}`
-**Titel:** {ai_result['suggested_title']}
+**Titel:** {ai_result['suggested_title']}{tags_line}
 
 ---
 

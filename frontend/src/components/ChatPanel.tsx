@@ -201,7 +201,7 @@ export default function ChatPanel({ session, type }: Props) {
         setSavingNote(content);
         try {
             const folder = await ensureFolderPath(noteData.folder);
-            await createNote(noteData.title, noteData.content, folder.id);
+            await createNote(noteData.title, noteData.content, folder.id, noteData.tag_ids);
             await loadFolderTree();
             setSavedNotes((prev) => new Set(prev).add(content));
             setDismissedNotes((prev) => new Set(prev).add(content));

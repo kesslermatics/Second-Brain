@@ -105,18 +105,27 @@ def get_default_prompts() -> dict:
     }
 
 
-async def process_note_input(user_input: str, folder_structure: list[dict], custom_prompt: str = None) -> dict:
+async def process_note_input(user_input: str, folder_structure: list[dict], custom_prompt: str = None, existing_tags: list[str] = None) -> dict:
     """Process user input and suggest where to save it as a note."""
     model = get_gemini_model()
 
     folder_tree_str = json.dumps(folder_structure, indent=2, default=str)
+
+    # Build tags context
+    tags_str = ", ".join(existing_tags) if existing_tags else "(keine)"
+    tags_instruction = f"""\n\nBestehende Tags im System: {tags_str}
+
+Füge dem JSON-Ergebnis ein Feld "suggested_tags" hinzu — ein Array von 2-5 passenden Tags.
+Bevorzuge bestehende Tags wenn sie passen (exakt gleicher Name). Erstelle neue Tags nur wenn nötig.
+Verwende Kleinbuchstaben und Bindestriche statt Leerzeichen.
+Beispiel: "suggested_tags": ["python", "machine-learning", "tutorial"]"""
 
     prompt_template = custom_prompt or DEFAULT_NOTE_PROMPT
     prompt = (
         prompt_template
         .replace("{{ORDNERSTRUKTUR}}", folder_tree_str)
         .replace("{{BENUTZEREINGABE}}", user_input)
-    )
+    ) + tags_instruction
 
     response = model.generate_content(prompt)
     text = response.text.strip()
@@ -131,12 +140,14 @@ async def process_note_input(user_input: str, folder_structure: list[dict], cust
             "suggested_folder": result.get("suggested_folder", ""),
             "suggested_title": result.get("suggested_title", ""),
             "formatted_content": result.get("formatted_content", ""),
+            "suggested_tags": result.get("suggested_tags", []),
         }
     except json.JSONDecodeError:
         return {
             "suggested_folder": "",
             "suggested_title": "Neue Notiz",
             "formatted_content": user_input,
+            "suggested_tags": [],
         }
 
 

@@ -38,13 +38,14 @@ class Folder(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(255), nullable=False)
     path = Column(String(1024), nullable=False, index=True)
-    parent_id = Column(UUID(as_uuid=True), ForeignKey("folders.id"), nullable=True)
+    parent_id = Column(UUID(as_uuid=True), ForeignKey("folders.id", ondelete="CASCADE"), nullable=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     user = relationship("User", back_populates="folders")
-    parent = relationship("Folder", remote_side=[id], backref="children")
+    parent = relationship("Folder", remote_side=[id])
+    children = relationship("Folder", cascade="all, delete-orphan", passive_deletes=True)
     notes = relationship("Note", back_populates="folder", cascade="all, delete-orphan")
     images = relationship("Image", back_populates="folder")
 

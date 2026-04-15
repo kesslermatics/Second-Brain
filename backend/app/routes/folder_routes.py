@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -8,6 +8,7 @@ from app.database import get_db
 from app.auth import get_current_user
 from app.models import User, Folder, Note
 from app.schemas import FolderCreate, FolderResponse, FolderTreeResponse, NoteListResponse
+from app.services.vector_service import delete_note_embedding
 
 router = APIRouter(prefix="/folders", tags=["folders"])
 
@@ -154,10 +155,39 @@ async def ensure_folder_path(
 @router.delete("/{folder_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_folder(
     folder_id: UUID,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     folder = await db.get(Folder, folder_id)
     if not folder or folder.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Folder not found")
+
+    # Collect all note IDs in this folder and all subfolders for Qdrant cleanup
+    all_folders = await db.execute(
+        select(Folder).where(Folder.user_id == current_user.id)
+    )
+    all_folders_list = all_folders.scalars().all()
+
+    # BFS to find all descendant folder IDs
+    folder_ids_to_delete = set()
+    queue = [folder_id]
+    while queue:
+        current_id = queue.pop(0)
+        folder_ids_to_delete.add(current_id)
+        for f in all_folders_list:
+            if f.parent_id == current_id and f.id not in folder_ids_to_delete:
+                queue.append(f.id)
+
+    # Find all notes in these folders
+    notes_result = await db.execute(
+        select(Note.id).where(Note.folder_id.in_(folder_ids_to_delete))
+    )
+    note_ids = [str(nid) for (nid,) in notes_result.all()]
+
+    # Schedule Qdrant embedding deletions in background
+    for nid in note_ids:
+        background_tasks.add_task(delete_note_embedding, nid)
+
+    # SQLAlchemy cascade will handle children + notes
     await db.delete(folder)
