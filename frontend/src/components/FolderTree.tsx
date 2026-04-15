@@ -1,10 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { FiFolder, FiFolderPlus, FiChevronRight, FiChevronDown, FiFile, FiTrash2, FiFilePlus } from 'react-icons/fi';
 import { LuPencilRuler } from 'react-icons/lu';
 import { useStore } from '@/lib/store';
-import { createFolder, deleteFolder, getNote, createNote, deleteNote } from '@/lib/api';
+import { createFolder, deleteFolder, getNote, createNote, deleteNote, updateNote, moveFolder } from '@/lib/api';
 import type { FolderTree } from '@/lib/types';
 
 interface Props {
@@ -16,7 +16,9 @@ export default function FolderTreeComponent({ folders, level }: Props) {
     const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
     const [newFolderParent, setNewFolderParent] = useState<string | null>(null);
     const [newFolderName, setNewFolderName] = useState('');
+    const [dragOverFolder, setDragOverFolder] = useState<string | null>(null);
     const { loadFolderTree, setSelectedNote, setActiveView, setPendingEdit, selectedNote } = useStore();
+    const dragItem = useRef<{ type: 'note' | 'folder'; id: string } | null>(null);
 
     const toggleFolder = (folderId: string) => {
         const next = new Set(expandedFolders);
@@ -109,6 +111,67 @@ export default function FolderTreeComponent({ folders, level }: Props) {
         }
     };
 
+    // ── Drag & Drop ──────────────────────────────────────────────
+
+    const handleDragStart = (e: React.DragEvent, type: 'note' | 'folder', id: string) => {
+        e.stopPropagation();
+        dragItem.current = { type, id };
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', JSON.stringify({ type, id }));
+        if (e.currentTarget instanceof HTMLElement) {
+            e.currentTarget.style.opacity = '0.5';
+        }
+    };
+
+    const handleDragEnd = (e: React.DragEvent) => {
+        if (e.currentTarget instanceof HTMLElement) {
+            e.currentTarget.style.opacity = '1';
+        }
+        dragItem.current = null;
+        setDragOverFolder(null);
+    };
+
+    const handleDragOver = (e: React.DragEvent, folderId: string) => {
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = 'move';
+        setDragOverFolder(folderId);
+    };
+
+    const handleDragLeave = (e: React.DragEvent) => {
+        e.stopPropagation();
+        setDragOverFolder(null);
+    };
+
+    const handleDrop = async (e: React.DragEvent, targetFolderId: string) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setDragOverFolder(null);
+
+        let data: { type: string; id: string } | null = null;
+        try {
+            data = JSON.parse(e.dataTransfer.getData('text/plain'));
+        } catch {
+            return;
+        }
+        if (!data) return;
+
+        try {
+            if (data.type === 'note') {
+                await updateNote(data.id, { folder_id: targetFolderId });
+            } else if (data.type === 'folder') {
+                if (data.id === targetFolderId) return;
+                await moveFolder(data.id, targetFolderId);
+            }
+            await loadFolderTree();
+            const next = new Set(expandedFolders);
+            next.add(targetFolderId);
+            setExpandedFolders(next);
+        } catch (e) {
+            console.error('Drop failed:', e);
+        }
+    };
+
     if (folders.length === 0 && level === 0) {
         return (
             <p className="text-xs text-dark-600 px-3 py-2">Keine Ordner vorhanden</p>
@@ -120,20 +183,27 @@ export default function FolderTreeComponent({ folders, level }: Props) {
             {folders.map((folder) => {
                 const isExpanded = expandedFolders.has(folder.id);
                 const hasChildren = folder.children.length > 0 || folder.notes.length > 0;
+                const isDragOver = dragOverFolder === folder.id;
 
                 return (
                     <div key={folder.id}>
                         <div
-                            className="group flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm text-dark-400 hover:text-white hover:bg-dark-800 cursor-pointer transition-colors"
+                            className={`group flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm text-dark-400 hover:text-white hover:bg-dark-800 cursor-pointer transition-colors ${isDragOver ? 'bg-brain-600/20 ring-1 ring-brain-500/50' : ''}`}
                             style={{ paddingLeft: `${level * 16 + 8}px` }}
                             onClick={() => toggleFolder(folder.id)}
+                            draggable
+                            onDragStart={(e) => handleDragStart(e, 'folder', folder.id)}
+                            onDragEnd={handleDragEnd}
+                            onDragOver={(e) => handleDragOver(e, folder.id)}
+                            onDragLeave={handleDragLeave}
+                            onDrop={(e) => handleDrop(e, folder.id)}
                         >
                             {hasChildren ? (
                                 isExpanded ? <FiChevronDown className="w-3.5 h-3.5 flex-shrink-0" /> : <FiChevronRight className="w-3.5 h-3.5 flex-shrink-0" />
                             ) : (
                                 <span className="w-3.5" />
                             )}
-                            <FiFolder className="w-3.5 h-3.5 flex-shrink-0 text-yellow-500" />
+                            <FiFolder className={`w-3.5 h-3.5 flex-shrink-0 ${isDragOver ? 'text-brain-400' : 'text-yellow-500'}`} />
                             <span className="truncate flex-1">{folder.name}</span>
                             <div className="opacity-0 group-hover:opacity-100 flex gap-0.5">
                                 <button
@@ -192,6 +262,9 @@ export default function FolderTreeComponent({ folders, level }: Props) {
                                         onClick={() => handleSelectNote(note.id)}
                                         className="group flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm text-dark-400 hover:text-white hover:bg-dark-800 cursor-pointer transition-colors"
                                         style={{ paddingLeft: `${(level + 1) * 16 + 8}px` }}
+                                        draggable
+                                        onDragStart={(e) => handleDragStart(e, 'note', note.id)}
+                                        onDragEnd={handleDragEnd}
                                     >
                                         {(note.note_type || 'text') === 'excalidraw' ? (
                                             <LuPencilRuler className="w-3.5 h-3.5 flex-shrink-0 text-purple-400" />

@@ -71,6 +71,11 @@ export const deleteFolder = async (folderId: string) => {
   await api.delete(`/folders/${folderId}`);
 };
 
+export const moveFolder = async (folderId: string, newParentId: string | null) => {
+  const { data } = await api.put<Folder>(`/folders/${folderId}`, { parent_id: newParentId });
+  return data;
+};
+
 // Notes
 export const getNotes = async (folderId?: string) => {
   const params = folderId ? { folder_id: folderId } : {};

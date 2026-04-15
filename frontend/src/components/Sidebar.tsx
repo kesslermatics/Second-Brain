@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useStore } from '@/lib/store';
 import { LuBrain } from 'react-icons/lu';
 import {
@@ -25,6 +25,30 @@ export default function Sidebar() {
     const [qaExpanded, setQAExpanded] = useState(true);
     const [foldersExpanded, setFoldersExpanded] = useState(true);
     const [settingsOpen, setSettingsOpen] = useState(false);
+    const [sidebarWidth, setSidebarWidth] = useState(288);
+    const isResizing = useRef(false);
+
+    const handleMouseDown = useCallback((e: React.MouseEvent) => {
+        e.preventDefault();
+        isResizing.current = true;
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+
+        const handleMouseMove = (e: MouseEvent) => {
+            if (!isResizing.current) return;
+            const newWidth = Math.min(Math.max(e.clientX, 220), 600);
+            setSidebarWidth(newWidth);
+        };
+        const handleMouseUp = () => {
+            isResizing.current = false;
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            document.removeEventListener('mousemove', handleMouseMove);
+            document.removeEventListener('mouseup', handleMouseUp);
+        };
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('mouseup', handleMouseUp);
+    }, []);
 
     useEffect(() => {
         loadNotesSessions();
@@ -106,7 +130,8 @@ export default function Sidebar() {
 
             <aside
                 className={`${sidebarOpen ? 'translate-x-0' : '-translate-x-full'
-                    } lg:translate-x-0 fixed lg:relative z-40 h-full w-72 bg-dark-900 border-r border-dark-800 flex flex-col transition-transform duration-200`}
+                    } lg:translate-x-0 fixed lg:relative z-40 h-full bg-dark-900 border-r border-dark-800 flex flex-col transition-transform duration-200`}
+                style={{ width: `${sidebarWidth}px`, minWidth: `${sidebarWidth}px` }}
             >
                 {/* Header */}
                 <div className="p-4 border-b border-dark-800">
@@ -315,6 +340,12 @@ export default function Sidebar() {
                     </button>
                 </div>
             </aside>
+
+            {/* Resize handle */}
+            <div
+                onMouseDown={handleMouseDown}
+                className="hidden lg:flex w-1 cursor-col-resize hover:bg-brain-500/50 active:bg-brain-500/70 transition-colors flex-shrink-0"
+            />
 
             <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
         </>
