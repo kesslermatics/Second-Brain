@@ -1,12 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete as sa_delete, or_
 from sqlalchemy.orm import selectinload
 from typing import List, Optional
 from uuid import UUID
 from app.database import get_db
 from app.auth import get_current_user
-from app.models import User, Folder, Note
+from app.models import User, Folder, Note, NoteLink, NoteVersion, note_tags
 from app.schemas import FolderCreate, FolderResponse, FolderTreeResponse, NoteListResponse
 from app.services.vector_service import delete_note_embedding
 
@@ -240,5 +240,32 @@ async def delete_folder(
     for nid in note_ids:
         background_tasks.add_task(delete_note_embedding, nid)
 
-    # SQLAlchemy cascade will handle children + notes
-    await db.delete(folder)
+    if note_ids:
+        note_uuids = [UUID(nid) for nid in note_ids]
+        # Delete NoteLinks referencing these notes
+        await db.execute(
+            sa_delete(NoteLink).where(
+                or_(
+                    NoteLink.source_note_id.in_(note_uuids),
+                    NoteLink.target_note_id.in_(note_uuids),
+                )
+            )
+        )
+        # Delete note_tags entries
+        await db.execute(
+            sa_delete(note_tags).where(note_tags.c.note_id.in_(note_uuids))
+        )
+        # Delete NoteVersions
+        await db.execute(
+            sa_delete(NoteVersion).where(NoteVersion.note_id.in_(note_uuids))
+        )
+        # Delete the notes themselves
+        await db.execute(
+            sa_delete(Note).where(Note.id.in_(note_uuids))
+        )
+
+    # Delete folders (children first via reverse BFS order)
+    for fid in reversed(list(folder_ids_to_delete)):
+        f = await db.get(Folder, fid)
+        if f:
+            await db.delete(f)
