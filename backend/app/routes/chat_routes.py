@@ -11,7 +11,7 @@ from app.schemas import (
     ChatSessionCreate, ChatSessionResponse, ChatSessionDetailResponse,
     ChatMessageCreate, ChatMessageResponse,
 )
-from app.services.ai_service import process_note_input, answer_with_rag
+from app.services.ai_service import process_note_input, answer_with_rag, generate_chat_title
 from app.services.vector_service import hybrid_search
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -295,12 +295,16 @@ AI_NOTE_DATA -->"""
     await db.flush()
     await db.refresh(assistant_msg)
 
-    # Update session title if first message
+    # Auto-generate title with AI on first message
     messages_count = await db.execute(
         select(ChatMessage).where(ChatMessage.session_id == session_id)
     )
     if len(messages_count.scalars().all()) <= 2:
-        session.title = message.content[:50] + ("..." if len(message.content) > 50 else "")
+        try:
+            ai_title = await generate_chat_title(message.content)
+            session.title = ai_title
+        except Exception:
+            session.title = message.content[:50] + ("..." if len(message.content) > 50 else "")
         await db.flush()
 
     return ChatMessageResponse(

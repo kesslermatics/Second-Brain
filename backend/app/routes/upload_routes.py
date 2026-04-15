@@ -89,6 +89,8 @@ async def upload_file(
             str(current_user.id),
             "",
             "",
+            None,
+            file_url,
         )
 
     return {
@@ -150,6 +152,8 @@ async def upload_pasted_image(
         str(current_user.id),
         "",
         "",
+        None,
+        file_url,
     )
 
     return {

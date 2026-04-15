@@ -120,54 +120,6 @@ def upsert_note_embedding(note_id: str, user_id: str, title: str, content: str, 
     )
 
 
-def upsert_image_embedding(
-    image_id: str,
-    user_id: str,
-    original_filename: str,
-    description: str,
-    folder_path: str = "",
-    note_title: str = "",
-):
-    """Upsert an image description embedding into Qdrant."""
-    embed_text = f"Image: {original_filename}"
-    if note_title:
-        embed_text += f"\nNote: {note_title}"
-    if folder_path:
-        embed_text += f"\nPath: {folder_path}"
-    embed_text += f"\n\n{description}"
-
-    embedding = get_embedding(embed_text)
-
-    point = PointStruct(
-        id=str(image_id),
-        vector=embedding,
-        payload={
-            "image_id": str(image_id),
-            "user_id": str(user_id),
-            "title": f"Bild: {original_filename}",
-            "folder_path": folder_path,
-            "content_preview": description[:500],
-            "type": "image",
-            "original_filename": original_filename,
-        },
-    )
-    _get_qdrant().upsert(
-        collection_name=COLLECTION_NAME,
-        points=[point],
-    )
-
-
-def delete_image_embedding(image_id: str):
-    """Delete an image embedding from Qdrant."""
-    try:
-        _get_qdrant().delete(
-            collection_name=COLLECTION_NAME,
-            points_selector=[str(image_id)],
-        )
-    except Exception as e:
-        print(f"Error deleting image embedding: {e}")
-
-
 def delete_note_embedding(note_id: str):
     """Delete a note embedding from Qdrant."""
     try:

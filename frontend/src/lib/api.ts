@@ -76,6 +76,11 @@ export const moveFolder = async (folderId: string, newParentId: string | null) =
   return data;
 };
 
+export const renameFolder = async (folderId: string, name: string) => {
+  const { data } = await api.put<Folder>(`/folders/${folderId}`, { name });
+  return data;
+};
+
 // Notes
 export const getNotes = async (folderId?: string) => {
   const params = folderId ? { folder_id: folderId } : {};

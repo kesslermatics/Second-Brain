@@ -310,6 +310,29 @@ Kandidaten:
 
 # ── AI: Summarization ─────────────────────────────────────────────────
 
+async def generate_chat_title(first_message: str) -> str:
+    """Generate a short, descriptive chat title from the first user message."""
+    model = get_gemini_model()
+
+    prompt = f"""Erstelle einen sehr kurzen Titel (max 5 Wörter) für eine Chat-Konversation, 
+die mit folgender Nachricht beginnt. Der Titel soll den Kern der Anfrage zusammenfassen.
+Antworte NUR mit dem Titel, ohne Anführungszeichen oder zusätzlichen Text.
+
+Nachricht: {first_message[:500]}
+
+Titel:"""
+
+    try:
+        response = model.generate_content(prompt)
+        title = response.text.strip().strip('"\'')
+        # Enforce max length
+        if len(title) > 60:
+            title = title[:57] + "..."
+        return title or first_message[:50]
+    except Exception:
+        return first_message[:50] + ("..." if len(first_message) > 50 else "")
+
+
 async def generate_summary(notes: list[dict], scope_label: str) -> str:
     """Generate a summary across multiple notes."""
     model = get_gemini_model()

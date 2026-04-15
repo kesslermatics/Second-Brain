@@ -10,7 +10,7 @@ from uuid import UUID
 from app.database import get_db, async_session
 from app.auth import get_current_user
 from app.models import User, ChatSession, ChatMessage, Note, Folder, UserSettings
-from app.services.ai_service import get_gemini_model, DEFAULT_NOTE_PROMPT, DEFAULT_RAG_PROMPT
+from app.services.ai_service import get_gemini_model, DEFAULT_NOTE_PROMPT, DEFAULT_RAG_PROMPT, generate_chat_title
 from app.services.vector_service import hybrid_search
 import google.generativeai as genai
 
@@ -131,7 +131,11 @@ async def stream_message(
             if len(existing) <= 1:
                 s = await save_db.get(ChatSession, session_id)
                 if s:
-                    s.title = content[:50] + ("..." if len(content) > 50 else "")
+                    try:
+                        ai_title = await generate_chat_title(content)
+                        s.title = ai_title
+                    except Exception:
+                        s.title = content[:50] + ("..." if len(content) > 50 else "")
 
             await save_db.commit()
 

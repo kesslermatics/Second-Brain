@@ -6,9 +6,9 @@ import { LuBrain } from 'react-icons/lu';
 import {
     FiMessageSquare, FiBookOpen, FiPlus, FiTrash2,
     FiChevronRight, FiChevronDown, FiLogOut, FiMenu, FiFile, FiSettings,
-    FiSearch, FiGrid, FiShare2, FiRepeat, FiDownload, FiFileText, FiImage,
+    FiSearch, FiGrid, FiShare2, FiRepeat, FiDownload, FiFileText, FiImage, FiEdit2,
 } from 'react-icons/fi';
-import { createChatSession, getChatSession, deleteChatSession } from '@/lib/api';
+import { createChatSession, getChatSession, deleteChatSession, updateChatSession } from '@/lib/api';
 import FolderTreeComponent from './FolderTree';
 import SettingsModal from './SettingsModal';
 import type { ChatSession } from '@/lib/types';
@@ -26,6 +26,8 @@ export default function Sidebar() {
     const [foldersExpanded, setFoldersExpanded] = useState(true);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [sidebarWidth, setSidebarWidth] = useState(288);
+    const [renamingSession, setRenamingSession] = useState<string | null>(null);
+    const [renameValue, setRenameValue] = useState('');
     const isResizing = useRef(false);
 
     const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -108,6 +110,25 @@ export default function Sidebar() {
         } catch (e) {
             console.error(e);
         }
+    };
+
+    const handleRenameSession = async (sessionId: string, type: 'notes' | 'qa') => {
+        if (!renameValue.trim()) { setRenamingSession(null); return; }
+        try {
+            await updateChatSession(sessionId, renameValue.trim());
+            setRenamingSession(null);
+            setRenameValue('');
+            if (type === 'notes') await loadNotesSessions();
+            else await loadQASessions();
+        } catch (e) {
+            console.error(e);
+        }
+    };
+
+    const startRenameSession = (e: React.MouseEvent, sessionId: string, currentTitle: string) => {
+        e.stopPropagation();
+        setRenamingSession(sessionId);
+        setRenameValue(currentTitle);
     };
 
     return (
@@ -254,13 +275,37 @@ export default function Sidebar() {
                                         className="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-dark-400 hover:text-white hover:bg-dark-800 cursor-pointer transition-colors"
                                     >
                                         <FiFile className="w-3.5 h-3.5 flex-shrink-0 text-brain-400" />
-                                        <span className="truncate flex-1">{session.title}</span>
-                                        <button
-                                            onClick={(e) => handleDeleteSession(e, session.id, 'notes')}
-                                            className="opacity-0 group-hover:opacity-100 p-1 hover:bg-dark-700 rounded transition-opacity"
-                                        >
-                                            <FiTrash2 className="w-3 h-3 text-dark-500 hover:text-red-400" />
-                                        </button>
+                                        {renamingSession === session.id ? (
+                                            <input
+                                                type="text"
+                                                value={renameValue}
+                                                onChange={(e) => setRenameValue(e.target.value)}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter') handleRenameSession(session.id, 'notes');
+                                                    if (e.key === 'Escape') { setRenamingSession(null); setRenameValue(''); }
+                                                }}
+                                                onBlur={() => handleRenameSession(session.id, 'notes')}
+                                                onClick={(e) => e.stopPropagation()}
+                                                className="flex-1 px-1 py-0 text-sm bg-dark-950 border border-brain-500 rounded text-white focus:outline-none min-w-0"
+                                                autoFocus
+                                            />
+                                        ) : (
+                                            <span className="truncate flex-1">{session.title}</span>
+                                        )}
+                                        <div className="opacity-0 group-hover:opacity-100 flex gap-0.5">
+                                            <button
+                                                onClick={(e) => startRenameSession(e, session.id, session.title)}
+                                                className="p-1 hover:bg-dark-700 rounded transition-opacity"
+                                            >
+                                                <FiEdit2 className="w-3 h-3 text-dark-500 hover:text-blue-400" />
+                                            </button>
+                                            <button
+                                                onClick={(e) => handleDeleteSession(e, session.id, 'notes')}
+                                                className="p-1 hover:bg-dark-700 rounded transition-opacity"
+                                            >
+                                                <FiTrash2 className="w-3 h-3 text-dark-500 hover:text-red-400" />
+                                            </button>
+                                        </div>
                                     </div>
                                 ))}
                             </div>
@@ -292,13 +337,37 @@ export default function Sidebar() {
                                         className="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-dark-400 hover:text-white hover:bg-dark-800 cursor-pointer transition-colors"
                                     >
                                         <FiMessageSquare className="w-3.5 h-3.5 flex-shrink-0 text-green-400" />
-                                        <span className="truncate flex-1">{session.title}</span>
-                                        <button
-                                            onClick={(e) => handleDeleteSession(e, session.id, 'qa')}
-                                            className="opacity-0 group-hover:opacity-100 p-1 hover:bg-dark-700 rounded transition-opacity"
-                                        >
-                                            <FiTrash2 className="w-3 h-3 text-dark-500 hover:text-red-400" />
-                                        </button>
+                                        {renamingSession === session.id ? (
+                                            <input
+                                                type="text"
+                                                value={renameValue}
+                                                onChange={(e) => setRenameValue(e.target.value)}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter') handleRenameSession(session.id, 'qa');
+                                                    if (e.key === 'Escape') { setRenamingSession(null); setRenameValue(''); }
+                                                }}
+                                                onBlur={() => handleRenameSession(session.id, 'qa')}
+                                                onClick={(e) => e.stopPropagation()}
+                                                className="flex-1 px-1 py-0 text-sm bg-dark-950 border border-brain-500 rounded text-white focus:outline-none min-w-0"
+                                                autoFocus
+                                            />
+                                        ) : (
+                                            <span className="truncate flex-1">{session.title}</span>
+                                        )}
+                                        <div className="opacity-0 group-hover:opacity-100 flex gap-0.5">
+                                            <button
+                                                onClick={(e) => startRenameSession(e, session.id, session.title)}
+                                                className="p-1 hover:bg-dark-700 rounded transition-opacity"
+                                            >
+                                                <FiEdit2 className="w-3 h-3 text-dark-500 hover:text-blue-400" />
+                                            </button>
+                                            <button
+                                                onClick={(e) => handleDeleteSession(e, session.id, 'qa')}
+                                                className="p-1 hover:bg-dark-700 rounded transition-opacity"
+                                            >
+                                                <FiTrash2 className="w-3 h-3 text-dark-500 hover:text-red-400" />
+                                            </button>
+                                        </div>
                                     </div>
                                 ))}
                             </div>

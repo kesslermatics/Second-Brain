@@ -1,10 +1,10 @@
 'use client';
 
 import { useState, useRef } from 'react';
-import { FiFolder, FiFolderPlus, FiChevronRight, FiChevronDown, FiFile, FiTrash2, FiFilePlus } from 'react-icons/fi';
+import { FiFolder, FiFolderPlus, FiChevronRight, FiChevronDown, FiFile, FiTrash2, FiFilePlus, FiEdit2 } from 'react-icons/fi';
 import { LuPencilRuler } from 'react-icons/lu';
 import { useStore } from '@/lib/store';
-import { createFolder, deleteFolder, getNote, createNote, deleteNote, updateNote, moveFolder } from '@/lib/api';
+import { createFolder, deleteFolder, getNote, createNote, deleteNote, updateNote, moveFolder, renameFolder } from '@/lib/api';
 import type { FolderTree } from '@/lib/types';
 
 interface Props {
@@ -17,6 +17,9 @@ export default function FolderTreeComponent({ folders, level }: Props) {
     const [newFolderParent, setNewFolderParent] = useState<string | null>(null);
     const [newFolderName, setNewFolderName] = useState('');
     const [dragOverFolder, setDragOverFolder] = useState<string | null>(null);
+    const [renamingFolder, setRenamingFolder] = useState<string | null>(null);
+    const [renamingNote, setRenamingNote] = useState<string | null>(null);
+    const [renameValue, setRenameValue] = useState('');
     const { loadFolderTree, setSelectedNote, setActiveView, setPendingEdit, selectedNote } = useStore();
     const dragItem = useRef<{ type: 'note' | 'folder'; id: string } | null>(null);
 
@@ -109,6 +112,49 @@ export default function FolderTreeComponent({ folders, level }: Props) {
         } catch (e) {
             console.error(e);
         }
+    };
+
+    const handleRenameFolder = async (folderId: string) => {
+        if (!renameValue.trim()) { setRenamingFolder(null); return; }
+        try {
+            await renameFolder(folderId, renameValue.trim());
+            setRenamingFolder(null);
+            setRenameValue('');
+            await loadFolderTree();
+        } catch (e) {
+            console.error(e);
+        }
+    };
+
+    const handleRenameNote = async (noteId: string) => {
+        if (!renameValue.trim()) { setRenamingNote(null); return; }
+        try {
+            await updateNote(noteId, { title: renameValue.trim() });
+            setRenamingNote(null);
+            setRenameValue('');
+            await loadFolderTree();
+            // Refresh selected note if it's the one being renamed
+            if (selectedNote?.id === noteId) {
+                const updated = await getNote(noteId);
+                setSelectedNote(updated);
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    };
+
+    const startRenameFolder = (e: React.MouseEvent, folderId: string, currentName: string) => {
+        e.stopPropagation();
+        setRenamingFolder(folderId);
+        setRenamingNote(null);
+        setRenameValue(currentName);
+    };
+
+    const startRenameNote = (e: React.MouseEvent, noteId: string, currentTitle: string) => {
+        e.stopPropagation();
+        setRenamingNote(noteId);
+        setRenamingFolder(null);
+        setRenameValue(currentTitle);
     };
 
     // ── Drag & Drop ──────────────────────────────────────────────
@@ -204,8 +250,31 @@ export default function FolderTreeComponent({ folders, level }: Props) {
                                 <span className="w-3.5" />
                             )}
                             <FiFolder className={`w-3.5 h-3.5 flex-shrink-0 ${isDragOver ? 'text-brain-400' : 'text-yellow-500'}`} />
-                            <span className="truncate flex-1">{folder.name}</span>
+                            {renamingFolder === folder.id ? (
+                                <input
+                                    type="text"
+                                    value={renameValue}
+                                    onChange={(e) => setRenameValue(e.target.value)}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') handleRenameFolder(folder.id);
+                                        if (e.key === 'Escape') { setRenamingFolder(null); setRenameValue(''); }
+                                    }}
+                                    onBlur={() => handleRenameFolder(folder.id)}
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="flex-1 px-1 py-0 text-sm bg-dark-950 border border-brain-500 rounded text-white focus:outline-none min-w-0"
+                                    autoFocus
+                                />
+                            ) : (
+                                <span className="truncate flex-1">{folder.name}</span>
+                            )}
                             <div className="opacity-0 group-hover:opacity-100 flex gap-0.5">
+                                <button
+                                    onClick={(e) => startRenameFolder(e, folder.id, folder.name)}
+                                    className="p-0.5 hover:bg-dark-700 rounded"
+                                    title="Ordner umbenennen"
+                                >
+                                    <FiEdit2 className="w-3 h-3 text-blue-400" />
+                                </button>
                                 <button
                                     onClick={(e) => { e.stopPropagation(); setNewFolderParent(folder.id); }}
                                     className="p-0.5 hover:bg-dark-700 rounded"
@@ -271,14 +340,39 @@ export default function FolderTreeComponent({ folders, level }: Props) {
                                         ) : (
                                             <FiFile className="w-3.5 h-3.5 flex-shrink-0 text-brain-400" />
                                         )}
-                                        <span className="truncate flex-1">{note.title}</span>
-                                        <button
-                                            onClick={(e) => handleDeleteNote(e, note.id)}
-                                            className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-dark-700 rounded flex-shrink-0"
-                                            title="Notiz löschen"
-                                        >
-                                            <FiTrash2 className="w-3 h-3 text-red-400" />
-                                        </button>
+                                        {renamingNote === note.id ? (
+                                            <input
+                                                type="text"
+                                                value={renameValue}
+                                                onChange={(e) => setRenameValue(e.target.value)}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter') handleRenameNote(note.id);
+                                                    if (e.key === 'Escape') { setRenamingNote(null); setRenameValue(''); }
+                                                }}
+                                                onBlur={() => handleRenameNote(note.id)}
+                                                onClick={(e) => e.stopPropagation()}
+                                                className="flex-1 px-1 py-0 text-sm bg-dark-950 border border-brain-500 rounded text-white focus:outline-none min-w-0"
+                                                autoFocus
+                                            />
+                                        ) : (
+                                            <span className="truncate flex-1">{note.title}</span>
+                                        )}
+                                        <div className="opacity-0 group-hover:opacity-100 flex gap-0.5 flex-shrink-0">
+                                            <button
+                                                onClick={(e) => startRenameNote(e, note.id, note.title)}
+                                                className="p-0.5 hover:bg-dark-700 rounded"
+                                                title="Notiz umbenennen"
+                                            >
+                                                <FiEdit2 className="w-3 h-3 text-blue-400" />
+                                            </button>
+                                            <button
+                                                onClick={(e) => handleDeleteNote(e, note.id)}
+                                                className="p-0.5 hover:bg-dark-700 rounded"
+                                                title="Notiz löschen"
+                                            >
+                                                <FiTrash2 className="w-3 h-3 text-red-400" />
+                                            </button>
+                                        </div>
                                     </div>
                                 ))}
                                 <FolderTreeComponent folders={folder.children} level={level + 1} />

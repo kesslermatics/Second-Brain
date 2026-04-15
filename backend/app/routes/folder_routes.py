@@ -153,26 +153,33 @@ async def ensure_folder_path(
 
 
 @router.put("/{folder_id}", response_model=FolderResponse)
-async def move_folder(
+async def update_folder(
     folder_id: UUID,
     data: dict,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Move a folder to a new parent (or root if parent_id is null)."""
+    """Update a folder: rename (name) and/or move (parent_id)."""
     folder = await db.get(Folder, folder_id)
     if not folder or folder.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Folder not found")
 
-    new_parent_id = data.get("parent_id")
+    old_path = folder.path
 
-    # Prevent moving a folder into itself or its descendants
+    # Handle rename
+    if "name" in data and data["name"]:
+        folder.name = data["name"]
+
+    # Handle move
+    new_parent_id = data.get("parent_id", folder.parent_id)
+    if "parent_id" in data:
+        new_parent_id = data["parent_id"]
+
     if new_parent_id:
         new_parent = await db.get(Folder, new_parent_id)
         if not new_parent or new_parent.user_id != current_user.id:
             raise HTTPException(status_code=404, detail="Target folder not found")
 
-        # Check for circular reference
         check_id = new_parent_id
         while check_id:
             if str(check_id) == str(folder_id):
@@ -184,19 +191,19 @@ async def move_folder(
     else:
         new_path = folder.name
 
-    old_path = folder.path
     folder.parent_id = new_parent_id
     folder.path = new_path
 
     # Update paths of all descendants
-    all_folders = await db.execute(
-        select(Folder).where(
-            Folder.user_id == current_user.id,
-            Folder.path.like(f"{old_path}/%")
+    if old_path != new_path:
+        all_folders = await db.execute(
+            select(Folder).where(
+                Folder.user_id == current_user.id,
+                Folder.path.like(f"{old_path}/%")
+            )
         )
-    )
-    for child in all_folders.scalars().all():
-        child.path = new_path + child.path[len(old_path):]
+        for child in all_folders.scalars().all():
+            child.path = new_path + child.path[len(old_path):]
 
     await db.flush()
     await db.refresh(folder)

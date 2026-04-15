@@ -4,7 +4,7 @@ Every uploaded image is:
   1. stored on disk
   2. persisted in the images DB table
   3. described by Gemini Vision → description stored in DB
-  4. description embedded in Qdrant for RAG retrieval
+  4. a Note is created with the image + AI description, embedded in Qdrant
 """
 import os
 import uuid as _uuid
@@ -22,7 +22,7 @@ from app.models import User, Image, Folder, Note
 from app.schemas import ImageResponse, ImageListResponse
 from app.config import get_settings
 from app.services.vision_service import describe_image
-from app.services.vector_service import upsert_image_embedding, delete_image_embedding
+from app.services.vector_service import upsert_note_embedding, delete_note_embedding
 
 router = APIRouter(prefix="/images", tags=["images"])
 
@@ -37,15 +37,15 @@ def _build_url(user_id: str, stored_filename: str) -> str:
     return f"{backend_url}/uploads/{user_id}/{stored_filename}"
 
 
-async def _process_image_ai(image_id: str, file_path: str, original_filename: str, user_id: str, folder_path: str, note_title: str):
-    """Background task: describe image with Gemini Vision and embed in Qdrant."""
+async def _process_image_ai(image_id: str, file_path: str, original_filename: str, user_id: str, folder_path: str, note_title: str, folder_id: str = None, image_url: str = ""):
+    """Background task: describe image with Gemini Vision, create a Note with description + image, embed in Qdrant."""
     try:
         description = await describe_image(file_path)
     except Exception as e:
         print(f"[Vision] Failed to describe image {image_id}: {e}")
         description = f"Bild: {original_filename} (Beschreibung konnte nicht generiert werden)"
 
-    # Update DB
+    # Update image DB record with the description
     async with async_session() as db:
         try:
             img = await db.get(Image, _uuid.UUID(image_id))
@@ -57,18 +57,51 @@ async def _process_image_ai(image_id: str, file_path: str, original_filename: st
             print(f"[Vision] DB update failed for {image_id}: {e}")
             await db.rollback()
 
-    # Embed in Qdrant
-    try:
-        upsert_image_embedding(
-            image_id=image_id,
+    # If uploaded to a folder (not attached to an existing note), create a Note
+    if folder_id and not note_title:
+        note_content = f"![{original_filename}]({image_url})\n\n---\n\n**KI-Beschreibung:**\n\n{description}"
+        note_title_text = original_filename.rsplit(".", 1)[0] if "." in original_filename else original_filename
+
+        async with async_session() as db:
+            try:
+                new_note = Note(
+                    title=note_title_text,
+                    content=note_content,
+                    note_type="text",
+                    folder_id=_uuid.UUID(folder_id),
+                    user_id=_uuid.UUID(user_id),
+                )
+                db.add(new_note)
+                await db.commit()
+                await db.refresh(new_note)
+
+                # Update image to reference this note
+                img = await db.get(Image, _uuid.UUID(image_id))
+                if img:
+                    img.note_id = new_note.id
+                    await db.commit()
+
+                # Embed the note (with the AI description as content)
+                upsert_note_embedding(
+                    note_id=str(new_note.id),
+                    user_id=user_id,
+                    title=note_title_text,
+                    content=description,
+                    folder_path=folder_path,
+                )
+                print(f"[Vision] Created note '{note_title_text}' for image {image_id}")
+            except Exception as e:
+                print(f"[Vision] Failed to create note for image {image_id}: {e}")
+                await db.rollback()
+    elif note_title:
+        # Image attached to an existing note — just embed via note
+        upsert_note_embedding(
+            note_id=str(image_id),
             user_id=user_id,
-            original_filename=original_filename,
-            description=description,
+            title=f"Bild in: {note_title}",
+            content=description,
             folder_path=folder_path,
-            note_title=note_title,
         )
-    except Exception as e:
-        print(f"[Vision] Qdrant upsert failed for {image_id}: {e}")
 
 
 @router.post("/upload", response_model=ImageResponse, status_code=201)
@@ -132,6 +165,7 @@ async def upload_image(
     await db.refresh(img)
 
     # Trigger background AI analysis
+    image_url = _build_url(str(current_user.id), stored_name)
     background_tasks.add_task(
         _process_image_ai,
         str(img.id),
@@ -140,6 +174,8 @@ async def upload_image(
         str(current_user.id),
         folder_path,
         note_title,
+        str(folder_uuid) if folder_uuid else None,
+        image_url,
     )
 
     return ImageResponse(
@@ -148,7 +184,7 @@ async def upload_image(
         stored_filename=img.stored_filename,
         content_type=img.content_type,
         file_size=img.file_size,
-        url=_build_url(str(current_user.id), stored_name),
+        url=image_url,
         description=img.description,
         folder_id=img.folder_id,
         note_id=img.note_id,
@@ -216,6 +252,8 @@ async def paste_image(
         str(current_user.id),
         folder_path,
         note_title,
+        None,  # folder_id — paste is always attached to a note
+        _build_url(str(current_user.id), stored_name),
     )
 
     return ImageResponse(
@@ -339,6 +377,8 @@ async def reanalyze_image(
         str(current_user.id),
         folder_path,
         note_title,
+        str(img.folder_id) if img.folder_id else None,
+        _build_url(str(current_user.id), img.stored_filename),
     )
 
     return ImageResponse(
@@ -375,9 +415,9 @@ async def delete_image(
     except Exception as e:
         print(f"Error deleting image file: {e}")
 
-    # Remove from Qdrant
+    # Remove from Qdrant (legacy image embeddings)
     try:
-        delete_image_embedding(str(image_id))
+        delete_note_embedding(str(image_id))
     except Exception as e:
         print(f"Error deleting image embedding: {e}")
 
