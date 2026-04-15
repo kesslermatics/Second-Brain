@@ -33,8 +33,8 @@ interface AppState {
   setActiveQASession: (session: ChatSessionDetail | null) => void;
 
   // UI
-  activeView: 'chat' | 'notes' | 'dashboard' | 'graph' | 'learn' | 'search' | 'export' | 'summary' | 'images';
-  setActiveView: (view: 'chat' | 'notes' | 'dashboard' | 'graph' | 'learn' | 'search' | 'export' | 'summary' | 'images') => void;
+  activeView: 'chat' | 'notes' | 'dashboard' | 'graph' | 'learn' | 'search' | 'export' | 'summary' | 'images' | 'books';
+  setActiveView: (view: 'chat' | 'notes' | 'dashboard' | 'graph' | 'learn' | 'search' | 'export' | 'summary' | 'images' | 'books') => void;
   sidebarOpen: boolean;
   setSidebarOpen: (open: boolean) => void;
 }

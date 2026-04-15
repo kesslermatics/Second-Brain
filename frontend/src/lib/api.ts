@@ -5,6 +5,7 @@ import type {
   Tag, TagSuggestResponse, SearchResponse, NoteVersion, NoteLink, GraphData,
   FlashCard, SRSettings, ReviewSession, DashboardData, SummaryRequest, SummaryResponse,
   ExportRequest, ImageItem, ImageListResponse,
+  BookSearchResult, BookTocResult, BookChapter, BookChapterNoteResult,
 } from './types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -355,6 +356,26 @@ export const reanalyzeImage = async (imageId: string) => {
 
 export const deleteImage = async (imageId: string) => {
   await api.delete(`/images/${imageId}`);
+};
+
+// Books
+export const searchBook = async (query: string) => {
+  const { data } = await api.post<BookSearchResult>('/books/search', { query });
+  return data;
+};
+
+export const getBookToc = async (title: string, authors: string[]) => {
+  const { data } = await api.post<BookTocResult>('/books/toc', { title, authors });
+  return data;
+};
+
+export const generateChapterNote = async (bookTitle: string, authors: string[], chapter: BookChapter) => {
+  const { data } = await api.post<BookChapterNoteResult>('/books/generate-chapter-note', {
+    book_title: bookTitle,
+    authors,
+    chapter,
+  });
+  return data;
 };
 
 export default api;

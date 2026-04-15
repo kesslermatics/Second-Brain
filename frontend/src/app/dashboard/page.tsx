@@ -14,6 +14,7 @@ import SpacedRepView from '@/components/SpacedRepView';
 import ExportView from '@/components/ExportView';
 import SummaryView from '@/components/SummaryView';
 import ImageGallery from '@/components/ImageGallery';
+import BookPanel from '@/components/BookPanel';
 
 export default function DashboardPage() {
     const router = useRouter();
@@ -59,6 +60,7 @@ export default function DashboardPage() {
             case 'export': return <ExportView />;
             case 'summary': return <SummaryView />;
             case 'images': return <ImageGallery />;
+            case 'books': return <BookPanel />;
             default: return <ChatView />;
         }
     };

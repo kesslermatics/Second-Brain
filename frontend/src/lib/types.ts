@@ -227,3 +227,36 @@ export interface ImageListResponse {
   images: ImageItem[];
   total: number;
 }
+
+// Books
+export interface BookSearchResult {
+  found: boolean;
+  title?: string;
+  authors?: string[];
+  year?: number;
+  publisher?: string;
+  isbn?: string;
+  language?: string;
+  pages?: number;
+  description?: string;
+  suggestion?: string;
+}
+
+export interface BookChapter {
+  chapter_number: string;
+  title: string;
+  level: number;
+}
+
+export interface BookTocResult {
+  chapters: BookChapter[];
+  total_chapters: number;
+}
+
+export interface BookChapterNoteResult {
+  folder: string;
+  title: string;
+  content: string;
+  tag_ids: string[];
+  tag_names: string[];
+}
