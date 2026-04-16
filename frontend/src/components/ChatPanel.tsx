@@ -24,7 +24,7 @@ export default function ChatPanel({ session, type }: Props) {
         prev.forEach(v => next.add(v));
         next.add(value);
         // Fire-and-forget server persist
-        putUserState(stateKey, JSON.stringify(Array.from(next))).catch(() => {});
+        putUserState(stateKey, JSON.stringify(Array.from(next))).catch(() => { });
         return next;
     };
 

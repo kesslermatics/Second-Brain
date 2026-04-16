@@ -271,3 +271,92 @@ Gib NUR den neuen, vollständigen Notiz-Inhalt zurück (Markdown). Kein JSON, ke
 
     response = model.generate_content(prompt)
     return response.text.strip()
+
+
+async def generate_chapter_summary(
+    book_title: str,
+    authors: list[str],
+    chapter_number: str,
+    chapter_title: str,
+    chat_history: list[dict] | None = None,
+) -> str:
+    """Generate a rich chapter summary from chat history or AI knowledge.
+
+    If chat_history is provided, the summary is based on what was actually discussed.
+    Otherwise, AI generates a summary from its own knowledge + Google Search.
+    """
+    model = get_gemini_model()
+    authors_str = ", ".join(authors) if authors else "Unbekannt"
+
+    if chat_history and len([m for m in chat_history if m.get("role") in ("user", "assistant")]) >= 2:
+        # Build summary from actual conversation
+        conversation_text = "\n".join(
+            f"{'Tutor' if m['role'] == 'assistant' else 'Lerner'}: {m['content']}"
+            for m in chat_history
+            if m.get("role") in ("user", "assistant")
+        )
+        # Truncate if very long
+        if len(conversation_text) > 15000:
+            conversation_text = conversation_text[:15000] + "\n... (gekürzt)"
+
+        prompt = f"""Du bist ein Second Brain Assistent. Erstelle eine hochwertige, gut strukturierte Zusammenfassung
+für das Buchkapitel basierend auf der folgenden Lern-Konversation.
+
+Buch: "{book_title}" von {authors_str}
+Kapitel {chapter_number}: {chapter_title}
+
+KONVERSATION:
+{conversation_text}
+
+AUFGABE: Erstelle eine Zusammenfassung, die:
+1. Die Kernkonzepte und Hauptaussagen des Kapitels klar darstellt
+2. Gut mit Markdown strukturiert ist (##, ###, Listen, **Fettdruck**)
+3. Callouts für wichtige Merksätze verwendet:
+   > [!MERKSATZ]
+   > Kernaussage hier
+   
+   > [!DEFINITION]
+   > Begriffserklärung hier
+   
+   > [!BEISPIEL]
+   > Konkretes Beispiel hier
+
+4. Leicht zu scannen ist — man soll auf einen Blick die Hauptpunkte erfassen können
+5. Wie eine gute Vorlesungsmitschrift aufgebaut ist: Übersicht → Details → Kernerkenntnisse
+6. In der Sprache des Buches geschrieben ist
+
+Gib NUR den Markdown-Inhalt zurück, kein JSON, keine Erklärung.
+Beginne NICHT mit dem Kapiteltitel als Heading (der wird separat angezeigt)."""
+
+        response = model.generate_content(prompt)
+    else:
+        # No chat history — generate from AI knowledge
+        prompt = f"""Du bist ein Second Brain Assistent. Erstelle eine hochwertige, gut strukturierte Zusammenfassung
+für das folgende Buchkapitel:
+
+Buch: "{book_title}" von {authors_str}
+Kapitel {chapter_number}: {chapter_title}
+
+AUFGABE: Erstelle eine Zusammenfassung, die:
+1. Die Kernkonzepte und Hauptaussagen des Kapitels klar darstellt
+2. Gut mit Markdown strukturiert ist (##, ###, Listen, **Fettdruck**)
+3. Callouts für wichtige Merksätze verwendet:
+   > [!MERKSATZ]
+   > Kernaussage hier
+   
+   > [!DEFINITION]
+   > Begriffserklärung hier
+   
+   > [!BEISPIEL]
+   > Konkretes Beispiel hier
+
+4. Leicht zu scannen ist — man soll auf einen Blick die Hauptpunkte erfassen können
+5. Wie eine gute Vorlesungsmitschrift aufgebaut ist: Übersicht → Details → Kernerkenntnisse
+6. In der Sprache des Buches geschrieben ist
+
+Gib NUR den Markdown-Inhalt zurück, kein JSON, keine Erklärung.
+Beginne NICHT mit dem Kapiteltitel als Heading (der wird separat angezeigt)."""
+
+        response = model.generate_content(prompt, tools=[GOOGLE_SEARCH_TOOL])
+
+    return response.text.strip()

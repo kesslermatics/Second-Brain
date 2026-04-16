@@ -291,6 +291,8 @@ export interface CourseUnit {
   enabled: boolean;
   status: 'pending' | 'active' | 'completed' | 'skipped';
   order_index: number;
+  summary?: string | null;
+  summary_generated_at?: string | null;
 }
 
 export interface CourseDetail {
@@ -330,4 +332,22 @@ export interface AdvancedFocusSuggestion {
   title: string;
   description: string;
   topic: string;
+}
+
+export interface BookSummaryChapter {
+  id: string;
+  unit_number: string;
+  title: string;
+  level: number;
+  status: string;
+  summary: string | null;
+  summary_generated_at: string | null;
+  order_index: number;
+}
+
+export interface BookSummariesResponse {
+  course_id: string;
+  title: string;
+  book_authors: string[] | null;
+  chapters: BookSummaryChapter[];
 }

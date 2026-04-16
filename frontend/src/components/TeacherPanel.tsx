@@ -199,8 +199,8 @@ export default function TeacherPanel() {
 
         try {
             const response = await sendTeacherChat(view.course.id, view.unit.id, msg);
-            setMessages((prev) => [...prev.filter((m) => m.id !== tempId), 
-                { id: tempId, role: 'user', content: msg, metadata: null, created_at: new Date().toISOString() },
+            setMessages((prev) => [...prev.filter((m) => m.id !== tempId),
+            { id: tempId, role: 'user', content: msg, metadata: null, created_at: new Date().toISOString() },
                 response
             ]);
         } catch {
@@ -492,11 +492,10 @@ export default function TeacherPanel() {
                                                     <div className="flex items-start justify-between gap-3">
                                                         <div className="flex-1 min-w-0">
                                                             <div className="flex items-center gap-2 mb-1">
-                                                                <span className={`px-2 py-0.5 text-[10px] font-medium rounded-full ${
-                                                                    course.status === 'active'
+                                                                <span className={`px-2 py-0.5 text-[10px] font-medium rounded-full ${course.status === 'active'
                                                                         ? 'bg-teal-600/20 text-teal-400'
                                                                         : 'bg-dark-700 text-dark-400'
-                                                                }`}>
+                                                                    }`}>
                                                                     {course.status === 'active' ? 'Aktiv' : 'Entwurf'}
                                                                 </span>
                                                                 {course.parent_course_id && (
@@ -672,9 +671,8 @@ export default function TeacherPanel() {
                                     <button
                                         key={unit.id}
                                         onClick={() => toggleUnit(unit.id)}
-                                        className={`w-full flex items-start gap-2 py-2 text-sm rounded-lg px-2 transition-colors hover:bg-dark-700/50 ${
-                                            !enabled ? 'opacity-40' : ''
-                                        }`}
+                                        className={`w-full flex items-start gap-2 py-2 text-sm rounded-lg px-2 transition-colors hover:bg-dark-700/50 ${!enabled ? 'opacity-40' : ''
+                                            }`}
                                         style={{ paddingLeft: `${(unit.level - 1) * 20 + 8}px` }}
                                     >
                                         {enabled ? (
@@ -785,11 +783,10 @@ export default function TeacherPanel() {
                                 </div>
                             ) : (
                                 <div
-                                    className={`max-w-[85%] sm:max-w-[75%] px-4 py-3 rounded-2xl text-sm ${
-                                        msg.role === 'user'
+                                    className={`max-w-[85%] sm:max-w-[75%] px-4 py-3 rounded-2xl text-sm ${msg.role === 'user'
                                             ? 'bg-teal-600 text-white rounded-br-md'
                                             : 'bg-dark-800 border border-dark-700 text-dark-200 rounded-bl-md'
-                                    }`}
+                                        }`}
                                 >
                                     {msg.role === 'assistant' ? (
                                         (() => {

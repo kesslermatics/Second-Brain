@@ -156,3 +156,16 @@ async def init_db():
                 )
         except Exception:
             pass
+        # Ensure chapter summary columns exist on course_units table
+        try:
+            for col, dtype in [
+                ("summary", "TEXT"),
+                ("summary_generated_at", "TIMESTAMPTZ"),
+            ]:
+                await conn.execute(
+                    __import__('sqlalchemy').text(
+                        f"ALTER TABLE course_units ADD COLUMN IF NOT EXISTS {col} {dtype}"
+                    )
+                )
+        except Exception:
+            pass

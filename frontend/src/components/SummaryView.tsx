@@ -92,8 +92,8 @@ export default function SummaryView() {
                             <button
                                 onClick={() => setScope('all')}
                                 className={`flex flex-col items-center gap-2 p-4 border rounded-xl transition-colors ${scope === 'all'
-                                        ? 'bg-brain-600/10 border-brain-500/40 text-brain-400'
-                                        : 'bg-dark-800 border-dark-700 text-dark-300 hover:border-dark-600'
+                                    ? 'bg-brain-600/10 border-brain-500/40 text-brain-400'
+                                    : 'bg-dark-800 border-dark-700 text-dark-300 hover:border-dark-600'
                                     }`}
                             >
                                 <FiGlobe className="w-5 h-5" />
@@ -102,8 +102,8 @@ export default function SummaryView() {
                             <button
                                 onClick={() => setScope('folder')}
                                 className={`flex flex-col items-center gap-2 p-4 border rounded-xl transition-colors ${scope === 'folder'
-                                        ? 'bg-brain-600/10 border-brain-500/40 text-brain-400'
-                                        : 'bg-dark-800 border-dark-700 text-dark-300 hover:border-dark-600'
+                                    ? 'bg-brain-600/10 border-brain-500/40 text-brain-400'
+                                    : 'bg-dark-800 border-dark-700 text-dark-300 hover:border-dark-600'
                                     }`}
                             >
                                 <FiFolder className="w-5 h-5" />
@@ -112,8 +112,8 @@ export default function SummaryView() {
                             <button
                                 onClick={() => setScope('tag')}
                                 className={`flex flex-col items-center gap-2 p-4 border rounded-xl transition-colors ${scope === 'tag'
-                                        ? 'bg-brain-600/10 border-brain-500/40 text-brain-400'
-                                        : 'bg-dark-800 border-dark-700 text-dark-300 hover:border-dark-600'
+                                    ? 'bg-brain-600/10 border-brain-500/40 text-brain-400'
+                                    : 'bg-dark-800 border-dark-700 text-dark-300 hover:border-dark-600'
                                     }`}
                             >
                                 <FiTag className="w-5 h-5" />

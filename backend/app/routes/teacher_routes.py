@@ -2,11 +2,13 @@
 
 import random
 import uuid
+import asyncio
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
-from app.database import get_db
+from app.database import get_db, async_session
 from app.auth import get_current_user
 from app.models import User, Tag, Course, CourseUnit, CourseMessage
 from app.services.teacher_service import (
@@ -20,6 +22,7 @@ from app.services.teacher_service import (
     generate_book_chapter_notes,
     generate_book_term_note,
 )
+from app.services.book_service import generate_chapter_summary
 
 router = APIRouter(prefix="/teacher", tags=["teacher"])
 
@@ -164,6 +167,8 @@ async def get_course(
                 "enabled": u.enabled,
                 "status": u.status,
                 "order_index": u.order_index,
+                "summary": u.summary,
+                "summary_generated_at": u.summary_generated_at.isoformat() if u.summary_generated_at else None,
             }
             for u in sorted(course.units, key=lambda x: x.order_index)
         ],
@@ -355,6 +360,17 @@ async def update_unit(
         unit.status = data["status"]
 
     await db.commit()
+
+    # Auto-generate chapter summary when a book chapter is completed
+    if data.get("status") == "completed":
+        # Check if this is a book course
+        course_result = await db.execute(
+            select(Course).where(Course.id == course_id)
+        )
+        course = course_result.scalars().first()
+        if course and (course.kind or "teacher") == "book" and not unit.summary:
+            asyncio.create_task(_auto_generate_summary(course_id, unit_id))
+
     return {"ok": True, "status": unit.status, "enabled": unit.enabled}
 
 
@@ -697,6 +713,53 @@ async def unit_generate_term_note(
     }
 
 
+# ── Auto Summary Generation (background task) ────────────────────────
+
+async def _auto_generate_summary(course_id: str, unit_id: str):
+    """Background task to auto-generate a chapter summary after completion."""
+    try:
+        async with async_session() as db:
+            course_result = await db.execute(
+                select(Course)
+                .options(selectinload(Course.units))
+                .where(Course.id == course_id)
+            )
+            course = course_result.scalars().first()
+            if not course:
+                return
+
+            unit = None
+            for u in course.units:
+                if str(u.id) == unit_id:
+                    unit = u
+                    break
+            if not unit:
+                return
+
+            # Get chat history
+            msg_result = await db.execute(
+                select(CourseMessage)
+                .where(CourseMessage.course_id == course_id, CourseMessage.unit_id == unit_id)
+                .order_by(CourseMessage.created_at)
+            )
+            messages = msg_result.scalars().all()
+            chat_history = [{"role": m.role, "content": m.content} for m in messages] if messages else None
+
+            summary_text = await generate_chapter_summary(
+                book_title=course.title,
+                authors=course.book_authors or [],
+                chapter_number=unit.unit_number,
+                chapter_title=unit.title,
+                chat_history=chat_history,
+            )
+
+            unit.summary = summary_text
+            unit.summary_generated_at = datetime.now(timezone.utc)
+            await db.commit()
+    except Exception:
+        pass  # Silently fail — user can regenerate manually
+
+
 # ── AI Edit ───────────────────────────────────────────────────────────
 
 @router.post("/ai-edit-content")
@@ -750,3 +813,98 @@ async def course_generate_focus(
     )
 
     return {"suggestions": suggestions}
+
+
+# ── Book Chapter Summaries ────────────────────────────────────────────
+
+@router.get("/courses/{course_id}/summaries")
+async def get_book_summaries(
+    course_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get all chapter summaries for a book course."""
+    result = await db.execute(
+        select(Course)
+        .options(selectinload(Course.units))
+        .where(Course.id == course_id, Course.user_id == current_user.id)
+    )
+    course = result.scalars().first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    return {
+        "course_id": str(course.id),
+        "title": course.title,
+        "book_authors": course.book_authors,
+        "chapters": [
+            {
+                "id": str(u.id),
+                "unit_number": u.unit_number,
+                "title": u.title,
+                "level": u.level,
+                "status": u.status,
+                "summary": u.summary,
+                "summary_generated_at": u.summary_generated_at.isoformat() if u.summary_generated_at else None,
+                "order_index": u.order_index,
+            }
+            for u in sorted(course.units, key=lambda x: x.order_index)
+            if u.enabled
+        ],
+    }
+
+
+@router.post("/courses/{course_id}/units/{unit_id}/generate-summary")
+async def unit_generate_summary(
+    course_id: str,
+    unit_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Generate (or regenerate) a chapter summary for a book unit."""
+    # Load course + unit
+    result = await db.execute(
+        select(Course)
+        .options(selectinload(Course.units))
+        .where(Course.id == course_id, Course.user_id == current_user.id)
+    )
+    course = result.scalars().first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    unit = None
+    for u in course.units:
+        if str(u.id) == unit_id:
+            unit = u
+            break
+    if not unit:
+        raise HTTPException(status_code=404, detail="Unit not found")
+
+    # Get chat history for this unit (if any)
+    msg_result = await db.execute(
+        select(CourseMessage)
+        .where(CourseMessage.course_id == course_id, CourseMessage.unit_id == unit_id)
+        .order_by(CourseMessage.created_at)
+    )
+    messages = msg_result.scalars().all()
+    chat_history = [{"role": m.role, "content": m.content} for m in messages] if messages else None
+
+    # Generate summary
+    summary_text = await generate_chapter_summary(
+        book_title=course.title,
+        authors=course.book_authors or [],
+        chapter_number=unit.unit_number,
+        chapter_title=unit.title,
+        chat_history=chat_history,
+    )
+
+    # Save to unit
+    unit.summary = summary_text
+    unit.summary_generated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    return {
+        "unit_id": str(unit.id),
+        "summary": summary_text,
+        "summary_generated_at": unit.summary_generated_at.isoformat(),
+    }

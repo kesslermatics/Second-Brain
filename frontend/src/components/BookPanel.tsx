@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import {
     FiCheck, FiX, FiChevronRight, FiSearch, FiSquare, FiCheckSquare,
     FiSend, FiTrash2, FiArrowLeft, FiBook,
-    FiChevronDown, FiChevronUp, FiBookOpen,
+    FiChevronDown, FiChevronUp, FiBookOpen, FiRefreshCw, FiFileText,
 } from 'react-icons/fi';
 import { LuBrain } from 'react-icons/lu';
 import ReactMarkdown from 'react-markdown';
@@ -17,11 +17,12 @@ import {
     getUnitMessages, sendTeacherChat,
     generateLessonNotes, generateTermNote,
     ensureFolderPath, createNote,
+    getBookSummaries, generateChapterSummary,
 } from '@/lib/api';
 import type {
     BookSearchResult, BookChapter,
     CourseListItem, CourseDetail, CourseUnit, CourseMessage,
-    CourseNoteResult,
+    CourseNoteResult, BookSummaryChapter,
 } from '@/lib/types';
 
 type View =
@@ -31,7 +32,8 @@ type View =
     | { kind: 'confirm-toc'; bookInfo: BookSearchResult; chapters: BookChapter[] }
     | { kind: 'lesson-chat'; course: CourseDetail; unit: CourseUnit }
     | { kind: 'note-review'; course: CourseDetail; unit: CourseUnit; notes: CourseNoteResult[]; currentIdx: number }
-    | { kind: 'book-completed'; course: CourseDetail };
+    | { kind: 'book-completed'; course: CourseDetail }
+    | { kind: 'book-summaries'; courseId: string; title: string; authors: string[] };
 
 export default function BookPanel() {
     // ── State ────────────────────────────────────────────────────────
@@ -60,6 +62,12 @@ export default function BookPanel() {
     // Term note
     const [termInput, setTermInput] = useState('');
     const [generatingTerm, setGeneratingTerm] = useState(false);
+
+    // Summaries
+    const [summaryChapters, setSummaryChapters] = useState<BookSummaryChapter[]>([]);
+    const [loadingSummaries, setLoadingSummaries] = useState(false);
+    const [expandedChapters, setExpandedChapters] = useState<Record<string, boolean>>({});
+    const [generatingSummaryFor, setGeneratingSummaryFor] = useState<string | null>(null);
 
     const chatEndRef = useRef<HTMLDivElement>(null);
     const chatInputRef = useRef<HTMLTextAreaElement>(null);
@@ -221,7 +229,7 @@ export default function BookPanel() {
         try {
             const response = await sendTeacherChat(view.course.id, view.unit.id, msg);
             setMessages((prev) => [...prev.filter((m) => m.id !== tempId),
-                { id: tempId, role: 'user', content: msg, metadata: null, created_at: new Date().toISOString() },
+            { id: tempId, role: 'user', content: msg, metadata: null, created_at: new Date().toISOString() },
                 response
             ]);
         } catch {
@@ -389,6 +397,64 @@ export default function BookPanel() {
         }
     };
 
+    // ── Open book summaries ──────────────────────────────────────────
+    const handleOpenSummaries = async (course: CourseListItem) => {
+        setView({
+            kind: 'book-summaries',
+            courseId: course.id,
+            title: course.title,
+            authors: course.book_authors || [],
+        });
+        setLoadingSummaries(true);
+        setSummaryChapters([]);
+        setExpandedChapters({});
+        setError(null);
+        try {
+            const data = await getBookSummaries(course.id);
+            setSummaryChapters(data.chapters);
+            // Auto-expand first chapter that has a summary
+            const firstWithSummary = data.chapters.find(ch => ch.summary);
+            if (firstWithSummary) {
+                setExpandedChapters({ [firstWithSummary.id]: true });
+            }
+        } catch {
+            setError('Fehler beim Laden der Zusammenfassungen.');
+        } finally {
+            setLoadingSummaries(false);
+        }
+    };
+
+    const handleGenerateSummary = async (courseId: string, unitId: string) => {
+        setGeneratingSummaryFor(unitId);
+        setError(null);
+        try {
+            const result = await generateChapterSummary(courseId, unitId);
+            setSummaryChapters(prev =>
+                prev.map(ch =>
+                    ch.id === unitId
+                        ? { ...ch, summary: result.summary, summary_generated_at: result.summary_generated_at }
+                        : ch
+                )
+            );
+            setExpandedChapters(prev => ({ ...prev, [unitId]: true }));
+        } catch {
+            setError('Fehler beim Generieren der Zusammenfassung.');
+        } finally {
+            setGeneratingSummaryFor(null);
+        }
+    };
+
+    const handleGenerateAllSummaries = async (courseId: string) => {
+        const missing = summaryChapters.filter(ch => !ch.summary && (ch.status === 'completed' || ch.status === 'active'));
+        for (const ch of missing) {
+            await handleGenerateSummary(courseId, ch.id);
+        }
+    };
+
+    const toggleSummaryChapter = (unitId: string) => {
+        setExpandedChapters(prev => ({ ...prev, [unitId]: !prev[unitId] }));
+    };
+
     // ── Chapter checkbox helpers ─────────────────────────────────────
     const toggleChapter = (chapterNumber: string) => {
         setEnabledChapters((prev) => ({
@@ -521,6 +587,13 @@ export default function BookPanel() {
                                                 </div>
                                                 <div className="flex items-center gap-1.5">
                                                     <button
+                                                        onClick={() => handleOpenSummaries(course)}
+                                                        className="px-3 py-1.5 bg-dark-700 hover:bg-dark-600 text-dark-300 text-xs font-medium rounded-lg transition-colors"
+                                                        title="Kapitel-Zusammenfassungen"
+                                                    >
+                                                        <FiFileText className="w-3.5 h-3.5" />
+                                                    </button>
+                                                    <button
                                                         onClick={() => handleResumeCourse(course.id)}
                                                         className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-medium rounded-lg transition-colors"
                                                     >
@@ -566,12 +639,20 @@ export default function BookPanel() {
                                                             </p>
                                                         </div>
                                                     </div>
-                                                    <button
-                                                        onClick={() => handleDeleteCourse(course.id)}
-                                                        className="p-1.5 text-dark-600 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
-                                                    >
-                                                        <FiTrash2 className="w-3.5 h-3.5" />
-                                                    </button>
+                                                    <div className="flex items-center gap-1.5">
+                                                        <button
+                                                            onClick={() => handleOpenSummaries(course)}
+                                                            className="px-3 py-1.5 bg-dark-700 hover:bg-dark-600 text-dark-300 text-xs font-medium rounded-lg transition-colors"
+                                                        >
+                                                            <FiFileText className="w-3.5 h-3.5" />
+                                                        </button>
+                                                        <button
+                                                            onClick={() => handleDeleteCourse(course.id)}
+                                                            className="p-1.5 text-dark-600 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
+                                                        >
+                                                            <FiTrash2 className="w-3.5 h-3.5" />
+                                                        </button>
+                                                    </div>
                                                 </div>
                                             </div>
                                         ))}
@@ -737,9 +818,8 @@ export default function BookPanel() {
                                     <button
                                         key={i}
                                         onClick={() => toggleChapter(ch.chapter_number)}
-                                        className={`w-full flex items-center gap-2 py-2 text-sm rounded-lg px-2 transition-colors hover:bg-dark-700/50 ${
-                                            !enabled ? 'opacity-40' : ''
-                                        }`}
+                                        className={`w-full flex items-center gap-2 py-2 text-sm rounded-lg px-2 transition-colors hover:bg-dark-700/50 ${!enabled ? 'opacity-40' : ''
+                                            }`}
                                         style={{ paddingLeft: `${(ch.level - 1) * 20 + 8}px` }}
                                     >
                                         {enabled ? (
@@ -750,10 +830,9 @@ export default function BookPanel() {
                                         <span className="text-dark-500 font-mono text-xs w-10 flex-shrink-0 text-left">
                                             {ch.chapter_number}
                                         </span>
-                                        <span className={`text-left ${
-                                            ch.level === 1 ? 'text-white font-semibold' :
-                                            ch.level === 2 ? 'text-dark-300' : 'text-dark-500'
-                                        }`}>
+                                        <span className={`text-left ${ch.level === 1 ? 'text-white font-semibold' :
+                                                ch.level === 2 ? 'text-dark-300' : 'text-dark-500'
+                                            }`}>
                                             {ch.title}
                                         </span>
                                     </button>
@@ -850,11 +929,10 @@ export default function BookPanel() {
                                 </div>
                             ) : (
                                 <div
-                                    className={`max-w-[85%] sm:max-w-[75%] px-4 py-3 rounded-2xl text-sm ${
-                                        msg.role === 'user'
+                                    className={`max-w-[85%] sm:max-w-[75%] px-4 py-3 rounded-2xl text-sm ${msg.role === 'user'
                                             ? 'bg-amber-600 text-white rounded-br-md'
                                             : 'bg-dark-800 border border-dark-700 text-dark-200 rounded-bl-md'
-                                    }`}
+                                        }`}
                                 >
                                     {msg.role === 'assistant' ? (
                                         (() => {
@@ -1061,12 +1139,192 @@ export default function BookPanel() {
                         {completedCount} von {totalUnits} Kapiteln abgeschlossen
                     </p>
 
-                    <button
-                        onClick={() => { setView({ kind: 'books' }); loadCourses(); }}
-                        className="px-6 py-2.5 bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium rounded-xl transition-colors"
-                    >
-                        Zurück zur Übersicht
-                    </button>
+                    <div className="flex gap-2 justify-center">
+                        <button
+                            onClick={() => {
+                                const listItem: CourseListItem = {
+                                    id: course.id,
+                                    topic: course.topic,
+                                    title: course.title,
+                                    description: course.description,
+                                    status: course.status,
+                                    kind: course.kind,
+                                    parent_course_id: course.parent_course_id,
+                                    book_authors: course.book_authors,
+                                    book_year: course.book_year,
+                                    book_isbn: course.book_isbn,
+                                    book_publisher: course.book_publisher,
+                                    total_units: course.units.length,
+                                    completed_units: completedCount,
+                                    enabled_units: totalUnits,
+                                    created_at: course.created_at,
+                                    updated_at: course.updated_at,
+                                };
+                                handleOpenSummaries(listItem);
+                            }}
+                            className="px-6 py-2.5 bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium rounded-xl transition-colors flex items-center gap-2"
+                        >
+                            <FiFileText className="w-4 h-4" />
+                            Zusammenfassungen
+                        </button>
+                        <button
+                            onClick={() => { setView({ kind: 'books' }); loadCourses(); }}
+                            className="px-6 py-2.5 bg-dark-700 hover:bg-dark-600 text-dark-300 text-sm font-medium rounded-xl transition-colors"
+                        >
+                            Zur Übersicht
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
+    // ── Render: Book Summaries ───────────────────────────────────────
+    const renderBookSummaries = () => {
+        if (view.kind !== 'book-summaries') return null;
+        const { courseId, title, authors } = view;
+        const completedOrActive = summaryChapters.filter(ch => ch.status === 'completed' || ch.status === 'active');
+        const missingCount = completedOrActive.filter(ch => !ch.summary).length;
+
+        return (
+            <div className="h-full flex flex-col">
+                {/* Header */}
+                <div className="px-4 py-3 border-b border-dark-800 bg-dark-900/50">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3 min-w-0">
+                            <button
+                                onClick={() => { setView({ kind: 'books' }); loadCourses(); }}
+                                className="p-1.5 hover:bg-dark-800 rounded-lg text-dark-500 hover:text-white transition-colors flex-shrink-0"
+                            >
+                                <FiArrowLeft className="w-4 h-4" />
+                            </button>
+                            <div className="min-w-0">
+                                <h3 className="text-sm font-semibold text-white truncate">{title}</h3>
+                                {authors.length > 0 && (
+                                    <p className="text-[10px] text-dark-500 truncate">{authors.join(', ')}</p>
+                                )}
+                            </div>
+                        </div>
+                        {missingCount > 0 && (
+                            <button
+                                onClick={() => handleGenerateAllSummaries(courseId)}
+                                disabled={generatingSummaryFor !== null}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600/20 text-amber-400 hover:bg-amber-600/30 text-xs font-medium rounded-lg transition-colors disabled:opacity-40"
+                            >
+                                <FiRefreshCw className={`w-3.5 h-3.5 ${generatingSummaryFor ? 'animate-spin' : ''}`} />
+                                Alle generieren ({missingCount})
+                            </button>
+                        )}
+                    </div>
+                </div>
+
+                {/* Content */}
+                <div className="flex-1 overflow-y-auto">
+                    {loadingSummaries ? (
+                        <div className="flex items-center justify-center py-12">
+                            <div className="w-8 h-8 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+                        </div>
+                    ) : summaryChapters.length === 0 ? (
+                        <div className="text-center py-12">
+                            <p className="text-sm text-dark-500">Keine Kapitel gefunden.</p>
+                        </div>
+                    ) : (
+                        <div className="divide-y divide-dark-800">
+                            {summaryChapters.map((ch) => {
+                                const isExpanded = expandedChapters[ch.id];
+                                const isGenerating = generatingSummaryFor === ch.id;
+                                const hasSummary = !!ch.summary;
+                                const isCompleted = ch.status === 'completed';
+                                const isActive = ch.status === 'active';
+                                const canGenerate = isCompleted || isActive;
+
+                                return (
+                                    <div key={ch.id} className="group">
+                                        {/* Chapter row */}
+                                        <button
+                                            onClick={() => hasSummary ? toggleSummaryChapter(ch.id) : canGenerate ? handleGenerateSummary(courseId, ch.id) : undefined}
+                                            disabled={!hasSummary && !canGenerate}
+                                            className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors ${
+                                                hasSummary ? 'hover:bg-dark-800/50 cursor-pointer' :
+                                                canGenerate ? 'hover:bg-dark-800/50 cursor-pointer' :
+                                                'opacity-40 cursor-default'
+                                            }`}
+                                            style={{ paddingLeft: `${(ch.level - 1) * 16 + 16}px` }}
+                                        >
+                                            {/* Expand/collapse indicator */}
+                                            <div className="w-4 h-4 flex-shrink-0 flex items-center justify-center">
+                                                {isGenerating ? (
+                                                    <div className="w-3.5 h-3.5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
+                                                ) : hasSummary ? (
+                                                    isExpanded ?
+                                                        <FiChevronDown className="w-3.5 h-3.5 text-amber-400" /> :
+                                                        <FiChevronRight className="w-3.5 h-3.5 text-dark-500" />
+                                                ) : canGenerate ? (
+                                                    <FiRefreshCw className="w-3.5 h-3.5 text-dark-600 group-hover:text-amber-400 transition-colors" />
+                                                ) : (
+                                                    <div className="w-1.5 h-1.5 rounded-full bg-dark-700" />
+                                                )}
+                                            </div>
+
+                                            {/* Status indicator */}
+                                            <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                                                isCompleted ? 'bg-green-500' :
+                                                isActive ? 'bg-amber-400' :
+                                                'bg-dark-700'
+                                            }`} />
+
+                                            {/* Chapter info */}
+                                            <span className="text-dark-500 font-mono text-[10px] w-8 flex-shrink-0">{ch.unit_number}</span>
+                                            <span className={`text-sm flex-1 min-w-0 truncate ${
+                                                ch.level === 1 ? 'font-semibold text-white' :
+                                                ch.level === 2 ? 'text-dark-300' : 'text-dark-500'
+                                            }`}>
+                                                {ch.title}
+                                            </span>
+
+                                            {/* Summary badge */}
+                                            {hasSummary && (
+                                                <span className="text-[9px] text-dark-600 flex-shrink-0">
+                                                    {ch.summary_generated_at ? new Date(ch.summary_generated_at).toLocaleDateString('de-DE') : ''}
+                                                </span>
+                                            )}
+                                            {!hasSummary && canGenerate && !isGenerating && (
+                                                <span className="text-[9px] text-dark-600 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                                                    Generieren
+                                                </span>
+                                            )}
+                                        </button>
+
+                                        {/* Expanded summary content */}
+                                        {isExpanded && hasSummary && (
+                                            <div className="bg-dark-800/30 border-t border-dark-800">
+                                                <div className="px-6 py-5 max-w-3xl mx-auto">
+                                                    <div className="markdown-content text-sm leading-relaxed">
+                                                        <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
+                                                            {ch.summary!}
+                                                        </ReactMarkdown>
+                                                    </div>
+                                                    <div className="flex items-center gap-2 mt-4 pt-3 border-t border-dark-800">
+                                                        <button
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                handleGenerateSummary(courseId, ch.id);
+                                                            }}
+                                                            disabled={isGenerating}
+                                                            className="flex items-center gap-1.5 px-3 py-1.5 bg-dark-700 hover:bg-dark-600 text-dark-400 text-xs rounded-lg transition-colors disabled:opacity-40"
+                                                        >
+                                                            <FiRefreshCw className={`w-3 h-3 ${isGenerating ? 'animate-spin' : ''}`} />
+                                                            Neu generieren
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
                 </div>
             </div>
         );
@@ -1103,6 +1361,7 @@ export default function BookPanel() {
                 {view.kind === 'lesson-chat' && renderLessonChat()}
                 {view.kind === 'note-review' && renderNoteReview()}
                 {view.kind === 'book-completed' && renderBookCompleted()}
+                {view.kind === 'book-summaries' && renderBookSummaries()}
             </div>
         </div>
     );

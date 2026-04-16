@@ -15,22 +15,20 @@ export default function ChatView() {
             <div className="flex lg:hidden border-b border-dark-800 bg-dark-900/50">
                 <button
                     onClick={() => setMobileTab('notes')}
-                    className={`flex-1 flex items-center justify-center gap-2 py-3 text-sm font-medium transition-colors ${
-                        mobileTab === 'notes'
+                    className={`flex-1 flex items-center justify-center gap-2 py-3 text-sm font-medium transition-colors ${mobileTab === 'notes'
                             ? 'text-brain-400 border-b-2 border-brain-400'
                             : 'text-dark-500 hover:text-dark-300'
-                    }`}
+                        }`}
                 >
                     <FiEdit3 className="w-4 h-4" />
                     Notizen
                 </button>
                 <button
                     onClick={() => setMobileTab('qa')}
-                    className={`flex-1 flex items-center justify-center gap-2 py-3 text-sm font-medium transition-colors ${
-                        mobileTab === 'qa'
+                    className={`flex-1 flex items-center justify-center gap-2 py-3 text-sm font-medium transition-colors ${mobileTab === 'qa'
                             ? 'text-green-400 border-b-2 border-green-400'
                             : 'text-dark-500 hover:text-dark-300'
-                    }`}
+                        }`}
                 >
                     <FiHelpCircle className="w-4 h-4" />
                     Fragen

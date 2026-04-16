@@ -7,6 +7,7 @@ import type {
   ExportRequest, ImageItem, ImageListResponse,
   BookSearchResult, BookTocResult, BookChapter, BookChapterNoteResult,
   CourseListItem, CourseDetail, CourseMessage as CourseMsg, CourseNoteResult, AdvancedFocusSuggestion,
+  BookSummariesResponse,
 } from './types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -498,6 +499,18 @@ export const createBookCourse = async (
     publisher: bookInfo.publisher,
     chapters,
   });
+  return data;
+};
+
+export const getBookSummaries = async (courseId: string) => {
+  const { data } = await api.get<BookSummariesResponse>(`/teacher/courses/${courseId}/summaries`);
+  return data;
+};
+
+export const generateChapterSummary = async (courseId: string, unitId: string) => {
+  const { data } = await api.post<{ unit_id: string; summary: string; summary_generated_at: string }>(
+    `/teacher/courses/${courseId}/units/${unitId}/generate-summary`
+  );
   return data;
 };
 

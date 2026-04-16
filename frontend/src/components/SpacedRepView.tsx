@@ -150,7 +150,7 @@ export default function SpacedRepView() {
                             <div className="animate-spin w-8 h-8 border-2 border-green-500 border-t-transparent rounded-full mx-auto" />
                         ) : (
                             <>
-                <div className="grid grid-cols-3 gap-4 mb-8">
+                                <div className="grid grid-cols-3 gap-4 mb-8">
                                     <div className="bg-dark-800 rounded-xl p-4 border border-dark-700">
                                         <FiClock className="w-6 h-6 text-orange-400 mx-auto mb-2" />
                                         <p className="text-2xl font-bold text-white">{session?.total_due || 0}</p>

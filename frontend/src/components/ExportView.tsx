@@ -63,9 +63,9 @@ export default function ExportView() {
                     onClick={() => toggleFolder(folder.id)}
                     disabled={exportAll}
                     className={`w-full flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors ${exportAll ? 'opacity-50 cursor-not-allowed' :
-                            selectedFolders.has(folder.id)
-                                ? 'bg-brain-600/20 text-brain-400'
-                                : 'text-dark-300 hover:bg-dark-700'
+                        selectedFolders.has(folder.id)
+                            ? 'bg-brain-600/20 text-brain-400'
+                            : 'text-dark-300 hover:bg-dark-700'
                         }`}
                     style={{ paddingLeft: `${level * 20 + 12}px` }}
                 >
@@ -147,8 +147,8 @@ export default function ExportView() {
                             <button
                                 onClick={() => setFormat('markdown')}
                                 className={`flex-1 flex items-center gap-3 p-4 border rounded-xl transition-colors ${format === 'markdown'
-                                        ? 'bg-brain-600/10 border-brain-500/40 text-brain-400'
-                                        : 'bg-dark-800 border-dark-700 text-dark-300 hover:border-dark-600'
+                                    ? 'bg-brain-600/10 border-brain-500/40 text-brain-400'
+                                    : 'bg-dark-800 border-dark-700 text-dark-300 hover:border-dark-600'
                                     }`}
                             >
                                 <FiFile className="w-5 h-5" />
@@ -160,8 +160,8 @@ export default function ExportView() {
                             <button
                                 onClick={() => setFormat('json')}
                                 className={`flex-1 flex items-center gap-3 p-4 border rounded-xl transition-colors ${format === 'json'
-                                        ? 'bg-brain-600/10 border-brain-500/40 text-brain-400'
-                                        : 'bg-dark-800 border-dark-700 text-dark-300 hover:border-dark-600'
+                                    ? 'bg-brain-600/10 border-brain-500/40 text-brain-400'
+                                    : 'bg-dark-800 border-dark-700 text-dark-300 hover:border-dark-600'
                                     }`}
                             >
                                 <FiFile className="w-5 h-5" />

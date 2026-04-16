@@ -279,6 +279,8 @@ class CourseUnit(Base):
     enabled = Column(Boolean, nullable=False, default=True)
     status = Column(String(50), nullable=False, default="pending")  # pending / active / completed / skipped
     order_index = Column(Integer, nullable=False, default=0)
+    summary = Column(Text, nullable=True)  # AI-generated chapter summary
+    summary_generated_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     course = relationship("Course", back_populates="units")
