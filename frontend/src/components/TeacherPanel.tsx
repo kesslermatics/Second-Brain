@@ -474,81 +474,133 @@ export default function TeacherPanel() {
                         </p>
                     </div>
                 ) : (
-                    <div className="max-w-2xl mx-auto space-y-3">
-                        {courses.map((course) => (
-                            <div
-                                key={course.id}
-                                className="bg-dark-800 border border-dark-700 rounded-xl p-4 hover:border-dark-600 transition-colors group"
-                            >
-                                <div className="flex items-start justify-between gap-3">
-                                    <div className="flex-1 min-w-0">
-                                        <div className="flex items-center gap-2 mb-1">
-                                            <span className={`px-2 py-0.5 text-[10px] font-medium rounded-full ${
-                                                course.status === 'active'
-                                                    ? 'bg-teal-600/20 text-teal-400'
-                                                    : course.status === 'completed'
-                                                    ? 'bg-green-600/20 text-green-400'
-                                                    : 'bg-dark-700 text-dark-400'
-                                            }`}>
-                                                {course.status === 'active' ? 'Aktiv' : course.status === 'completed' ? 'Abgeschlossen' : 'Entwurf'}
-                                            </span>
-                                            {course.parent_course_id && (
-                                                <span className="px-2 py-0.5 text-[10px] font-medium rounded-full bg-purple-600/20 text-purple-400">
-                                                    Vertiefung
-                                                </span>
-                                            )}
-                                        </div>
-                                        <h4 className="text-sm font-semibold text-white truncate">{course.title}</h4>
-                                        <p className="text-xs text-dark-500 mt-0.5 line-clamp-2">{course.description}</p>
-                                        {course.total_units > 0 && (
-                                            <div className="flex items-center gap-2 mt-2">
-                                                <div className="flex-1 h-1.5 bg-dark-700 rounded-full overflow-hidden">
-                                                    <div
-                                                        className="h-full bg-teal-500 rounded-full transition-all"
-                                                        style={{ width: `${Math.round((course.completed_units / course.enabled_units) * 100)}%` }}
-                                                    />
+                    <div className="max-w-2xl mx-auto space-y-6">
+                        {/* Active & Draft courses */}
+                        {(() => {
+                            const activeDraft = courses.filter(c => c.status !== 'completed');
+                            const completed = courses.filter(c => c.status === 'completed');
+
+                            return (
+                                <>
+                                    {activeDraft.length > 0 && (
+                                        <div className="space-y-3">
+                                            {activeDraft.map((course) => (
+                                                <div
+                                                    key={course.id}
+                                                    className="bg-dark-800 border border-dark-700 rounded-xl p-4 hover:border-dark-600 transition-colors group"
+                                                >
+                                                    <div className="flex items-start justify-between gap-3">
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="flex items-center gap-2 mb-1">
+                                                                <span className={`px-2 py-0.5 text-[10px] font-medium rounded-full ${
+                                                                    course.status === 'active'
+                                                                        ? 'bg-teal-600/20 text-teal-400'
+                                                                        : 'bg-dark-700 text-dark-400'
+                                                                }`}>
+                                                                    {course.status === 'active' ? 'Aktiv' : 'Entwurf'}
+                                                                </span>
+                                                                {course.parent_course_id && (
+                                                                    <span className="px-2 py-0.5 text-[10px] font-medium rounded-full bg-purple-600/20 text-purple-400">
+                                                                        Vertiefung
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                            <h4 className="text-sm font-semibold text-white truncate">{course.title}</h4>
+                                                            <p className="text-xs text-dark-500 mt-0.5 line-clamp-2">{course.description}</p>
+                                                            {course.total_units > 0 && (
+                                                                <div className="flex items-center gap-2 mt-2">
+                                                                    <div className="flex-1 h-1.5 bg-dark-700 rounded-full overflow-hidden">
+                                                                        <div
+                                                                            className="h-full bg-teal-500 rounded-full transition-all"
+                                                                            style={{ width: `${Math.round((course.completed_units / course.enabled_units) * 100)}%` }}
+                                                                        />
+                                                                    </div>
+                                                                    <span className="text-[10px] text-dark-500">
+                                                                        {course.completed_units}/{course.enabled_units}
+                                                                    </span>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                        <div className="flex items-center gap-1.5">
+                                                            {course.status === 'active' && (
+                                                                <button
+                                                                    onClick={() => handleResumeCourse(course.id)}
+                                                                    className="px-3 py-1.5 bg-teal-600 hover:bg-teal-500 text-white text-xs font-medium rounded-lg transition-colors"
+                                                                >
+                                                                    Fortsetzen
+                                                                </button>
+                                                            )}
+                                                            {course.status === 'draft' && (
+                                                                <button
+                                                                    onClick={() => handleResumeCourse(course.id)}
+                                                                    className="px-3 py-1.5 bg-dark-700 hover:bg-dark-600 text-white text-xs font-medium rounded-lg transition-colors"
+                                                                >
+                                                                    Öffnen
+                                                                </button>
+                                                            )}
+                                                            <button
+                                                                onClick={() => handleDeleteCourse(course.id)}
+                                                                className="p-1.5 text-dark-600 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
+                                                            >
+                                                                <FiTrash2 className="w-3.5 h-3.5" />
+                                                            </button>
+                                                        </div>
+                                                    </div>
                                                 </div>
-                                                <span className="text-[10px] text-dark-500">
-                                                    {course.completed_units}/{course.enabled_units}
-                                                </span>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    {/* Completed courses */}
+                                    {completed.length > 0 && (
+                                        <div>
+                                            {activeDraft.length > 0 && (
+                                                <div className="flex items-center gap-3 mb-3">
+                                                    <div className="h-px flex-1 bg-dark-700" />
+                                                    <span className="text-[10px] text-dark-500 font-medium uppercase tracking-wider">Abgeschlossen</span>
+                                                    <div className="h-px flex-1 bg-dark-700" />
+                                                </div>
+                                            )}
+                                            <div className="space-y-2">
+                                                {completed.map((course) => (
+                                                    <div
+                                                        key={course.id}
+                                                        className="bg-dark-800/50 border border-dark-700/50 rounded-xl p-3 group"
+                                                    >
+                                                        <div className="flex items-center justify-between gap-3">
+                                                            <div className="flex items-center gap-3 min-w-0">
+                                                                <FiCheck className="w-4 h-4 text-green-500 flex-shrink-0" />
+                                                                <div className="min-w-0">
+                                                                    <h4 className="text-sm font-medium text-dark-300 truncate">{course.title}</h4>
+                                                                    <p className="text-[10px] text-dark-600">
+                                                                        {course.completed_units}/{course.enabled_units} Lektionen
+                                                                        {course.parent_course_id && ' · Vertiefung'}
+                                                                    </p>
+                                                                </div>
+                                                            </div>
+                                                            <div className="flex items-center gap-1.5">
+                                                                <button
+                                                                    onClick={() => handleResumeCourse(course.id)}
+                                                                    className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white text-xs font-medium rounded-lg transition-colors"
+                                                                >
+                                                                    Vertiefen
+                                                                </button>
+                                                                <button
+                                                                    onClick={() => handleDeleteCourse(course.id)}
+                                                                    className="p-1.5 text-dark-600 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
+                                                                >
+                                                                    <FiTrash2 className="w-3.5 h-3.5" />
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                ))}
                                             </div>
-                                        )}
-                                    </div>
-                                    <div className="flex items-center gap-1.5">
-                                        {course.status === 'active' && (
-                                            <button
-                                                onClick={() => handleResumeCourse(course.id)}
-                                                className="px-3 py-1.5 bg-teal-600 hover:bg-teal-500 text-white text-xs font-medium rounded-lg transition-colors"
-                                            >
-                                                Fortsetzen
-                                            </button>
-                                        )}
-                                        {course.status === 'completed' && (
-                                            <button
-                                                onClick={() => handleResumeCourse(course.id)}
-                                                className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white text-xs font-medium rounded-lg transition-colors"
-                                            >
-                                                Vertiefen
-                                            </button>
-                                        )}
-                                        {course.status === 'draft' && (
-                                            <button
-                                                onClick={() => handleResumeCourse(course.id)}
-                                                className="px-3 py-1.5 bg-dark-700 hover:bg-dark-600 text-white text-xs font-medium rounded-lg transition-colors"
-                                            >
-                                                Öffnen
-                                            </button>
-                                        )}
-                                        <button
-                                            onClick={() => handleDeleteCourse(course.id)}
-                                            className="p-1.5 text-dark-600 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
-                                        >
-                                            <FiTrash2 className="w-3.5 h-3.5" />
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        ))}
+                                        </div>
+                                    )}
+                                </>
+                            );
+                        })()}
                     </div>
                 )}
             </div>

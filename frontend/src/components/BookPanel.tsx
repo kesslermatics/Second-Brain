@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import {
-    FiSearch, FiCheck, FiX, FiBook, FiChevronRight, FiLoader,
+    FiSearch, FiCheck, FiX, FiBook,
     FiSquare, FiCheckSquare, FiPlus, FiTrash2, FiSend, FiZap,
-    FiArrowUp, FiList,
+    FiArrowUp, FiList, FiArrowLeft,
 } from 'react-icons/fi';
 import { LuBrain } from 'react-icons/lu';
 import ReactMarkdown from 'react-markdown';
@@ -17,15 +17,20 @@ import {
 } from '@/lib/api';
 import type { BookSearchResult, BookChapter, BookChapterNoteResult } from '@/lib/types';
 
-type Step = 'search' | 'confirm-book' | 'confirm-toc' | 'generating' | 'done';
+// ── Types ────────────────────────────────────────────────────────────
+interface BookEntry {
+    id: string;
+    title: string;
+    authors: string[];
+    status: 'generating' | 'completed';
+    completedCount: number;
+    skippedCount: number;
+    totalChapters: number;
+    createdAt: string;
+}
 
-const STATE_KEY = 'book-generation-state';
-
-// ── Persisted state type ─────────────────────────────────────────────
-interface PersistedState {
-    step: Step;
-    query: string;
-    bookInfo: BookSearchResult | null;
+interface PersistedBookState {
+    bookInfo: BookSearchResult;
     chapters: BookChapter[];
     enabledChapters: Record<string, boolean>;
     currentEnabledIdx: number;
@@ -34,79 +39,158 @@ interface PersistedState {
     topicQueue: string[];
 }
 
-function saveState(state: PersistedState) {
-    putUserState(STATE_KEY, JSON.stringify(state)).catch(() => {});
-}
+type Step = 'list' | 'confirm-book' | 'confirm-toc' | 'generating' | 'done';
 
-async function loadPersistedState(): Promise<PersistedState | null> {
-    try {
-        const raw = await getUserState(STATE_KEY);
-        if (!raw) return null;
-        return JSON.parse(raw) as PersistedState;
-    } catch {
-        return null;
-    }
-}
-
-function clearState() {
-    deleteUserState(STATE_KEY).catch(() => {});
-}
-
-// ── What is currently being generated ────────────────────────────────
 type GeneratingSource =
     | { kind: 'chapter'; idx: number }
     | { kind: 'topic'; topic: string };
 
+// ── Constants & Helpers ──────────────────────────────────────────────
+const REGISTRY_KEY = 'book-registry';
+const LEGACY_KEY = 'book-generation-state';
+const bookStateKey = (id: string) => `book-state-${id}`;
+
+async function loadRegistry(): Promise<BookEntry[]> {
+    try {
+        const raw = await getUserState(REGISTRY_KEY);
+        if (!raw) return [];
+        return JSON.parse(raw) as BookEntry[];
+    } catch { return []; }
+}
+
+function saveRegistry(entries: BookEntry[]) {
+    putUserState(REGISTRY_KEY, JSON.stringify(entries)).catch(() => {});
+}
+
+async function loadBookState(id: string): Promise<PersistedBookState | null> {
+    try {
+        const raw = await getUserState(bookStateKey(id));
+        if (!raw) return null;
+        return JSON.parse(raw) as PersistedBookState;
+    } catch { return null; }
+}
+
+function persistBookStateToDB(id: string, state: PersistedBookState) {
+    putUserState(bookStateKey(id), JSON.stringify(state)).catch(() => {});
+}
+
+function removeBookState(id: string) {
+    deleteUserState(bookStateKey(id)).catch(() => {});
+}
+
+// ── Component ────────────────────────────────────────────────────────
 export default function BookPanel() {
-    // ── State ────────────────────────────────────────────────────────
-    const [step, setStep] = useState<Step>('search');
+    // ── Registry ─────────────────────────────────────────────────────
+    const [bookList, setBookList] = useState<BookEntry[]>([]);
+    const [loadingList, setLoadingList] = useState(true);
+
+    // ── Navigation ───────────────────────────────────────────────────
+    const [step, setStep] = useState<Step>('list');
+    const [activeBookId, setActiveBookId] = useState<string | null>(null);
+
+    // ── Search ───────────────────────────────────────────────────────
     const [query, setQuery] = useState('');
     const [searching, setSearching] = useState(false);
+
+    // ── Book details ─────────────────────────────────────────────────
     const [bookInfo, setBookInfo] = useState<BookSearchResult | null>(null);
     const [chapters, setChapters] = useState<BookChapter[]>([]);
     const [enabledChapters, setEnabledChapters] = useState<Record<string, boolean>>({});
     const [loadingToc, setLoadingToc] = useState(false);
+
+    // ── Generation ───────────────────────────────────────────────────
     const [currentEnabledIdx, setCurrentEnabledIdx] = useState(0);
     const [currentNote, setCurrentNote] = useState<BookChapterNoteResult | null>(null);
     const [generatingSource, setGeneratingSource] = useState<GeneratingSource | null>(null);
     const [generatingNote, setGeneratingNote] = useState(false);
     const [completedCount, setCompletedCount] = useState(0);
     const [skippedCount, setSkippedCount] = useState(0);
-    const [error, setError] = useState<string | null>(null);
-    const [savingNote, setSavingNote] = useState(false);
-    const [restored, setRestored] = useState(false);
 
-    // Topic queue
+    // ── Topic queue ──────────────────────────────────────────────────
     const [topicQueue, setTopicQueue] = useState<string[]>([]);
     const [topicInput, setTopicInput] = useState('');
 
-    // AI edit
+    // ── AI edit ──────────────────────────────────────────────────────
     const [aiEditMode, setAiEditMode] = useState(false);
     const [aiEditInstruction, setAiEditInstruction] = useState('');
     const [aiEditing, setAiEditing] = useState(false);
 
-    // Mobile: toggle queue panel visibility
+    // ── UI ───────────────────────────────────────────────────────────
+    const [error, setError] = useState<string | null>(null);
+    const [savingNote, setSavingNote] = useState(false);
     const [showQueueMobile, setShowQueueMobile] = useState(false);
+    const [resumeTrigger, setResumeTrigger] = useState(0);
 
     const scrollRef = useRef<HTMLDivElement>(null);
     const topicInputRef = useRef<HTMLInputElement>(null);
     const { loadFolderTree } = useStore();
 
-    // Derived
+    // ── Derived ──────────────────────────────────────────────────────
     const enabledChapterList = chapters.filter(
         (ch) => enabledChapters[ch.chapter_number] !== false
     );
     const totalEnabled = enabledChapterList.length;
+    const processedCount = completedCount + skippedCount;
+    const progressPercent = totalEnabled > 0 ? Math.round((processedCount / totalEnabled) * 100) : 0;
+    const currentChapter = enabledChapterList[currentEnabledIdx];
+    const isGenerating = step === 'generating';
 
-    // ── Persist state on every meaningful change ─────────────────────
-    const persist = useCallback(() => {
-        if (step === 'search' || step === 'done') {
-            clearState();
-            return;
-        }
-        saveState({
-            step,
-            query,
+    const inProgressBooks = bookList.filter(b => b.status === 'generating');
+    const completedBooksList = bookList.filter(b => b.status === 'completed');
+
+    // ── Load registry on mount (+ migrate legacy state) ──────────────
+    useEffect(() => {
+        const init = async () => {
+            setLoadingList(true);
+            let entries = await loadRegistry();
+
+            // Migrate legacy single-book state
+            try {
+                const legacyRaw = await getUserState(LEGACY_KEY);
+                if (legacyRaw) {
+                    const legacy = JSON.parse(legacyRaw);
+                    if (legacy.bookInfo && legacy.step !== 'search' && legacy.step !== 'done') {
+                        const id = crypto.randomUUID();
+                        const enabled = (legacy.chapters || []).filter(
+                            (ch: BookChapter) => legacy.enabledChapters?.[ch.chapter_number] !== false
+                        );
+                        const entry: BookEntry = {
+                            id,
+                            title: legacy.bookInfo.title || 'Unbekanntes Buch',
+                            authors: legacy.bookInfo.authors || [],
+                            status: 'generating',
+                            completedCount: legacy.completedCount || 0,
+                            skippedCount: legacy.skippedCount || 0,
+                            totalChapters: enabled.length,
+                            createdAt: new Date().toISOString(),
+                        };
+                        const bookState: PersistedBookState = {
+                            bookInfo: legacy.bookInfo,
+                            chapters: legacy.chapters || [],
+                            enabledChapters: legacy.enabledChapters || {},
+                            currentEnabledIdx: legacy.currentEnabledIdx || 0,
+                            completedCount: legacy.completedCount || 0,
+                            skippedCount: legacy.skippedCount || 0,
+                            topicQueue: legacy.topicQueue || [],
+                        };
+                        entries = [entry, ...entries];
+                        await putUserState(bookStateKey(id), JSON.stringify(bookState));
+                        saveRegistry(entries);
+                    }
+                    await deleteUserState(LEGACY_KEY);
+                }
+            } catch { /* ignore migration errors */ }
+
+            setBookList(entries);
+            setLoadingList(false);
+        };
+        init();
+    }, []);
+
+    // ── Persist current book during generation ───────────────────────
+    useEffect(() => {
+        if (!activeBookId || step !== 'generating' || !bookInfo) return;
+        persistBookStateToDB(activeBookId, {
             bookInfo,
             chapters,
             enabledChapters,
@@ -115,43 +199,45 @@ export default function BookPanel() {
             skippedCount,
             topicQueue,
         });
-    }, [step, query, bookInfo, chapters, enabledChapters, currentEnabledIdx, completedCount, skippedCount, topicQueue]);
+        setBookList(prev => {
+            const updated = prev.map(b => b.id === activeBookId
+                ? { ...b, completedCount, skippedCount }
+                : b
+            );
+            saveRegistry(updated);
+            return updated;
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [activeBookId, step, bookInfo, chapters, enabledChapters, currentEnabledIdx, completedCount, skippedCount, topicQueue]);
 
+    // ── Mark book completed when step transitions to done ────────────
     useEffect(() => {
-        if (restored) persist();
-    }, [persist, restored]);
+        if (step === 'done' && activeBookId) {
+            setBookList(prev => {
+                const updated = prev.map(b => b.id === activeBookId
+                    ? { ...b, status: 'completed' as const, completedCount, skippedCount }
+                    : b
+                );
+                saveRegistry(updated);
+                return updated;
+            });
+            removeBookState(activeBookId);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [step]);
 
-    // ── Restore state on mount ───────────────────────────────────────
-    useEffect(() => {
-        const restore = async () => {
-            const saved = await loadPersistedState();
-            if (saved) {
-                setStep(saved.step);
-                setQuery(saved.query);
-                setBookInfo(saved.bookInfo);
-                setChapters(saved.chapters);
-                setEnabledChapters(saved.enabledChapters);
-                setCurrentEnabledIdx(saved.currentEnabledIdx);
-                setCompletedCount(saved.completedCount);
-                setSkippedCount(saved.skippedCount);
-                if (saved.topicQueue) setTopicQueue(saved.topicQueue);
-            }
-            setRestored(true);
-        };
-        restore();
-    }, []);
-
+    // ── Scroll on changes ────────────────────────────────────────────
     useEffect(() => {
         scrollRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [step, currentEnabledIdx, currentNote]);
 
-    // ── Auto-resume generation after restore ─────────────────────────
+    // ── Auto-resume generation after state restore ───────────────────
     useEffect(() => {
-        if (restored && step === 'generating' && !generatingNote && !currentNote && !error) {
+        if (resumeTrigger > 0 && step === 'generating' && !generatingNote && !currentNote && !error) {
             advanceGeneration(currentEnabledIdx, topicQueue);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [restored]);
+    }, [resumeTrigger]);
 
     // ── Chapter checkbox helpers ─────────────────────────────────────
     const toggleChapter = (chapterNumber: string) => {
@@ -184,7 +270,7 @@ export default function BookPanel() {
         setTopicQueue((prev) => prev.filter((_, i) => i !== idx));
     };
     const moveTopic = (idx: number, direction: 'up') => {
-        if (idx <= 0) return;
+        if (direction !== 'up' || idx <= 0) return;
         setTopicQueue((prev) => {
             const next = [...prev];
             [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
@@ -193,21 +279,16 @@ export default function BookPanel() {
     };
 
     // ── Core generation logic ────────────────────────────────────────
-    // Decide what to generate next: topic from queue has priority, else next chapter
     const advanceGeneration = async (chapterIdx: number, queue: string[]) => {
         if (queue.length > 0) {
-            // Generate from topic queue first
             const topic = queue[0];
             setGeneratingSource({ kind: 'topic', topic });
             await doGenerateTopicNote(topic);
         } else if (chapterIdx < enabledChapterList.length) {
-            // Next chapter
             setGeneratingSource({ kind: 'chapter', idx: chapterIdx });
             await doGenerateChapterNote(chapterIdx);
         } else {
-            // All done
             setStep('done');
-            clearState();
         }
     };
 
@@ -215,7 +296,6 @@ export default function BookPanel() {
         const enabled = chapters.filter((ch) => enabledChapters[ch.chapter_number] !== false);
         if (idx >= enabled.length) {
             setStep('done');
-            clearState();
             return;
         }
         setCurrentEnabledIdx(idx);
@@ -256,7 +336,7 @@ export default function BookPanel() {
         }
     };
 
-    // ── Search & book confirmation ───────────────────────────────────
+    // ── Search & confirm ─────────────────────────────────────────────
     const handleSearch = async () => {
         if (!query.trim() || searching) return;
         setSearching(true);
@@ -300,6 +380,25 @@ export default function BookPanel() {
     };
 
     const handleStartGeneration = async () => {
+        const id = crypto.randomUUID();
+        setActiveBookId(id);
+
+        const entry: BookEntry = {
+            id,
+            title: bookInfo!.title!,
+            authors: bookInfo!.authors || [],
+            status: 'generating',
+            completedCount: 0,
+            skippedCount: 0,
+            totalChapters: totalEnabled,
+            createdAt: new Date().toISOString(),
+        };
+        setBookList(prev => {
+            const updated = [entry, ...prev];
+            saveRegistry(updated);
+            return updated;
+        });
+
         setStep('generating');
         setCurrentEnabledIdx(0);
         setCompletedCount(0);
@@ -308,18 +407,16 @@ export default function BookPanel() {
         await advanceGeneration(0, []);
     };
 
-    // ── After accept/skip — advance with queue priority ──────────────
+    // ── After accept/skip ────────────────────────────────────────────
     const afterNoteHandled = async (newCompleted: number, newSkipped: number, newQueue: string[]) => {
         const wasTopicNote = generatingSource?.kind === 'topic';
         const chapterIdx = wasTopicNote ? currentEnabledIdx : currentEnabledIdx + 1;
 
         if (wasTopicNote) {
-            // Remove the first topic from queue (it was just processed)
             const remaining = newQueue.slice(1);
             setTopicQueue(remaining);
             await advanceGeneration(chapterIdx, remaining);
         } else {
-            // Was a chapter note — move to next chapter (but check queue first)
             setCurrentEnabledIdx(chapterIdx);
             await advanceGeneration(chapterIdx, newQueue);
         }
@@ -376,9 +473,52 @@ export default function BookPanel() {
         }
     };
 
-    // ── Reset ────────────────────────────────────────────────────────
-    const handleReset = () => {
-        setStep('search');
+    // ── Resume book from list ────────────────────────────────────────
+    const handleResumeBook = async (bookId: string) => {
+        const state = await loadBookState(bookId);
+        if (!state) {
+            setBookList(prev => {
+                const updated = prev.filter(b => b.id !== bookId);
+                saveRegistry(updated);
+                return updated;
+            });
+            setError('Buchstatus konnte nicht geladen werden.');
+            return;
+        }
+        setActiveBookId(bookId);
+        setBookInfo(state.bookInfo);
+        setChapters(state.chapters);
+        setEnabledChapters(state.enabledChapters);
+        setCurrentEnabledIdx(state.currentEnabledIdx);
+        setCompletedCount(state.completedCount);
+        setSkippedCount(state.skippedCount);
+        setTopicQueue(state.topicQueue);
+        setCurrentNote(null);
+        setGeneratingSource(null);
+        setError(null);
+        setAiEditMode(false);
+        setAiEditInstruction('');
+        setStep('generating');
+        setResumeTrigger(prev => prev + 1);
+    };
+
+    // ── Delete book ──────────────────────────────────────────────────
+    const handleDeleteBook = (bookId: string) => {
+        removeBookState(bookId);
+        setBookList(prev => {
+            const updated = prev.filter(b => b.id !== bookId);
+            saveRegistry(updated);
+            return updated;
+        });
+        if (activeBookId === bookId) {
+            handleBackToList();
+        }
+    };
+
+    // ── Navigation ───────────────────────────────────────────────────
+    const handleBackToList = () => {
+        setStep('list');
+        setActiveBookId(null);
         setQuery('');
         setBookInfo(null);
         setChapters([]);
@@ -393,16 +533,524 @@ export default function BookPanel() {
         setAiEditMode(false);
         setAiEditInstruction('');
         setError(null);
-        clearState();
     };
 
-    // ── Derived values ───────────────────────────────────────────────
-    const processedCount = completedCount + skippedCount;
-    const progressPercent = totalEnabled > 0 ? Math.round((processedCount / totalEnabled) * 100) : 0;
-    const currentChapter = enabledChapterList[currentEnabledIdx];
-    const isGenerating = step === 'generating';
+    // ── Render: Books list ───────────────────────────────────────────
+    const renderBooksList = () => (
+        <div className="h-full flex flex-col">
+            {/* Search bar */}
+            <div className="p-4 border-b border-dark-800">
+                <div className="max-w-lg mx-auto">
+                    <div className="flex gap-2">
+                        <input
+                            type="text"
+                            value={query}
+                            onChange={(e) => setQuery(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+                            placeholder='Buchtitel eingeben, z.B. "Atomic Habits" oder "Clean Code"'
+                            className="flex-1 px-4 py-3 bg-dark-800 border border-dark-700 rounded-xl text-white text-sm placeholder-dark-600 focus:outline-none focus:border-amber-500"
+                            autoFocus
+                        />
+                        <button
+                            onClick={handleSearch}
+                            disabled={!query.trim() || searching}
+                            className="px-4 py-3 bg-amber-600 hover:bg-amber-500 text-white rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {searching ? (
+                                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                            ) : (
+                                <FiSearch className="w-5 h-5" />
+                            )}
+                        </button>
+                    </div>
+                    {error && step === 'list' && (
+                        <p className="mt-2 text-sm text-red-400">{error}</p>
+                    )}
+                </div>
+            </div>
 
-    // ── Render: Topic Queue Panel ────────────────────────────────────
+            {/* Books */}
+            <div className="flex-1 overflow-y-auto p-4">
+                {loadingList ? (
+                    <div className="flex items-center justify-center py-12">
+                        <div className="w-8 h-8 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+                    </div>
+                ) : bookList.length === 0 ? (
+                    <div className="text-center py-12">
+                        <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-amber-900/30 mb-4">
+                            <FiBook className="w-8 h-8 text-amber-400" />
+                        </div>
+                        <h3 className="text-lg font-semibold text-white mb-2">Bücher verarbeiten</h3>
+                        <p className="text-sm text-dark-500 max-w-md mx-auto">
+                            Gib den Titel eines Buches ein. Die KI sucht nach dem Buch,
+                            zeigt dir das Inhaltsverzeichnis und erstellt für jedes Kapitel eine Notiz.
+                        </p>
+                    </div>
+                ) : (
+                    <div className="max-w-2xl mx-auto space-y-6">
+                        {/* In-progress books */}
+                        {inProgressBooks.length > 0 && (
+                            <div className="space-y-3">
+                                {inProgressBooks.map((book) => {
+                                    const progress = book.totalChapters > 0
+                                        ? Math.round(((book.completedCount + book.skippedCount) / book.totalChapters) * 100)
+                                        : 0;
+                                    return (
+                                        <div
+                                            key={book.id}
+                                            className="bg-dark-800 border border-dark-700 rounded-xl p-4 hover:border-dark-600 transition-colors group"
+                                        >
+                                            <div className="flex items-start justify-between gap-3">
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="flex items-center gap-2 mb-1">
+                                                        <span className="px-2 py-0.5 text-[10px] font-medium rounded-full bg-amber-600/20 text-amber-400">
+                                                            In Bearbeitung
+                                                        </span>
+                                                    </div>
+                                                    <h4 className="text-sm font-semibold text-white truncate">{book.title}</h4>
+                                                    <p className="text-xs text-dark-500 mt-0.5">{book.authors.join(', ')}</p>
+                                                    <div className="flex items-center gap-2 mt-2">
+                                                        <div className="flex-1 h-1.5 bg-dark-700 rounded-full overflow-hidden">
+                                                            <div
+                                                                className="h-full bg-amber-500 rounded-full transition-all"
+                                                                style={{ width: `${progress}%` }}
+                                                            />
+                                                        </div>
+                                                        <span className="text-[10px] text-dark-500">
+                                                            {book.completedCount + book.skippedCount}/{book.totalChapters}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                                <div className="flex items-center gap-1.5">
+                                                    <button
+                                                        onClick={() => handleResumeBook(book.id)}
+                                                        className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-medium rounded-lg transition-colors"
+                                                    >
+                                                        Fortsetzen
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleDeleteBook(book.id)}
+                                                        className="p-1.5 text-dark-600 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
+                                                    >
+                                                        <FiTrash2 className="w-3.5 h-3.5" />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+
+                        {/* Completed books */}
+                        {completedBooksList.length > 0 && (
+                            <div>
+                                {inProgressBooks.length > 0 && (
+                                    <div className="flex items-center gap-3 mb-3">
+                                        <div className="h-px flex-1 bg-dark-700" />
+                                        <span className="text-[10px] text-dark-500 font-medium uppercase tracking-wider">Abgeschlossen</span>
+                                        <div className="h-px flex-1 bg-dark-700" />
+                                    </div>
+                                )}
+                                <div className="space-y-2">
+                                    {completedBooksList.map((book) => (
+                                        <div
+                                            key={book.id}
+                                            className="bg-dark-800/50 border border-dark-700/50 rounded-xl p-3 group"
+                                        >
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div className="flex items-center gap-3 min-w-0">
+                                                    <FiCheck className="w-4 h-4 text-green-500 flex-shrink-0" />
+                                                    <div className="min-w-0">
+                                                        <h4 className="text-sm font-medium text-dark-300 truncate">{book.title}</h4>
+                                                        <p className="text-[10px] text-dark-600">
+                                                            {book.completedCount} Notizen{book.skippedCount > 0 && ` · ${book.skippedCount} übersprungen`} · {book.authors.join(', ')}
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                                <button
+                                                    onClick={() => handleDeleteBook(book.id)}
+                                                    className="p-1.5 text-dark-600 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
+                                                >
+                                                    <FiTrash2 className="w-3.5 h-3.5" />
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+
+    // ── Render: Confirm book ─────────────────────────────────────────
+    const renderConfirmBook = () => {
+        if (step !== 'confirm-book' || !bookInfo) return null;
+        return (
+            <div className="max-w-lg mx-auto">
+                <div className="bg-dark-800 border border-dark-700 rounded-2xl p-6">
+                    <div className="flex items-start gap-4 mb-4">
+                        <div className="p-3 bg-amber-900/30 rounded-xl flex-shrink-0">
+                            <FiBook className="w-6 h-6 text-amber-400" />
+                        </div>
+                        <div>
+                            <h3 className="text-lg font-bold text-white">{bookInfo.title}</h3>
+                            <p className="text-sm text-dark-400 mt-1">
+                                {bookInfo.authors?.join(', ')}
+                            </p>
+                        </div>
+                    </div>
+
+                    <div className="space-y-2 text-sm mb-6">
+                        {bookInfo.year && (
+                            <div className="flex justify-between text-dark-400">
+                                <span>Jahr</span>
+                                <span className="text-white">{bookInfo.year}</span>
+                            </div>
+                        )}
+                        {bookInfo.publisher && (
+                            <div className="flex justify-between text-dark-400">
+                                <span>Verlag</span>
+                                <span className="text-white">{bookInfo.publisher}</span>
+                            </div>
+                        )}
+                        {bookInfo.language && (
+                            <div className="flex justify-between text-dark-400">
+                                <span>Sprache</span>
+                                <span className="text-white">{bookInfo.language}</span>
+                            </div>
+                        )}
+                        {bookInfo.pages && (
+                            <div className="flex justify-between text-dark-400">
+                                <span>Seiten</span>
+                                <span className="text-white">{bookInfo.pages}</span>
+                            </div>
+                        )}
+                        {bookInfo.isbn && (
+                            <div className="flex justify-between text-dark-400">
+                                <span>ISBN</span>
+                                <span className="text-white font-mono text-xs">{bookInfo.isbn}</span>
+                            </div>
+                        )}
+                    </div>
+
+                    {bookInfo.description && (
+                        <p className="text-sm text-dark-400 mb-6 leading-relaxed">
+                            {bookInfo.description}
+                        </p>
+                    )}
+
+                    <div className="flex gap-2">
+                        <button
+                            onClick={handleConfirmBook}
+                            disabled={loadingToc}
+                            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium rounded-xl transition-colors disabled:opacity-50"
+                        >
+                            {loadingToc ? (
+                                <>
+                                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                    Lade Inhaltsverzeichnis...
+                                </>
+                            ) : (
+                                <>
+                                    <FiCheck className="w-4 h-4" />
+                                    Richtig — Inhaltsverzeichnis laden
+                                </>
+                            )}
+                        </button>
+                        <button
+                            onClick={handleBackToList}
+                            className="px-4 py-2.5 bg-dark-700 hover:bg-dark-600 text-dark-300 text-sm rounded-xl transition-colors"
+                        >
+                            <FiX className="w-4 h-4" />
+                        </button>
+                    </div>
+
+                    {error && (
+                        <p className="mt-3 text-sm text-red-400">{error}</p>
+                    )}
+                </div>
+            </div>
+        );
+    };
+
+    // ── Render: Confirm TOC ──────────────────────────────────────────
+    const renderConfirmToc = () => {
+        if (step !== 'confirm-toc') return null;
+        return (
+            <div className="max-w-lg mx-auto">
+                <div className="bg-dark-800 border border-dark-700 rounded-2xl p-6">
+                    <h3 className="text-lg font-bold text-white mb-1">Inhaltsverzeichnis</h3>
+                    <p className="text-xs text-dark-500 mb-3">
+                        {chapters.length} Kapitel gefunden — <span className="text-amber-400">{totalEnabled} ausgewählt</span>
+                    </p>
+
+                    <div className="flex gap-3 mb-3 text-xs">
+                        <button onClick={selectAll} className="text-dark-400 hover:text-white transition-colors">
+                            Alle auswählen
+                        </button>
+                        <span className="text-dark-700">|</span>
+                        <button onClick={deselectAll} className="text-dark-400 hover:text-white transition-colors">
+                            Alle abwählen
+                        </button>
+                    </div>
+
+                    <div className="max-h-[400px] overflow-y-auto space-y-0.5 mb-6 pr-2">
+                        {chapters.map((ch, i) => {
+                            const enabled = enabledChapters[ch.chapter_number] !== false;
+                            return (
+                                <button
+                                    key={i}
+                                    onClick={() => toggleChapter(ch.chapter_number)}
+                                    className={`w-full flex items-center gap-2 py-1.5 text-sm rounded-lg px-1 transition-colors hover:bg-dark-700/50 ${
+                                        !enabled ? 'opacity-40' : ''
+                                    }`}
+                                    style={{ paddingLeft: `${(ch.level - 1) * 20 + 4}px` }}
+                                >
+                                    {enabled ? (
+                                        <FiCheckSquare className="w-3.5 h-3.5 flex-shrink-0 text-amber-400" />
+                                    ) : (
+                                        <FiSquare className="w-3.5 h-3.5 flex-shrink-0 text-dark-600" />
+                                    )}
+                                    <span className="text-dark-500 font-mono text-xs w-10 flex-shrink-0 text-left">
+                                        {ch.chapter_number}
+                                    </span>
+                                    <span className={`text-left ${
+                                        ch.level === 1 ? 'text-white font-medium' :
+                                        ch.level === 2 ? 'text-dark-300' : 'text-dark-500'
+                                    }`}>
+                                        {ch.title}
+                                    </span>
+                                </button>
+                            );
+                        })}
+                    </div>
+
+                    <div className="flex gap-2">
+                        <button
+                            onClick={handleStartGeneration}
+                            disabled={totalEnabled === 0}
+                            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            <LuBrain className="w-4 h-4" />
+                            {totalEnabled} Notizen generieren
+                        </button>
+                        <button
+                            onClick={handleBackToList}
+                            className="px-4 py-2.5 bg-dark-700 hover:bg-dark-600 text-dark-300 text-sm rounded-xl transition-colors"
+                        >
+                            <FiX className="w-4 h-4" />
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
+    // ── Render: Generating ───────────────────────────────────────────
+    const renderGenerating = () => {
+        if (!isGenerating) return null;
+        return (
+            <div>
+                {/* Current item info */}
+                {generatingSource && (
+                    <div className="mb-4 flex items-center gap-3 text-sm">
+                        {generatingSource.kind === 'topic' ? (
+                            <>
+                                <span className="px-2 py-1 bg-purple-900/30 text-purple-400 rounded-lg text-xs font-medium">
+                                    Thema
+                                </span>
+                                <span className="text-white font-medium">
+                                    {generatingSource.topic}
+                                </span>
+                            </>
+                        ) : (
+                            <>
+                                <span className="px-2 py-1 bg-amber-900/30 text-amber-400 rounded-lg font-mono text-xs">
+                                    {currentChapter?.chapter_number}
+                                </span>
+                                <span className="text-white font-medium">
+                                    {currentChapter?.title}
+                                </span>
+                            </>
+                        )}
+                    </div>
+                )}
+
+                {/* Loading state */}
+                {generatingNote && (
+                    <div className="bg-dark-800 border border-dark-700 rounded-2xl p-8 text-center">
+                        <div className="w-10 h-10 border-2 border-amber-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+                        <p className="text-sm text-dark-400">
+                            {generatingSource?.kind === 'topic'
+                                ? `Generiere Notiz für "${generatingSource.topic}"...`
+                                : `Generiere Notiz für Kapitel ${currentChapter?.chapter_number}...`
+                            }
+                        </p>
+                        <p className="text-xs text-dark-600 mt-1">
+                            Dies kann einige Sekunden dauern
+                        </p>
+                    </div>
+                )}
+
+                {/* Generated note preview */}
+                {currentNote && !generatingNote && (
+                    <div className="bg-dark-800 border border-dark-700 rounded-2xl overflow-hidden">
+                        <div className="px-4 py-3 border-b border-dark-700 bg-dark-800/50">
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <p className="text-xs text-dark-500">
+                                        Ordner: <span className="text-amber-400">{currentNote.folder}</span>
+                                    </p>
+                                    <h4 className="text-sm font-semibold text-white mt-0.5">
+                                        {currentNote.title}
+                                    </h4>
+                                </div>
+                                {currentNote.tag_names.length > 0 && (
+                                    <div className="flex gap-1 flex-wrap">
+                                        {currentNote.tag_names.map((tag, i) => (
+                                            <span key={i} className="px-2 py-0.5 text-[10px] bg-dark-700 text-dark-400 rounded-full">
+                                                {tag}
+                                            </span>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="px-6 py-5 overflow-y-auto">
+                            <div className="markdown-content text-sm">
+                                <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
+                                    {currentNote.content}
+                                </ReactMarkdown>
+                            </div>
+                        </div>
+
+                        {aiEditMode && (
+                            <div className="px-4 py-3 border-t border-dark-700 bg-purple-900/5">
+                                <p className="text-xs text-purple-400 mb-2 font-medium">KI-Bearbeitung</p>
+                                <div className="flex gap-2">
+                                    <input
+                                        type="text"
+                                        value={aiEditInstruction}
+                                        onChange={(e) => setAiEditInstruction(e.target.value)}
+                                        onKeyDown={(e) => e.key === 'Enter' && handleAiEdit()}
+                                        placeholder="z.B. 'Füge mehr Details hinzu' oder 'Kürze die Notiz'"
+                                        className="flex-1 px-3 py-2 bg-dark-900 border border-dark-700 rounded-lg text-white text-xs placeholder-dark-600 focus:outline-none focus:border-purple-500"
+                                        autoFocus
+                                    />
+                                    <button
+                                        onClick={handleAiEdit}
+                                        disabled={!aiEditInstruction.trim() || aiEditing}
+                                        className="px-3 py-2 bg-purple-600 hover:bg-purple-500 text-white text-xs rounded-lg transition-colors disabled:opacity-50 flex items-center gap-1.5"
+                                    >
+                                        {aiEditing ? (
+                                            <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                        ) : (
+                                            <FiSend className="w-3.5 h-3.5" />
+                                        )}
+                                        Anwenden
+                                    </button>
+                                    <button
+                                        onClick={() => { setAiEditMode(false); setAiEditInstruction(''); }}
+                                        className="p-2 hover:bg-dark-700 rounded-lg text-dark-500 transition-colors"
+                                    >
+                                        <FiX className="w-3.5 h-3.5" />
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="px-4 py-3 border-t border-dark-700 flex gap-2">
+                            <button
+                                onClick={handleAcceptNote}
+                                disabled={savingNote || aiEditing}
+                                className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-500 text-white text-sm font-medium rounded-xl transition-colors disabled:opacity-50"
+                            >
+                                <FiCheck className="w-4 h-4" />
+                                {savingNote ? 'Speichert...' : 'Akzeptieren'}
+                            </button>
+                            <button
+                                onClick={() => setAiEditMode(!aiEditMode)}
+                                className={`flex items-center gap-1.5 px-3 py-2 text-sm rounded-xl transition-colors ${
+                                    aiEditMode
+                                        ? 'bg-purple-600 text-white'
+                                        : 'bg-purple-600/20 text-purple-400 hover:bg-purple-600/30'
+                                }`}
+                            >
+                                <FiZap className="w-4 h-4" />
+                                <span className="hidden sm:inline">KI-Bearbeitung</span>
+                            </button>
+                            <button
+                                onClick={handleSkipNote}
+                                className="px-4 py-2 bg-dark-700 hover:bg-dark-600 text-dark-300 text-sm rounded-xl transition-colors"
+                            >
+                                Überspringen
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {/* Error state */}
+                {error && !generatingNote && !currentNote && (
+                    <div className="bg-dark-800 border border-red-900/50 rounded-2xl p-6 text-center">
+                        <p className="text-sm text-red-400 mb-4">{error}</p>
+                        <div className="flex gap-2 justify-center">
+                            <button
+                                onClick={handleRetry}
+                                className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white text-sm rounded-xl transition-colors"
+                            >
+                                Erneut versuchen
+                            </button>
+                            <button
+                                onClick={handleSkipNote}
+                                className="px-4 py-2 bg-dark-700 hover:bg-dark-600 text-dark-300 text-sm rounded-xl transition-colors"
+                            >
+                                Überspringen
+                            </button>
+                        </div>
+                    </div>
+                )}
+            </div>
+        );
+    };
+
+    // ── Render: Done ─────────────────────────────────────────────────
+    const renderDone = () => {
+        if (step !== 'done') return null;
+        return (
+            <div className="h-full flex items-center justify-center">
+                <div className="text-center max-w-md">
+                    <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-green-900/30 mb-4">
+                        <FiCheck className="w-8 h-8 text-green-400" />
+                    </div>
+                    <h3 className="text-lg font-semibold text-white mb-2">Fertig!</h3>
+                    <p className="text-sm text-dark-400 mb-2">
+                        <span className="text-green-400 font-medium">{completedCount} Notizen</span> erstellt
+                        {skippedCount > 0 && (
+                            <span> · <span className="text-dark-500">{skippedCount} übersprungen</span></span>
+                        )}
+                    </p>
+                    {bookInfo && (
+                        <p className="text-xs text-dark-500 mb-6">
+                            Die Notizen findest du im Ordner <span className="text-amber-400">Bücher/{bookInfo.title}</span>
+                        </p>
+                    )}
+                    <button
+                        onClick={handleBackToList}
+                        className="px-6 py-2.5 bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium rounded-xl transition-colors"
+                    >
+                        Zurück zur Übersicht
+                    </button>
+                </div>
+            </div>
+        );
+    };
+
+    // ── Render: Topic Queue ──────────────────────────────────────────
     const renderTopicQueue = () => (
         <div className="flex flex-col h-full">
             <div className="px-3 py-2.5 border-b border-dark-800 bg-dark-900/50">
@@ -421,7 +1069,6 @@ export default function BookPanel() {
                 </p>
             </div>
 
-            {/* Topic input */}
             <div className="p-2 border-b border-dark-800">
                 <div className="flex gap-1.5">
                     <input
@@ -443,7 +1090,6 @@ export default function BookPanel() {
                 </div>
             </div>
 
-            {/* Queue list */}
             <div className="flex-1 overflow-y-auto p-2 space-y-1">
                 {topicQueue.length === 0 ? (
                     <div className="text-center py-6">
@@ -483,7 +1129,6 @@ export default function BookPanel() {
                 )}
             </div>
 
-            {/* Processing indicator when generating a topic note */}
             {generatingSource?.kind === 'topic' && generatingNote && (
                 <div className="px-2 py-2 border-t border-dark-800 bg-amber-900/10">
                     <div className="flex items-center gap-2 text-xs text-amber-400">
@@ -495,18 +1140,17 @@ export default function BookPanel() {
         </div>
     );
 
-    // ── Main layout ──────────────────────────────────────────────────
+    // ── Main render ──────────────────────────────────────────────────
     return (
         <div className="h-full flex flex-col">
             {/* Header */}
             <div className="flex items-center gap-2 px-3 sm:px-4 py-3 border-b border-dark-800 bg-dark-900/50">
                 <FiBook className="w-4 h-4 text-amber-400 flex-shrink-0" />
-                <h2 className="text-sm font-semibold text-white flex-shrink-0">Buch verarbeiten</h2>
+                <h2 className="text-sm font-semibold text-white flex-shrink-0">Bücher</h2>
                 <span className="text-xs text-dark-500 ml-2 hidden sm:inline">
                     Gib einen Buchtitel ein — die KI erstellt Notizen für jedes Kapitel
                 </span>
                 <div className="ml-auto flex items-center gap-2">
-                    {/* Mobile queue toggle */}
                     {isGenerating && (
                         <button
                             onClick={() => setShowQueueMobile(!showQueueMobile)}
@@ -520,12 +1164,13 @@ export default function BookPanel() {
                             )}
                         </button>
                     )}
-                    {step !== 'search' && step !== 'done' && (
+                    {step !== 'list' && (
                         <button
-                            onClick={handleReset}
-                            className="text-xs text-dark-500 hover:text-white transition-colors"
+                            onClick={handleBackToList}
+                            className="flex items-center gap-1 text-xs text-dark-500 hover:text-white transition-colors"
                         >
-                            Zurücksetzen
+                            <FiArrowLeft className="w-3.5 h-3.5" />
+                            Zurück
                         </button>
                     )}
                 </div>
@@ -557,420 +1202,35 @@ export default function BookPanel() {
                 </div>
             )}
 
+            {/* Error bar (for non-list, non-generation errors) */}
+            {error && step !== 'list' && step !== 'generating' && (
+                <div className="px-4 py-2 bg-red-900/20 border-b border-red-800/30 flex items-center justify-between">
+                    <p className="text-xs text-red-400">{error}</p>
+                    <button onClick={() => setError(null)} className="text-red-400 hover:text-red-300">
+                        <FiX className="w-3.5 h-3.5" />
+                    </button>
+                </div>
+            )}
+
             {/* Body: two-panel layout during generation */}
             <div className="flex-1 flex overflow-hidden">
                 {/* Left: main content */}
                 <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-4">
-                    {/* Step: Search */}
-                    {step === 'search' && (
-                        <div className="h-full flex items-center justify-center">
-                            <div className="text-center max-w-md w-full">
-                                <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-amber-900/30 mb-4">
-                                    <FiBook className="w-8 h-8 text-amber-400" />
-                                </div>
-                                <h3 className="text-lg font-semibold text-white mb-2">Buch verarbeiten</h3>
-                                <p className="text-sm text-dark-500 mb-6">
-                                    Gib den Titel eines Buches ein. Die KI sucht nach dem Buch,
-                                    zeigt dir das Inhaltsverzeichnis und erstellt für jedes Kapitel eine Notiz.
-                                </p>
-                                <div className="flex gap-2">
-                                    <input
-                                        type="text"
-                                        value={query}
-                                        onChange={(e) => setQuery(e.target.value)}
-                                        onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-                                        placeholder='z.B. "Atomic Habits" oder "Clean Code Robert Martin"'
-                                        className="flex-1 px-4 py-3 bg-dark-800 border border-dark-700 rounded-xl text-white text-sm placeholder-dark-600 focus:outline-none focus:border-amber-500"
-                                        autoFocus
-                                    />
-                                    <button
-                                        onClick={handleSearch}
-                                        disabled={!query.trim() || searching}
-                                        className="px-4 py-3 bg-amber-600 hover:bg-amber-500 text-white rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                    >
-                                        {searching ? (
-                                            <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                        ) : (
-                                            <FiSearch className="w-5 h-5" />
-                                        )}
-                                    </button>
-                                </div>
-                                {error && (
-                                    <p className="mt-3 text-sm text-red-400">{error}</p>
-                                )}
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Step: Confirm book */}
-                    {step === 'confirm-book' && bookInfo && (
-                        <div className="max-w-lg mx-auto">
-                            <div className="bg-dark-800 border border-dark-700 rounded-2xl p-6">
-                                <div className="flex items-start gap-4 mb-4">
-                                    <div className="p-3 bg-amber-900/30 rounded-xl flex-shrink-0">
-                                        <FiBook className="w-6 h-6 text-amber-400" />
-                                    </div>
-                                    <div>
-                                        <h3 className="text-lg font-bold text-white">{bookInfo.title}</h3>
-                                        <p className="text-sm text-dark-400 mt-1">
-                                            {bookInfo.authors?.join(', ')}
-                                        </p>
-                                    </div>
-                                </div>
-
-                                <div className="space-y-2 text-sm mb-6">
-                                    {bookInfo.year && (
-                                        <div className="flex justify-between text-dark-400">
-                                            <span>Jahr</span>
-                                            <span className="text-white">{bookInfo.year}</span>
-                                        </div>
-                                    )}
-                                    {bookInfo.publisher && (
-                                        <div className="flex justify-between text-dark-400">
-                                            <span>Verlag</span>
-                                            <span className="text-white">{bookInfo.publisher}</span>
-                                        </div>
-                                    )}
-                                    {bookInfo.language && (
-                                        <div className="flex justify-between text-dark-400">
-                                            <span>Sprache</span>
-                                            <span className="text-white">{bookInfo.language}</span>
-                                        </div>
-                                    )}
-                                    {bookInfo.pages && (
-                                        <div className="flex justify-between text-dark-400">
-                                            <span>Seiten</span>
-                                            <span className="text-white">{bookInfo.pages}</span>
-                                        </div>
-                                    )}
-                                    {bookInfo.isbn && (
-                                        <div className="flex justify-between text-dark-400">
-                                            <span>ISBN</span>
-                                            <span className="text-white font-mono text-xs">{bookInfo.isbn}</span>
-                                        </div>
-                                    )}
-                                </div>
-
-                                {bookInfo.description && (
-                                    <p className="text-sm text-dark-400 mb-6 leading-relaxed">
-                                        {bookInfo.description}
-                                    </p>
-                                )}
-
-                                <div className="flex gap-2">
-                                    <button
-                                        onClick={handleConfirmBook}
-                                        disabled={loadingToc}
-                                        className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium rounded-xl transition-colors disabled:opacity-50"
-                                    >
-                                        {loadingToc ? (
-                                            <>
-                                                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                                Lade Inhaltsverzeichnis...
-                                            </>
-                                        ) : (
-                                            <>
-                                                <FiCheck className="w-4 h-4" />
-                                                Richtig — Inhaltsverzeichnis laden
-                                            </>
-                                        )}
-                                    </button>
-                                    <button
-                                        onClick={handleReset}
-                                        className="px-4 py-2.5 bg-dark-700 hover:bg-dark-600 text-dark-300 text-sm rounded-xl transition-colors"
-                                    >
-                                        <FiX className="w-4 h-4" />
-                                    </button>
-                                </div>
-
-                                {error && (
-                                    <p className="mt-3 text-sm text-red-400">{error}</p>
-                                )}
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Step: Confirm TOC with checkboxes */}
-                    {step === 'confirm-toc' && (
-                        <div className="max-w-lg mx-auto">
-                            <div className="bg-dark-800 border border-dark-700 rounded-2xl p-6">
-                                <h3 className="text-lg font-bold text-white mb-1">Inhaltsverzeichnis</h3>
-                                <p className="text-xs text-dark-500 mb-3">
-                                    {chapters.length} Kapitel gefunden — <span className="text-amber-400">{totalEnabled} ausgewählt</span>
-                                </p>
-
-                                {/* Select / Deselect all */}
-                                <div className="flex gap-3 mb-3 text-xs">
-                                    <button onClick={selectAll} className="text-dark-400 hover:text-white transition-colors">
-                                        Alle auswählen
-                                    </button>
-                                    <span className="text-dark-700">|</span>
-                                    <button onClick={deselectAll} className="text-dark-400 hover:text-white transition-colors">
-                                        Alle abwählen
-                                    </button>
-                                </div>
-
-                                <div className="max-h-[400px] overflow-y-auto space-y-0.5 mb-6 pr-2">
-                                    {chapters.map((ch, i) => {
-                                        const enabled = enabledChapters[ch.chapter_number] !== false;
-                                        return (
-                                            <button
-                                                key={i}
-                                                onClick={() => toggleChapter(ch.chapter_number)}
-                                                className={`w-full flex items-center gap-2 py-1.5 text-sm rounded-lg px-1 transition-colors hover:bg-dark-700/50 ${
-                                                    !enabled ? 'opacity-40' : ''
-                                                }`}
-                                                style={{ paddingLeft: `${(ch.level - 1) * 20 + 4}px` }}
-                                            >
-                                                {enabled ? (
-                                                    <FiCheckSquare className="w-3.5 h-3.5 flex-shrink-0 text-amber-400" />
-                                                ) : (
-                                                    <FiSquare className="w-3.5 h-3.5 flex-shrink-0 text-dark-600" />
-                                                )}
-                                                <span className="text-dark-500 font-mono text-xs w-10 flex-shrink-0 text-left">
-                                                    {ch.chapter_number}
-                                                </span>
-                                                <span className={`text-left ${
-                                                    ch.level === 1 ? 'text-white font-medium' :
-                                                    ch.level === 2 ? 'text-dark-300' : 'text-dark-500'
-                                                }`}>
-                                                    {ch.title}
-                                                </span>
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-
-                                <div className="flex gap-2">
-                                    <button
-                                        onClick={handleStartGeneration}
-                                        disabled={totalEnabled === 0}
-                                        className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                    >
-                                        <LuBrain className="w-4 h-4" />
-                                        {totalEnabled} Notizen generieren
-                                    </button>
-                                    <button
-                                        onClick={handleReset}
-                                        className="px-4 py-2.5 bg-dark-700 hover:bg-dark-600 text-dark-300 text-sm rounded-xl transition-colors"
-                                    >
-                                        <FiX className="w-4 h-4" />
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Step: Generating notes one by one */}
-                    {isGenerating && (
-                        <div>
-                            {/* Current item info */}
-                            {generatingSource && (
-                                <div className="mb-4 flex items-center gap-3 text-sm">
-                                    {generatingSource.kind === 'topic' ? (
-                                        <>
-                                            <span className="px-2 py-1 bg-purple-900/30 text-purple-400 rounded-lg text-xs font-medium">
-                                                Thema
-                                            </span>
-                                            <span className="text-white font-medium">
-                                                {generatingSource.topic}
-                                            </span>
-                                        </>
-                                    ) : (
-                                        <>
-                                            <span className="px-2 py-1 bg-amber-900/30 text-amber-400 rounded-lg font-mono text-xs">
-                                                {currentChapter?.chapter_number}
-                                            </span>
-                                            <span className="text-white font-medium">
-                                                {currentChapter?.title}
-                                            </span>
-                                        </>
-                                    )}
-                                </div>
-                            )}
-
-                            {/* Loading state */}
-                            {generatingNote && (
-                                <div className="bg-dark-800 border border-dark-700 rounded-2xl p-8 text-center">
-                                    <div className="w-10 h-10 border-2 border-amber-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-                                    <p className="text-sm text-dark-400">
-                                        {generatingSource?.kind === 'topic'
-                                            ? `Generiere Notiz für "${generatingSource.topic}"...`
-                                            : `Generiere Notiz für Kapitel ${currentChapter?.chapter_number}...`
-                                        }
-                                    </p>
-                                    <p className="text-xs text-dark-600 mt-1">
-                                        Dies kann einige Sekunden dauern
-                                    </p>
-                                </div>
-                            )}
-
-                            {/* Generated note preview */}
-                            {currentNote && !generatingNote && (
-                                <div className="bg-dark-800 border border-dark-700 rounded-2xl overflow-hidden">
-                                    {/* Note header */}
-                                    <div className="px-4 py-3 border-b border-dark-700 bg-dark-800/50">
-                                        <div className="flex items-center justify-between">
-                                            <div>
-                                                <p className="text-xs text-dark-500">
-                                                    Ordner: <span className="text-amber-400">{currentNote.folder}</span>
-                                                </p>
-                                                <h4 className="text-sm font-semibold text-white mt-0.5">
-                                                    {currentNote.title}
-                                                </h4>
-                                            </div>
-                                            {currentNote.tag_names.length > 0 && (
-                                                <div className="flex gap-1 flex-wrap">
-                                                    {currentNote.tag_names.map((tag, i) => (
-                                                        <span key={i} className="px-2 py-0.5 text-[10px] bg-dark-700 text-dark-400 rounded-full">
-                                                            {tag}
-                                                        </span>
-                                                    ))}
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-
-                                    {/* Note content preview */}
-                                    <div className="px-6 py-5 overflow-y-auto">
-                                        <div className="markdown-content text-sm">
-                                            <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
-                                                {currentNote.content}
-                                            </ReactMarkdown>
-                                        </div>
-                                    </div>
-
-                                    {/* AI Edit bar */}
-                                    {aiEditMode && (
-                                        <div className="px-4 py-3 border-t border-dark-700 bg-purple-900/5">
-                                            <p className="text-xs text-purple-400 mb-2 font-medium">KI-Bearbeitung</p>
-                                            <div className="flex gap-2">
-                                                <input
-                                                    type="text"
-                                                    value={aiEditInstruction}
-                                                    onChange={(e) => setAiEditInstruction(e.target.value)}
-                                                    onKeyDown={(e) => e.key === 'Enter' && handleAiEdit()}
-                                                    placeholder="z.B. 'Füge mehr Details hinzu' oder 'Kürze die Notiz'"
-                                                    className="flex-1 px-3 py-2 bg-dark-900 border border-dark-700 rounded-lg text-white text-xs placeholder-dark-600 focus:outline-none focus:border-purple-500"
-                                                    autoFocus
-                                                />
-                                                <button
-                                                    onClick={handleAiEdit}
-                                                    disabled={!aiEditInstruction.trim() || aiEditing}
-                                                    className="px-3 py-2 bg-purple-600 hover:bg-purple-500 text-white text-xs rounded-lg transition-colors disabled:opacity-50 flex items-center gap-1.5"
-                                                >
-                                                    {aiEditing ? (
-                                                        <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                                    ) : (
-                                                        <FiSend className="w-3.5 h-3.5" />
-                                                    )}
-                                                    Anwenden
-                                                </button>
-                                                <button
-                                                    onClick={() => { setAiEditMode(false); setAiEditInstruction(''); }}
-                                                    className="p-2 hover:bg-dark-700 rounded-lg text-dark-500 transition-colors"
-                                                >
-                                                    <FiX className="w-3.5 h-3.5" />
-                                                </button>
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {/* Actions */}
-                                    <div className="px-4 py-3 border-t border-dark-700 flex gap-2">
-                                        <button
-                                            onClick={handleAcceptNote}
-                                            disabled={savingNote || aiEditing}
-                                            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-500 text-white text-sm font-medium rounded-xl transition-colors disabled:opacity-50"
-                                        >
-                                            <FiCheck className="w-4 h-4" />
-                                            {savingNote ? 'Speichert...' : 'Akzeptieren'}
-                                        </button>
-                                        <button
-                                            onClick={() => setAiEditMode(!aiEditMode)}
-                                            className={`flex items-center gap-1.5 px-3 py-2 text-sm rounded-xl transition-colors ${
-                                                aiEditMode
-                                                    ? 'bg-purple-600 text-white'
-                                                    : 'bg-purple-600/20 text-purple-400 hover:bg-purple-600/30'
-                                            }`}
-                                        >
-                                            <FiZap className="w-4 h-4" />
-                                            <span className="hidden sm:inline">KI-Bearbeitung</span>
-                                        </button>
-                                        <button
-                                            onClick={handleSkipNote}
-                                            className="px-4 py-2 bg-dark-700 hover:bg-dark-600 text-dark-300 text-sm rounded-xl transition-colors"
-                                        >
-                                            Überspringen
-                                        </button>
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Error state */}
-                            {error && !generatingNote && !currentNote && (
-                                <div className="bg-dark-800 border border-red-900/50 rounded-2xl p-6 text-center">
-                                    <p className="text-sm text-red-400 mb-4">{error}</p>
-                                    <div className="flex gap-2 justify-center">
-                                        <button
-                                            onClick={handleRetry}
-                                            className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white text-sm rounded-xl transition-colors"
-                                        >
-                                            Erneut versuchen
-                                        </button>
-                                        <button
-                                            onClick={handleSkipNote}
-                                            className="px-4 py-2 bg-dark-700 hover:bg-dark-600 text-dark-300 text-sm rounded-xl transition-colors"
-                                        >
-                                            Überspringen
-                                        </button>
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    )}
-
-                    {/* Step: Done */}
-                    {step === 'done' && (
-                        <div className="h-full flex items-center justify-center">
-                            <div className="text-center max-w-md">
-                                <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-green-900/30 mb-4">
-                                    <FiCheck className="w-8 h-8 text-green-400" />
-                                </div>
-                                <h3 className="text-lg font-semibold text-white mb-2">Fertig!</h3>
-                                <p className="text-sm text-dark-400 mb-2">
-                                    <span className="text-green-400 font-medium">{completedCount} Notizen</span> erstellt
-                                    {skippedCount > 0 && (
-                                        <span> · <span className="text-dark-500">{skippedCount} übersprungen</span></span>
-                                    )}
-                                </p>
-                                {bookInfo && (
-                                    <p className="text-xs text-dark-500 mb-6">
-                                        Die Notizen findest du im Ordner <span className="text-amber-400">Bücher/{bookInfo.title}</span>
-                                    </p>
-                                )}
-                                <button
-                                    onClick={handleReset}
-                                    className="px-6 py-2.5 bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium rounded-xl transition-colors"
-                                >
-                                    Neues Buch verarbeiten
-                                </button>
-                            </div>
-                        </div>
-                    )}
-
+                    {step === 'list' && renderBooksList()}
+                    {step === 'confirm-book' && renderConfirmBook()}
+                    {step === 'confirm-toc' && renderConfirmToc()}
+                    {step === 'generating' && renderGenerating()}
+                    {step === 'done' && renderDone()}
                     <div ref={scrollRef} />
                 </div>
 
                 {/* Right: topic queue panel — visible during generation */}
                 {isGenerating && (
                     <>
-                        {/* Desktop: always visible */}
                         <div className="hidden lg:flex w-64 border-l border-dark-800 bg-dark-900/30 flex-shrink-0">
                             {renderTopicQueue()}
                         </div>
 
-                        {/* Mobile: overlay when toggled */}
                         {showQueueMobile && (
                             <>
                                 <div
