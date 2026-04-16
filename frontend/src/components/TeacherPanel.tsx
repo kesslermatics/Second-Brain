@@ -238,11 +238,11 @@ export default function TeacherPanel() {
         }
     };
 
-    // ── Generate term note (from chat) ───────────────────────────────
-    const handleGenerateTermNote = async () => {
-        if (!termInput.trim() || generatingTerm || view.kind !== 'lesson-chat') return;
-        const term = termInput.trim();
-        setTermInput('');
+    // ── Generate term note (from chat or inline [NOTIZ_ANFRAGE]) ─────
+    const handleGenerateTermNote = async (topicOverride?: string) => {
+        const term = topicOverride || termInput.trim();
+        if (!term || generatingTerm || view.kind !== 'lesson-chat') return;
+        if (!topicOverride) setTermInput('');
         setGeneratingTerm(true);
         setError(null);
         try {
@@ -298,7 +298,24 @@ export default function TeacherPanel() {
 
     // ── Return to chat after note review ─────────────────────────────
     const returnToChat = async (course: CourseDetail, unit: CourseUnit) => {
-        await openUnitChat(course, unit);
+        setLoadingMessages(true);
+        setMessages([]);
+        setView({ kind: 'lesson-chat', course, unit });
+        try {
+            const msgs = await getUnitMessages(course.id, unit.id);
+            setMessages(msgs);
+            setLoadingMessages(false);
+            // Automatically send follow-up so teacher asks about more questions
+            setSendingChat(true);
+            await sendTeacherChat(course.id, unit.id, '[NOTIZEN_ERSTELLT]');
+            const refreshed = await getUnitMessages(course.id, unit.id);
+            setMessages(refreshed);
+        } catch {
+            setError('Fehler beim Laden des Chats.');
+        } finally {
+            setSendingChat(false);
+            setLoadingMessages(false);
+        }
     };
 
     // ── Complete unit and advance ────────────────────────────────────
@@ -397,6 +414,18 @@ export default function TeacherPanel() {
         const enabled = course.units.filter((u) => u.enabled);
         const currentIndex = enabled.findIndex((u) => u.id === currentUnit.id);
         return { current: currentIndex + 1, total: enabled.length };
+    };
+
+    // ── Parse [NOTIZ_ANFRAGE: ...] markers from assistant messages ───
+    const extractNoteRequests = (content: string): { cleanContent: string; requests: string[] } => {
+        const regex = /\[NOTIZ_ANFRAGE:\s*(.+?)\]/g;
+        const requests: string[] = [];
+        let match;
+        while ((match = regex.exec(content)) !== null) {
+            requests.push(match[1].trim());
+        }
+        const cleanContent = content.replace(/\s*\[NOTIZ_ANFRAGE:\s*.+?\]/g, '').trim();
+        return { cleanContent, requests };
     };
 
     // ── Render: Courses list ─────────────────────────────────────────
@@ -692,7 +721,7 @@ export default function TeacherPanel() {
                         </div>
                     )}
 
-                    {messages.filter(m => m.role !== 'user' || m.content !== '[START]').map((msg) => (
+                    {messages.filter(m => m.role !== 'user' || (m.content !== '[START]' && m.content !== '[NOTIZEN_ERSTELLT]')).map((msg) => (
                         <div
                             key={msg.id}
                             className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
@@ -711,11 +740,33 @@ export default function TeacherPanel() {
                                     }`}
                                 >
                                     {msg.role === 'assistant' ? (
-                                        <div className="markdown-content text-sm leading-relaxed">
-                                            <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
-                                                {msg.content}
-                                            </ReactMarkdown>
-                                        </div>
+                                        (() => {
+                                            const { cleanContent, requests } = extractNoteRequests(msg.content);
+                                            return (
+                                                <>
+                                                    <div className="markdown-content text-sm leading-relaxed">
+                                                        <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
+                                                            {cleanContent}
+                                                        </ReactMarkdown>
+                                                    </div>
+                                                    {requests.length > 0 && (
+                                                        <div className="mt-3 flex flex-wrap gap-1.5">
+                                                            {requests.map((topic, i) => (
+                                                                <button
+                                                                    key={i}
+                                                                    onClick={() => handleGenerateTermNote(topic)}
+                                                                    disabled={generatingTerm}
+                                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-600/20 text-teal-300 hover:bg-teal-600/30 text-xs font-medium rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                                                >
+                                                                    <FiBookOpen className="w-3.5 h-3.5" />
+                                                                    Notiz erstellen: {topic}
+                                                                </button>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                </>
+                                            );
+                                        })()
                                     ) : (
                                         <p className="whitespace-pre-wrap">{msg.content}</p>
                                     )}
