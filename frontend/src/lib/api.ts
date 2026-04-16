@@ -378,6 +378,23 @@ export const generateChapterNote = async (bookTitle: string, authors: string[], 
   return data;
 };
 
+export const generateTopicNote = async (bookTitle: string, authors: string[], topic: string) => {
+  const { data } = await api.post<BookChapterNoteResult>('/books/generate-topic-note', {
+    book_title: bookTitle,
+    authors,
+    topic,
+  });
+  return data;
+};
+
+export const aiEditBookContent = async (content: string, instruction: string) => {
+  const { data } = await api.post<{ suggested_content: string }>('/books/ai-edit-content', {
+    content,
+    instruction,
+  });
+  return data;
+};
+
 // User State (cross-device key-value persistence)
 export const getUserState = async (key: string): Promise<string | null> => {
   const { data } = await api.get<{ key: string; value: string | null }>(`/state/${encodeURIComponent(key)}`);

@@ -1,4 +1,4 @@
-"""Book processing service — search, TOC extraction, chapter note generation."""
+"""Book processing service — search, TOC extraction, chapter note generation, topic deep-dive."""
 
 import google.generativeai as genai
 from google.ai.generativelanguage_v1beta import types as glm_types
@@ -180,3 +180,94 @@ Formatierungsregeln für formatted_content (sehr wichtig!):
         "formatted_content": f"Fehler beim Generieren der Notiz für {chapter_ref}.",
         "suggested_tags": [],
     }
+
+
+async def generate_topic_note(
+    topic: str,
+    book_title: str,
+    authors: list[str],
+    existing_tags: list[str] = None,
+) -> dict:
+    """Generate a note for an arbitrary topic in the context of a book."""
+    model = get_gemini_model()
+
+    authors_str = ", ".join(authors)
+    tags_str = ", ".join(existing_tags) if existing_tags else "(keine)"
+
+    prompt = f"""Du bist ein Second Brain Assistent. Erstelle eine ausführliche, gut strukturierte Notiz
+zum folgenden Thema, das im Kontext des Buches "{book_title}" von {authors_str} relevant ist:
+
+Thema: {topic}
+
+Die Notiz soll das Thema allgemein und umfassend behandeln — nicht nur im Buchkontext, 
+sondern als eigenständige Wissensnotiz, die auch ohne das Buch nützlich ist.
+
+Erstelle die Notiz im folgenden JSON-Format (NUR das JSON, kein anderer Text):
+{{
+    "suggested_folder": "Bücher/{book_title}/Themen",
+    "suggested_title": "{topic}",
+    "formatted_content": "Der formatierte Inhalt der Notiz in Markdown",
+    "suggested_tags": ["tag1", "tag2"]
+}}
+
+Bestehende Tags im System: {tags_str}
+Bevorzuge bestehende Tags wenn sie passen. Erstelle neue nur wenn nötig.
+
+Formatierungsregeln für formatted_content (sehr wichtig!):
+- Beginne mit einer kurzen Einordnung: Was ist {topic} und warum ist es relevant
+- Strukturiere den Inhalt gut mit Markdown-Headings (##, ###)
+- Verwende **Fettdruck** für Schlüsselbegriffe
+- Verwende Aufzählungslisten für Hierarchien
+- Verwende Callouts für wichtige Konzepte:
+  > [!MERKSATZ]
+  > Für Kernaussagen
+  
+  > [!DEFINITION]
+  > Für Begriffserklärungen
+  
+  > [!BEISPIEL]
+  > Für konkrete Beispiele
+
+- Schreibe sachlich, klar und informativ in neutraler Form
+- Die Notiz soll wie ein guter Lexikon-/Wikipedia-Eintrag sein, den man zum Lernen nutzen kann
+- Schreibe in der Sprache des Buches"""
+
+    response = model.generate_content(prompt, tools=[GOOGLE_SEARCH_TOOL])
+    text = response.text.strip()
+
+    json_match = re.search(r'\{[\s\S]*\}', text)
+    if json_match:
+        try:
+            result = json.loads(json_match.group())
+            return {
+                "suggested_folder": result.get("suggested_folder", f"Bücher/{book_title}/Themen"),
+                "suggested_title": result.get("suggested_title", topic),
+                "formatted_content": result.get("formatted_content", ""),
+                "suggested_tags": result.get("suggested_tags", []),
+            }
+        except json.JSONDecodeError:
+            pass
+
+    return {
+        "suggested_folder": f"Bücher/{book_title}/Themen",
+        "suggested_title": topic,
+        "formatted_content": f"Fehler beim Generieren der Notiz für {topic}.",
+        "suggested_tags": [],
+    }
+
+
+async def ai_edit_book_content(current_content: str, instruction: str) -> str:
+    """Edit book-generated content based on an instruction (no note_id needed)."""
+    model = get_gemini_model()
+
+    prompt = f"""Du bist ein Second Brain Assistent. Bearbeite die folgende Notiz basierend auf der Anweisung.
+
+AKTUELLE NOTIZ:
+{current_content}
+
+ANWEISUNG: {instruction}
+
+Gib NUR den neuen, vollständigen Notiz-Inhalt zurück (Markdown). Kein JSON, keine Erklärung, nur der Inhalt."""
+
+    response = model.generate_content(prompt)
+    return response.text.strip()
