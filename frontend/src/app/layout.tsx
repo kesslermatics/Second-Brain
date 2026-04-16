@@ -18,7 +18,10 @@ export default function RootLayout({
 }) {
     return (
         <html lang="de">
-            <body className="antialiased">{children}</body>
+            <head>
+                <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+            </head>
+            <body className="antialiased overflow-hidden overscroll-none">{children}</body>
         </html>
     );
 }

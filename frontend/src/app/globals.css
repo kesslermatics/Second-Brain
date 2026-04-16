@@ -23,6 +23,9 @@
 
 html, body {
   height: 100%;
+  overflow: hidden;
+  /* Prevent iOS bounce / overscroll */
+  overscroll-behavior: none;
 }
 
 body {
