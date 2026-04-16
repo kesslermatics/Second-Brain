@@ -13,6 +13,48 @@ GOOGLE_SEARCH_TOOL = glm_types.Tool(google_search=glm_types.Tool.GoogleSearch())
 def _current_year() -> int:
     return datetime.now().year
 
+def _extract_json(text: str) -> dict | None:
+    """Robustly extract a JSON object from LLM response text.
+
+    Handles markdown code fences, preamble text with braces, etc.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    # 1. Strip markdown code fences
+    cleaned = re.sub(r'```(?:json)?\s*', '', text).strip()
+
+    # 2. Try direct parse
+    try:
+        return json.loads(cleaned)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # 3. Find first valid JSON object using balanced braces
+    i = 0
+    while i < len(cleaned):
+        if cleaned[i] == '{':
+            depth = 0
+            for j in range(i, len(cleaned)):
+                if cleaned[j] == '{':
+                    depth += 1
+                elif cleaned[j] == '}':
+                    depth -= 1
+                    if depth == 0:
+                        candidate = cleaned[i:j + 1]
+                        try:
+                            return json.loads(candidate)
+                        except json.JSONDecodeError:
+                            break  # This opening brace wasn't it, skip past it
+            i = cleaned.find('{', i + 1)
+            if i == -1:
+                break
+        else:
+            i += 1
+
+    logger.warning("Failed to extract JSON from LLM response: %s", text[:300])
+    return None
+
 settings = get_settings()
 
 # ── Shared formatting instructions for all teaching prompts ───────────
@@ -134,17 +176,13 @@ WICHTIG:
     response = model.generate_content(prompt, tools=[GOOGLE_SEARCH_TOOL])
     text = response.text.strip()
 
-    json_match = re.search(r'\{[\s\S]*\}', text)
-    if json_match:
-        try:
-            result = json.loads(json_match.group())
-            return {
-                "title": result.get("title", topic),
-                "description": result.get("description", ""),
-                "units": result.get("units", []),
-            }
-        except json.JSONDecodeError:
-            pass
+    result = _extract_json(text)
+    if result:
+        return {
+            "title": result.get("title", topic),
+            "description": result.get("description", ""),
+            "units": result.get("units", []),
+        }
 
     return {"title": topic, "description": "", "units": []}
 
@@ -255,12 +293,12 @@ async def generate_lesson_notes(
 
     objectives_str = "\n".join(f"  - {o}" for o in learning_objectives) if learning_objectives else ""
 
-    # Compress chat history for context
+    # Compress chat history for context — use generous limit so notes cover everything
     chat_text = ""
     for msg in chat_history[-30:]:
         role_label = "Student" if msg["role"] == "user" else "Lehrer"
-        if msg["role"] != "note_generated":
-            chat_text += f"{role_label}: {msg['content'][:500]}\n"
+        if msg["role"] != "note_generated" and msg.get("content", "") not in ("[START]", "[NOTIZEN_ERSTELLT]"):
+            chat_text += f"{role_label}: {msg['content'][:3000]}\n"
 
     prompt = f"""Du bist ein Second Brain Assistent. Wir befinden uns im Jahr {year}.
 Basierend auf dem folgenden Unterrichtsgespräch sollst du ATOMIC NOTES erstellen.
@@ -304,17 +342,13 @@ Antworte NUR mit dem JSON, kein anderer Text:
     response = model.generate_content(prompt, tools=[GOOGLE_SEARCH_TOOL])
     text = response.text.strip()
 
-    json_match = re.search(r'\{[\s\S]*\}', text)
-    if json_match:
-        try:
-            result = json.loads(json_match.group())
-            notes = result.get("notes", [])
-            for note in notes:
-                note.setdefault("suggested_folder", f"Kurse/{course_title}")
-                note.setdefault("suggested_tags", [])
-            return notes
-        except json.JSONDecodeError:
-            pass
+    result = _extract_json(text)
+    if result:
+        notes = result.get("notes", [])
+        for note in notes:
+            note.setdefault("suggested_folder", f"Kurse/{course_title}")
+            note.setdefault("suggested_tags", [])
+        return notes
 
     return []
 
@@ -339,8 +373,8 @@ async def generate_term_note(
     chat_text = ""
     for msg in chat_history[-10:]:
         role_label = "Student" if msg["role"] == "user" else "Lehrer"
-        if msg["role"] != "note_generated":
-            chat_text += f"{role_label}: {msg['content'][:300]}\n"
+        if msg["role"] != "note_generated" and msg.get("content", "") not in ("[START]", "[NOTIZEN_ERSTELLT]"):
+            chat_text += f"{role_label}: {msg['content'][:1500]}\n"
 
     prompt = f"""Du bist ein Second Brain Assistent. Wir befinden uns im Jahr {year}.
 Erstelle eine ATOMIC NOTE zum folgenden Begriff:
@@ -371,18 +405,14 @@ Antworte NUR mit dem JSON, kein anderer Text:
     response = model.generate_content(prompt, tools=[GOOGLE_SEARCH_TOOL])
     text = response.text.strip()
 
-    json_match = re.search(r'\{[\s\S]*\}', text)
-    if json_match:
-        try:
-            result = json.loads(json_match.group())
-            return {
-                "title": result.get("title", term),
-                "content": result.get("content", ""),
-                "suggested_tags": result.get("suggested_tags", []),
-                "suggested_folder": result.get("suggested_folder", f"Kurse/{course_title}"),
-            }
-        except json.JSONDecodeError:
-            pass
+    result = _extract_json(text)
+    if result:
+        return {
+            "title": result.get("title", term),
+            "content": result.get("content", ""),
+            "suggested_tags": result.get("suggested_tags", []),
+            "suggested_folder": result.get("suggested_folder", f"Kurse/{course_title}"),
+        }
 
     return {
         "title": term,
@@ -436,13 +466,9 @@ Antworte NUR mit dem JSON:
     response = model.generate_content(prompt, tools=[GOOGLE_SEARCH_TOOL])
     text = response.text.strip()
 
-    json_match = re.search(r'\{[\s\S]*\}', text)
-    if json_match:
-        try:
-            result = json.loads(json_match.group())
-            return result.get("suggestions", [])
-        except json.JSONDecodeError:
-            pass
+    result = _extract_json(text)
+    if result:
+        return result.get("suggestions", [])
 
     return []
 
