@@ -140,3 +140,19 @@ async def init_db():
             )
         except Exception:
             pass
+        # Ensure book columns exist on courses table (interactive book chapters)
+        try:
+            for col, dtype in [
+                ("kind", "VARCHAR(50) NOT NULL DEFAULT 'teacher'"),
+                ("book_authors", "JSONB"),
+                ("book_year", "VARCHAR(20)"),
+                ("book_isbn", "VARCHAR(50)"),
+                ("book_publisher", "VARCHAR(255)"),
+            ]:
+                await conn.execute(
+                    __import__('sqlalchemy').text(
+                        f"ALTER TABLE courses ADD COLUMN IF NOT EXISTS {col} {dtype}"
+                    )
+                )
+        except Exception:
+            pass

@@ -491,3 +491,216 @@ Gib NUR den neuen, vollständigen Notiz-Inhalt zurück (Markdown). Kein JSON, ke
 
     response = model.generate_content(prompt)
     return response.text.strip()
+
+
+# ── Book Chapter Interactive Teaching ─────────────────────────────────
+
+async def chat_about_book_chapter(
+    book_title: str,
+    book_authors: list[str],
+    chapter_number: str,
+    chapter_title: str,
+    chat_history: list[dict],
+    user_message: str,
+    previous_chapters_summary: str | None = None,
+    next_chapter_title: str | None = None,
+) -> str:
+    """Chat about a specific book chapter, explaining its content interactively."""
+    model = get_gemini_model()
+    year = _current_year()
+    authors_str = ", ".join(book_authors) if book_authors else "unbekannter Autor"
+
+    prev_context = ""
+    if previous_chapters_summary:
+        prev_context = f"""
+BEREITS BEHANDELTE KAPITEL (Kontext):
+{previous_chapters_summary}
+Du kannst auf dieses Vorwissen aufbauen, ohne es komplett zu wiederholen.
+"""
+
+    next_hint = ""
+    if next_chapter_title:
+        next_hint = f'\nNÄCHSTES KAPITEL im Buch: "{next_chapter_title}" — du kannst gegen Ende natürlich dorthin überleiten.'
+
+    history_text = ""
+    for msg in chat_history[-20:]:
+        role_label = "Student" if msg["role"] == "user" else "Tutor"
+        if msg["role"] == "note_generated":
+            history_text += f"\n[System: Notiz wurde generiert: {msg.get('content', '')[:100]}]\n"
+        else:
+            history_text += f"\n{role_label}: {msg['content']}\n"
+
+    prompt = f"""Du bist ein freundlicher, geduldiger und kompetenter Tutor, der einem Studenten beim Durcharbeiten eines Buches hilft.
+Wir befinden uns im Jahr {year}.
+Du DUZT den Studenten IMMER ("du", "dein", "dir" — NIEMALS "Sie", "Ihr", "Ihnen").
+
+BUCH: "{book_title}" von {authors_str}
+AKTUELLES KAPITEL: {chapter_number} — "{chapter_title}"
+{prev_context}{next_hint}
+
+BISHERIGER GESPRÄCHSVERLAUF:
+{history_text}
+
+NEUE NACHRICHT DES STUDENTEN:
+{user_message}
+
+DEINE AUFGABE:
+- Recherchiere zuerst den TATSÄCHLICHEN Inhalt dieses Kapitels aus dem Buch und erkläre ihn dann
+- Erkläre die Kernkonzepte des Kapitels klar und verständlich — wie ein guter Tutor
+- Verwende Beispiele und Analogien, um abstrakte Konzepte greifbar zu machen
+- Wenn der Student eine Frage stellt, beantworte sie ausführlich
+- Wenn der Student sagt, er hat verstanden oder weiter möchte, fasse kurz zusammen
+- Wenn der Student nach einer Notiz fragt oder sagt, er will eine Notiz erstellen, signalisiere das mit dem speziellen Marker [NOTIZ_ANFRAGE: Thema der gewünschten Notiz]
+- Wenn du den Eindruck hast, der Student versteht den Stoff, ermutige ihn und schlage vor, Notizen zu erstellen
+- SPEZIAL-NACHRICHTEN:
+  - "[START]": Der Student hat das Kapitel gerade geöffnet. Begrüße ihn kurz und beginne mit einer Einführung
+    in das Kapitelthema. Gib einen Überblick über die wichtigsten Konzepte, die in diesem Kapitel behandelt werden.
+  - "[NOTIZEN_ERSTELLT]": Es wurden gerade Notizen erstellt und gespeichert. Frage den Studenten freundlich
+    und kurz (2-3 Sätze), ob er noch Fragen zum aktuellen Kapitel hat oder ob er bereit ist, zum nächsten
+    Kapitel überzugehen.
+- AKTUALITÄT: Wenn das Buchthema sich seit Veröffentlichung weiterentwickelt hat, bringe aktuelle
+  Ergänzungen ein und kennzeichne sie z.B. mit "Aktueller Stand ({year}):..." oder "Neuere Forschung zeigt...".
+
+{FORMATTING_RULES}
+
+HINWEIS zu Mathe-Formeln: Wenn das Kapitel mathematische Inhalte hat, verwende IMMER die LaTeX-Notation ($...$ inline, $$...$$ als Block).
+
+Antworte auf Deutsch (oder in der Sprache des Buches).
+Sei warmherzig aber sachlich. Fokussiere dich auf den Inhalt des Kapitels.
+WICHTIG: DUZE den Studenten IMMER. Verwende "du/dein/dir", NIEMALS "Sie/Ihr/Ihnen"."""
+
+    response = model.generate_content(prompt, tools=[GOOGLE_SEARCH_TOOL])
+    return response.text.strip()
+
+
+async def generate_book_chapter_notes(
+    book_title: str,
+    book_authors: list[str],
+    chapter_number: str,
+    chapter_title: str,
+    chat_history: list[dict],
+    existing_tags: list[str] | None = None,
+) -> list[dict]:
+    """Generate atomic notes for a book chapter based on the interactive discussion."""
+    model = get_gemini_model()
+    year = _current_year()
+    authors_str = ", ".join(book_authors) if book_authors else "unbekannter Autor"
+    tags_str = ", ".join(existing_tags) if existing_tags else "(keine)"
+
+    chat_text = ""
+    for msg in chat_history[-30:]:
+        role_label = "Student" if msg["role"] == "user" else "Tutor"
+        if msg["role"] != "note_generated" and msg.get("content", "") not in ("[START]", "[NOTIZEN_ERSTELLT]"):
+            chat_text += f"{role_label}: {msg['content'][:3000]}\n"
+
+    prompt = f"""Du bist ein Second Brain Assistent. Wir befinden uns im Jahr {year}.
+Basierend auf dem folgenden Gespräch über ein Buchkapitel sollst du ATOMIC NOTES erstellen.
+
+BUCH: "{book_title}" von {authors_str}
+KAPITEL: {chapter_number} — "{chapter_title}"
+
+GESPRÄCHSVERLAUF:
+{chat_text}
+
+{ATOMIC_NOTE_RULES}
+
+Bestehende Tags im System: {tags_str}
+Bevorzuge bestehende Tags wenn sie passen.
+
+{FORMATTING_RULES}
+
+Erstelle so viele Notizen wie nötig, um ALLE wichtigen Konzepte des Kapitels abzudecken.
+Typischerweise 2-5 Notizen pro Kapitel.
+Beginne jede Notiz mit einer kurzen Einordnung: Aus welchem Buch und Kapitel das Konzept stammt.
+
+ACHTUNG: Wenn im Gespräch aktuelle Ergänzungen zum Buchinhalt besprochen wurden, integriere diese in die Notizen.
+
+Antworte NUR mit dem JSON, kein anderer Text:
+{{
+    "notes": [
+        {{
+            "title": "Konzeptname als Titel",
+            "content": "Markdown-formatierter Inhalt der Notiz",
+            "suggested_tags": ["tag1", "tag2"],
+            "suggested_folder": "Bücher/{book_title}"
+        }}
+    ]
+}}"""
+
+    response = model.generate_content(prompt, tools=[GOOGLE_SEARCH_TOOL])
+    text = response.text.strip()
+
+    result = _extract_json(text)
+    if result:
+        notes = result.get("notes", [])
+        for note in notes:
+            note.setdefault("suggested_folder", f"Bücher/{book_title}")
+            note.setdefault("suggested_tags", [])
+        return notes
+
+    return []
+
+
+async def generate_book_term_note(
+    term: str,
+    book_title: str,
+    book_authors: list[str],
+    chapter_title: str,
+    chat_history: list[dict],
+    existing_tags: list[str] | None = None,
+) -> dict:
+    """Generate a single atomic note for a term from a book chapter context."""
+    model = get_gemini_model()
+    year = _current_year()
+    authors_str = ", ".join(book_authors) if book_authors else "unbekannter Autor"
+    tags_str = ", ".join(existing_tags) if existing_tags else "(keine)"
+
+    chat_text = ""
+    for msg in chat_history[-10:]:
+        role_label = "Student" if msg["role"] == "user" else "Tutor"
+        if msg["role"] != "note_generated" and msg.get("content", "") not in ("[START]", "[NOTIZEN_ERSTELLT]"):
+            chat_text += f"{role_label}: {msg['content'][:1500]}\n"
+
+    prompt = f"""Du bist ein Second Brain Assistent. Wir befinden uns im Jahr {year}.
+Erstelle eine ATOMIC NOTE zum folgenden Begriff:
+
+BEGRIFF: "{term}"
+KONTEXT: Buch "{book_title}" von {authors_str}, Kapitel "{chapter_title}"
+
+Aktueller Gesprächskontext:
+{chat_text}
+
+WICHTIG: Recherchiere den aktuellen Stand der Forschung / State of the Art (Stand {year}) zu diesem Begriff.
+
+{ATOMIC_NOTE_RULES}
+{FORMATTING_RULES}
+
+Bestehende Tags im System: {tags_str}
+Bevorzuge bestehende Tags wenn sie passen.
+
+Antworte NUR mit dem JSON, kein anderer Text:
+{{
+    "title": "{term}",
+    "content": "Markdown-formatierter Inhalt der Notiz",
+    "suggested_tags": ["tag1", "tag2"],
+    "suggested_folder": "Bücher/{book_title}"
+}}"""
+
+    response = model.generate_content(prompt, tools=[GOOGLE_SEARCH_TOOL])
+    text = response.text.strip()
+
+    result = _extract_json(text)
+    if result:
+        return {
+            "title": result.get("title", term),
+            "content": result.get("content", ""),
+            "suggested_tags": result.get("suggested_tags", []),
+            "suggested_folder": result.get("suggested_folder", f"Bücher/{book_title}"),
+        }
+
+    return {
+        "title": term,
+        "content": f"Fehler beim Generieren der Notiz für '{term}'.",
+        "suggested_tags": [],
+        "suggested_folder": f"Bücher/{book_title}",
+    }

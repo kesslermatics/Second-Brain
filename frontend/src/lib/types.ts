@@ -268,7 +268,12 @@ export interface CourseListItem {
   title: string;
   description: string;
   status: 'draft' | 'active' | 'completed';
+  kind: 'teacher' | 'book';
   parent_course_id: string | null;
+  book_authors?: string[];
+  book_year?: string;
+  book_isbn?: string;
+  book_publisher?: string;
   total_units: number;
   completed_units: number;
   enabled_units: number;
@@ -294,7 +299,12 @@ export interface CourseDetail {
   title: string;
   description: string;
   status: 'draft' | 'active' | 'completed';
+  kind: 'teacher' | 'book';
   parent_course_id: string | null;
+  book_authors?: string[];
+  book_year?: string;
+  book_isbn?: string;
+  book_publisher?: string;
   units: CourseUnit[];
   created_at: string | null;
   updated_at: string | null;

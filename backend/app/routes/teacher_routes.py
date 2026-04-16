@@ -16,6 +16,9 @@ from app.services.teacher_service import (
     generate_term_note,
     generate_advanced_focus,
     ai_edit_lesson_content,
+    chat_about_book_chapter,
+    generate_book_chapter_notes,
+    generate_book_term_note,
 )
 
 router = APIRouter(prefix="/teacher", tags=["teacher"])
@@ -78,15 +81,16 @@ def _get_next_unit_title(units: list[CourseUnit], current_order: int) -> str | N
 
 @router.get("/courses")
 async def list_courses(
+    kind: str | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """List all courses for the current user."""
-    result = await db.execute(
-        select(Course)
-        .where(Course.user_id == current_user.id)
-        .order_by(Course.updated_at.desc())
-    )
+    """List all courses for the current user, optionally filtered by kind."""
+    query = select(Course).where(Course.user_id == current_user.id)
+    if kind:
+        query = query.where(Course.kind == kind)
+    query = query.order_by(Course.updated_at.desc())
+    result = await db.execute(query)
     courses = result.scalars().all()
 
     out = []
@@ -106,7 +110,12 @@ async def list_courses(
             "title": c.title,
             "description": c.description,
             "status": c.status,
+            "kind": c.kind or "teacher",
             "parent_course_id": str(c.parent_course_id) if c.parent_course_id else None,
+            "book_authors": c.book_authors,
+            "book_year": c.book_year,
+            "book_isbn": c.book_isbn,
+            "book_publisher": c.book_publisher,
             "total_units": row.total,
             "completed_units": row.completed,
             "enabled_units": row.enabled,
@@ -138,7 +147,12 @@ async def get_course(
         "title": course.title,
         "description": course.description,
         "status": course.status,
+        "kind": course.kind or "teacher",
         "parent_course_id": str(course.parent_course_id) if course.parent_course_id else None,
+        "book_authors": course.book_authors,
+        "book_year": course.book_year,
+        "book_isbn": course.book_isbn,
+        "book_publisher": course.book_publisher,
         "units": [
             {
                 "id": str(u.id),
@@ -245,6 +259,69 @@ async def teacher_generate_curriculum(
     await db.refresh(course)
 
     # Return full course with units
+    return await get_course(str(course.id), db, current_user)
+
+
+# ── Book Course Creation ──────────────────────────────────────────────
+
+@router.post("/create-book-course")
+async def create_book_course(
+    data: dict,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Create a course from a book's TOC for interactive chapter-by-chapter learning."""
+    title = data.get("title", "").strip()
+    authors = data.get("authors", [])
+    description = data.get("description", "")
+    year = data.get("year")
+    isbn = data.get("isbn")
+    publisher = data.get("publisher")
+    chapters = data.get("chapters", [])
+
+    if not title or not chapters:
+        raise HTTPException(status_code=400, detail="Title and chapters required")
+
+    # Filter only enabled chapters
+    enabled_chapters = [ch for ch in chapters if ch.get("enabled", True)]
+    if not enabled_chapters:
+        raise HTTPException(status_code=400, detail="At least one chapter must be enabled")
+
+    # Create course
+    course = Course(
+        topic=title,
+        title=title,
+        description=description or "",
+        status="active",
+        kind="book",
+        book_authors=authors,
+        book_year=str(year) if year else None,
+        book_isbn=isbn or None,
+        book_publisher=publisher or None,
+        user_id=current_user.id,
+    )
+    db.add(course)
+    await db.flush()
+    await db.refresh(course)
+
+    # Create units from enabled chapters
+    for idx, ch in enumerate(enabled_chapters):
+        unit = CourseUnit(
+            course_id=course.id,
+            unit_number=ch.get("chapter_number", str(idx + 1)),
+            title=ch.get("title", f"Kapitel {idx + 1}"),
+            description="",
+            learning_objectives=[],
+            level=ch.get("level", 1),
+            enabled=True,
+            status="pending",
+            order_index=idx,
+        )
+        db.add(unit)
+
+    await db.commit()
+    await db.refresh(course)
+
     return await get_course(str(course.id), db, current_user)
 
 
@@ -396,17 +473,29 @@ async def unit_chat(
     db.add(user_msg)
     await db.flush()
 
-    # Get AI response
-    ai_response = await chat_with_teacher(
-        course_title=course.title,
-        unit_title=unit.title,
-        unit_description=unit.description or "",
-        learning_objectives=unit.learning_objectives or [],
-        chat_history=chat_history,
-        user_message=user_message,
-        previous_units_summary=previous_summary,
-        next_unit_title=next_title,
-    )
+    # Get AI response — dispatch by course kind
+    if (course.kind or "teacher") == "book":
+        ai_response = await chat_about_book_chapter(
+            book_title=course.title,
+            book_authors=course.book_authors or [],
+            chapter_number=unit.unit_number,
+            chapter_title=unit.title,
+            chat_history=chat_history,
+            user_message=user_message,
+            previous_chapters_summary=previous_summary,
+            next_chapter_title=next_title,
+        )
+    else:
+        ai_response = await chat_with_teacher(
+            course_title=course.title,
+            unit_title=unit.title,
+            unit_description=unit.description or "",
+            learning_objectives=unit.learning_objectives or [],
+            chat_history=chat_history,
+            user_message=user_message,
+            previous_units_summary=previous_summary,
+            next_unit_title=next_title,
+        )
 
     # Save assistant message
     assistant_msg = CourseMessage(
@@ -477,15 +566,25 @@ async def unit_generate_notes(
     all_tags = list(tag_result.scalars().all())
     existing_tag_names = [t.name for t in all_tags]
 
-    # Generate notes
-    notes = await generate_lesson_notes(
-        course_title=course.title,
-        unit_title=unit.title,
-        unit_description=unit.description or "",
-        learning_objectives=unit.learning_objectives or [],
-        chat_history=chat_history,
-        existing_tags=existing_tag_names,
-    )
+    # Generate notes — dispatch by course kind
+    if (course.kind or "teacher") == "book":
+        notes = await generate_book_chapter_notes(
+            book_title=course.title,
+            book_authors=course.book_authors or [],
+            chapter_number=unit.unit_number,
+            chapter_title=unit.title,
+            chat_history=chat_history,
+            existing_tags=existing_tag_names,
+        )
+    else:
+        notes = await generate_lesson_notes(
+            course_title=course.title,
+            unit_title=unit.title,
+            unit_description=unit.description or "",
+            learning_objectives=unit.learning_objectives or [],
+            chat_history=chat_history,
+            existing_tags=existing_tag_names,
+        )
 
     # Resolve tags for each note
     result_notes = []
@@ -565,14 +664,24 @@ async def unit_generate_term_note(
     all_tags = list(tag_result.scalars().all())
     existing_tag_names = [t.name for t in all_tags]
 
-    # Generate note
-    note = await generate_term_note(
-        term=term,
-        course_title=course.title,
-        unit_title=unit.title,
-        chat_history=chat_history,
-        existing_tags=existing_tag_names,
-    )
+    # Generate note — dispatch by course kind
+    if (course.kind or "teacher") == "book":
+        note = await generate_book_term_note(
+            term=term,
+            book_title=course.title,
+            book_authors=course.book_authors or [],
+            chapter_title=unit.title,
+            chat_history=chat_history,
+            existing_tags=existing_tag_names,
+        )
+    else:
+        note = await generate_term_note(
+            term=term,
+            course_title=course.title,
+            unit_title=unit.title,
+            chat_history=chat_history,
+            existing_tags=existing_tag_names,
+        )
 
     tag_ids, tag_display = await _resolve_tags(
         note.get("suggested_tags", []), all_tags, current_user, db

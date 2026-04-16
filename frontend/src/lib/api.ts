@@ -413,7 +413,7 @@ export const deleteUserState = async (key: string): Promise<void> => {
 // ── Infinite Teacher ─────────────────────────────────────────────────
 
 export const getTeacherCourses = async () => {
-  const { data } = await api.get<CourseListItem[]>('/teacher/courses');
+  const { data } = await api.get<CourseListItem[]>('/teacher/courses', { params: { kind: 'teacher' } });
   return data;
 };
 
@@ -474,6 +474,29 @@ export const aiEditTeacherContent = async (content: string, instruction: string)
   const { data } = await api.post<{ suggested_content: string }>('/teacher/ai-edit-content', {
     content,
     instruction,
+  });
+  return data;
+};
+
+// ── Book Courses (interactive chapter learning) ──────────────────────
+
+export const getBookCourses = async () => {
+  const { data } = await api.get<CourseListItem[]>('/teacher/courses', { params: { kind: 'book' } });
+  return data;
+};
+
+export const createBookCourse = async (
+  bookInfo: { title: string; authors: string[]; description?: string; year?: number; isbn?: string; publisher?: string },
+  chapters: { chapter_number: string; title: string; level: number; enabled: boolean }[],
+) => {
+  const { data } = await api.post<CourseDetail>('/teacher/create-book-course', {
+    title: bookInfo.title,
+    authors: bookInfo.authors,
+    description: bookInfo.description || '',
+    year: bookInfo.year,
+    isbn: bookInfo.isbn,
+    publisher: bookInfo.publisher,
+    chapters,
   });
   return data;
 };

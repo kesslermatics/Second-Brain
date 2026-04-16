@@ -249,6 +249,11 @@ class Course(Base):
     title = Column(String(512), nullable=False)
     description = Column(Text, nullable=True)
     status = Column(String(50), nullable=False, default="draft")  # draft / active / completed
+    kind = Column(String(50), nullable=False, default="teacher")  # 'teacher' | 'book'
+    book_authors = Column(JSON, nullable=True)  # ["Author 1", "Author 2"]
+    book_year = Column(String(20), nullable=True)
+    book_isbn = Column(String(50), nullable=True)
+    book_publisher = Column(String(255), nullable=True)
     parent_course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id", ondelete="SET NULL"), nullable=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
