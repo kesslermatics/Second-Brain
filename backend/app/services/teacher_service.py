@@ -89,6 +89,11 @@ Der Lehrplan soll:
 - Themen sollen natürlich ineinander übergehen und aufeinander aufbauen
 - Lernziele pro Lektion definieren (was der Student danach können/wissen soll)
 - Praxisrelevant und tiefgehend sein, wie ein guter Universitätskurs
+- AKTUELLE FORSCHUNG UND STATE OF THE ART einbeziehen: Recherchiere nach den neuesten
+  Entwicklungen, Methoden und Erkenntnissen in diesem Fachgebiet. Neben den Grundlagen sollen
+  auch aktuelle Trends, moderne Ansätze und neue Forschungsergebnisse als Lektionen enthalten sein.
+  Wenn das Thema sich schnell weiterentwickelt (z.B. KI, Medizin, Technologie), widme mindestens
+  ein Modul explizit den aktuellen Entwicklungen und dem Stand der Forschung.
 
 Antworte NUR mit dem JSON, kein anderer Text:
 {{
@@ -199,6 +204,10 @@ DEINE AUFGABE:
 - Wenn der Student sagt, er hat verstanden oder weiter möchte, fasse kurz zusammen und leite zum nächsten Aspekt über
 - Wenn der Student nach einer Notiz fragt oder sagt, er will eine Notiz erstellen, signalisiere das mit dem speziellen Marker [NOTIZ_ANFRAGE: Thema der gewünschten Notiz]
 - Wenn du den Eindruck hast, der Student versteht den Stoff, ermutige ihn und schlage vor, eine Notiz zu erstellen
+- AKTUALITÄT: Recherchiere aktiv nach dem aktuellen State of the Art, neuesten Forschungsergebnissen,
+  modernen Best Practices und aktuellen Entwicklungen zu diesem Thema. Bringe diese proaktiv ein,
+  wenn sie relevant sind. Kennzeichne aktuelle Erkenntnisse z.B. mit "Aktueller Stand (2025/2026):..."
+  oder "Neuere Forschung zeigt...". Wenn klassisches Wissen inzwischen überholt ist, weise darauf hin.
 
 {FORMATTING_RULES}
 
@@ -259,6 +268,10 @@ Bevorzuge bestehende Tags wenn sie passen.
 Erstelle so viele Notizen wie nötig, um ALLE wichtigen Konzepte der Lektion abzudecken.
 Typischerweise 2-5 Notizen pro Lektion.
 
+ACHTUNG AKTUALITÄT: Wenn im Gespräch aktuelle Forschungsergebnisse, moderne Methoden oder
+State-of-the-Art-Entwicklungen besprochen wurden, schreibe diese MIT in die Notizen.
+Recherchiere zusätzlich, ob es relevante aktuelle Erkenntnisse gibt, die in die Notizen gehören.
+
 Antworte NUR mit dem JSON, kein anderer Text:
 {{
     "notes": [
@@ -318,6 +331,9 @@ KONTEXT: Kurs "{course_title}", Lektion "{unit_title}"
 
 Aktueller Gesprächskontext:
 {chat_text}
+
+WICHTIG: Recherchiere den aktuellen Stand der Forschung / State of the Art zu diesem Begriff.
+Wenn es neuere Erkenntnisse oder Entwicklungen gibt, integriere sie in die Notiz.
 
 {ATOMIC_NOTE_RULES}
 {FORMATTING_RULES}
@@ -382,6 +398,8 @@ Diese sollen:
 - Fortgeschrittene oder spezialisierte Aspekte des Themas abdecken
 - Wie Master-/Vertiefungsmodule sein
 - Praktisch relevant und interessant sein
+- AKTUELLE TRENDS berücksichtigen: Recherchiere die neuesten Entwicklungen und Forschungsrichtungen
+  in diesem Fachgebiet und schlage auch Schwerpunkte vor, die sich mit State-of-the-Art-Themen befassen
 
 Antworte NUR mit dem JSON:
 {{
