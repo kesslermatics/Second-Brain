@@ -5,8 +5,7 @@ import {
     FiFileText, FiFolder, FiTag, FiGlobe, FiZap, FiRefreshCw,
 } from 'react-icons/fi';
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { markdownComponents } from '@/lib/markdownComponents';
+import { markdownComponents, remarkPlugins, rehypePlugins } from '@/lib/markdownComponents';
 import { generateSummary, getFolderTree, getTags } from '@/lib/api';
 import type { FolderTree, Tag, SummaryResponse } from '@/lib/types';
 
@@ -185,7 +184,7 @@ export default function SummaryView() {
                                 <span className="text-xs text-dark-500">{result.source_count} Notizen analysiert</span>
                             </div>
                             <article className="markdown-content text-sm">
-                                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                                <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
                                     {result.summary}
                                 </ReactMarkdown>
                             </article>

@@ -6,6 +6,7 @@ import type {
   FlashCard, SRSettings, ReviewSession, DashboardData, SummaryRequest, SummaryResponse,
   ExportRequest, ImageItem, ImageListResponse,
   BookSearchResult, BookTocResult, BookChapter, BookChapterNoteResult,
+  CourseListItem, CourseDetail, CourseMessage as CourseMsg, CourseNoteResult, AdvancedFocusSuggestion,
 } from './types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -407,6 +408,74 @@ export const putUserState = async (key: string, value: string): Promise<void> =>
 
 export const deleteUserState = async (key: string): Promise<void> => {
   await api.delete(`/state/${encodeURIComponent(key)}`);
+};
+
+// ── Infinite Teacher ─────────────────────────────────────────────────
+
+export const getTeacherCourses = async () => {
+  const { data } = await api.get<CourseListItem[]>('/teacher/courses');
+  return data;
+};
+
+export const getTeacherCourse = async (courseId: string) => {
+  const { data } = await api.get<CourseDetail>(`/teacher/courses/${courseId}`);
+  return data;
+};
+
+export const deleteTeacherCourse = async (courseId: string) => {
+  await api.delete(`/teacher/courses/${courseId}`);
+};
+
+export const generateCurriculum = async (topic: string, parentCourseId?: string, customFocus?: string) => {
+  const { data } = await api.post<CourseDetail>('/teacher/generate-curriculum', {
+    topic,
+    parent_course_id: parentCourseId || null,
+    custom_focus: customFocus || null,
+  });
+  return data;
+};
+
+export const updateCourseStatus = async (courseId: string, status: string) => {
+  const { data } = await api.patch(`/teacher/courses/${courseId}/status`, { status });
+  return data;
+};
+
+export const updateCourseUnit = async (courseId: string, unitId: string, updates: { enabled?: boolean; status?: string }) => {
+  const { data } = await api.patch(`/teacher/courses/${courseId}/units/${unitId}`, updates);
+  return data;
+};
+
+export const getUnitMessages = async (courseId: string, unitId: string) => {
+  const { data } = await api.get<CourseMsg[]>(`/teacher/courses/${courseId}/units/${unitId}/messages`);
+  return data;
+};
+
+export const sendTeacherChat = async (courseId: string, unitId: string, message: string) => {
+  const { data } = await api.post<{ message: CourseMsg }>(`/teacher/courses/${courseId}/units/${unitId}/chat`, { message });
+  return data.message;
+};
+
+export const generateLessonNotes = async (courseId: string, unitId: string) => {
+  const { data } = await api.post<{ notes: CourseNoteResult[] }>(`/teacher/courses/${courseId}/units/${unitId}/generate-notes`);
+  return data.notes;
+};
+
+export const generateTermNote = async (courseId: string, unitId: string, term: string) => {
+  const { data } = await api.post<CourseNoteResult>(`/teacher/courses/${courseId}/units/${unitId}/generate-term-note`, { term });
+  return data;
+};
+
+export const generateAdvancedFocus = async (courseId: string) => {
+  const { data } = await api.post<{ suggestions: AdvancedFocusSuggestion[] }>(`/teacher/courses/${courseId}/generate-focus`);
+  return data.suggestions;
+};
+
+export const aiEditTeacherContent = async (content: string, instruction: string) => {
+  const { data } = await api.post<{ suggested_content: string }>('/teacher/ai-edit-content', {
+    content,
+    instruction,
+  });
+  return data;
 };
 
 export default api;

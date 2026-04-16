@@ -4,8 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import { FiSend, FiSave, FiX, FiCheck, FiRefreshCw, FiMessageSquare } from 'react-icons/fi';
 import { LuBrain } from 'react-icons/lu';
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { markdownComponents } from '@/lib/markdownComponents';
+import { markdownComponents, remarkPlugins, rehypePlugins } from '@/lib/markdownComponents';
 import { useStore } from '@/lib/store';
 import {
     sendChatMessage, getChatSession, createChatSession,
@@ -327,7 +326,7 @@ export default function ChatPanel({ session, type }: Props) {
                                 }`}
                         >
                             <div className="markdown-content text-sm">
-                                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                                <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
                                     {cleanMessageContent(msg.content)}
                                 </ReactMarkdown>
                             </div>

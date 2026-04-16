@@ -3,8 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { FiClock, FiRotateCw, FiX, FiEye, FiArrowLeft } from 'react-icons/fi';
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { markdownComponents } from '@/lib/markdownComponents';
+import { markdownComponents, remarkPlugins, rehypePlugins } from '@/lib/markdownComponents';
 import { getNoteVersions, restoreNoteVersion } from '@/lib/api';
 import type { NoteVersion, Note } from '@/lib/types';
 
@@ -91,7 +90,7 @@ export default function VersionHistory({ note, onClose, onRestore }: Props) {
                     <div className="max-w-4xl mx-auto px-8 py-8">
                         <h1 className="text-xl font-bold text-white mb-4">{selectedVersion.title}</h1>
                         <article className="markdown-content">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                            <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
                                 {selectedVersion.content}
                             </ReactMarkdown>
                         </article>

@@ -7,7 +7,7 @@ import {
 } from 'react-icons/fi';
 import { LuBrain } from 'react-icons/lu';
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { remarkPlugins, rehypePlugins } from '@/lib/markdownComponents';
 import {
     getReviewSession, submitReview, getSRSettings, updateSRSettings,
     getAllFlashcards, deleteFlashcard,
@@ -241,7 +241,7 @@ export default function SpacedRepView() {
                             <div className="mb-4">
                                 <p className="text-xs uppercase tracking-wider text-dark-500 font-semibold mb-2">Frage</p>
                                 <div className="text-white text-lg markdown-content">
-                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                    <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>
                                         {currentCard.question}
                                     </ReactMarkdown>
                                 </div>
@@ -251,7 +251,7 @@ export default function SpacedRepView() {
                                 <div className="pt-4 border-t border-dark-700">
                                     <p className="text-xs uppercase tracking-wider text-green-400 font-semibold mb-2">Antwort</p>
                                     <div className="text-dark-300 text-base markdown-content">
-                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                        <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>
                                             {currentCard.answer}
                                         </ReactMarkdown>
                                     </div>

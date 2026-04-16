@@ -1,6 +1,13 @@
 'use client';
 
 import React, { ReactNode } from 'react';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import remarkGfm from 'remark-gfm';
+
+// Re-export plugin arrays for shared use across all ReactMarkdown instances
+export const remarkPlugins = [remarkGfm, remarkMath];
+export const rehypePlugins = [rehypeKatex];
 
 const ADMONITION_TYPES: Record<string, { label: string; cssClass: string }> = {
     MERKSATZ: { label: '📌 Merksatz', cssClass: 'admonition-merksatz' },

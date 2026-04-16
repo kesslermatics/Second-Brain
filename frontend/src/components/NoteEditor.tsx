@@ -3,8 +3,7 @@
 import { useState } from 'react';
 import { FiSave, FiX } from 'react-icons/fi';
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { markdownComponents } from '@/lib/markdownComponents';
+import { markdownComponents, remarkPlugins, rehypePlugins } from '@/lib/markdownComponents';
 import type { Note } from '@/lib/types';
 
 interface Props {
@@ -72,7 +71,7 @@ export default function NoteEditor({ note, onClose, onSave }: Props) {
                 {preview ? (
                     <div className="max-w-4xl mx-auto px-8 py-8">
                         <article className="markdown-content">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{content}</ReactMarkdown>
+                            <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>{content}</ReactMarkdown>
                         </article>
                     </div>
                 ) : (

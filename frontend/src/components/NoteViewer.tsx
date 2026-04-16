@@ -3,8 +3,7 @@
 import { useState, useEffect } from 'react';
 import { FiEdit2, FiTrash2, FiFolder, FiClock, FiArrowLeft, FiZap, FiLink, FiBookOpen, FiChevronDown, FiChevronRight, FiTag } from 'react-icons/fi';
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { markdownComponents } from '@/lib/markdownComponents';
+import { markdownComponents, remarkPlugins, rehypePlugins } from '@/lib/markdownComponents';
 import { useStore } from '@/lib/store';
 import { deleteNote, updateNote, autoLinkNote, generateFlashcards } from '@/lib/api';
 import RichTextEditor from './RichTextEditor';
@@ -224,7 +223,7 @@ export default function NoteViewer() {
             <div className="flex-1 overflow-y-auto">
                 <div className="max-w-4xl mx-auto px-4 sm:px-8 py-4 sm:py-8">
                     <article className="markdown-content">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                        <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
                             {selectedNote.content}
                         </ReactMarkdown>
                     </article>

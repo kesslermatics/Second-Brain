@@ -260,3 +260,64 @@ export interface BookChapterNoteResult {
   tag_ids: string[];
   tag_names: string[];
 }
+
+// Teacher / Infinite Teacher
+export interface CourseListItem {
+  id: string;
+  topic: string;
+  title: string;
+  description: string;
+  status: 'draft' | 'active' | 'completed';
+  parent_course_id: string | null;
+  total_units: number;
+  completed_units: number;
+  enabled_units: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface CourseUnit {
+  id: string;
+  unit_number: string;
+  title: string;
+  description: string;
+  learning_objectives: string[];
+  level: number;
+  enabled: boolean;
+  status: 'pending' | 'active' | 'completed' | 'skipped';
+  order_index: number;
+}
+
+export interface CourseDetail {
+  id: string;
+  topic: string;
+  title: string;
+  description: string;
+  status: 'draft' | 'active' | 'completed';
+  parent_course_id: string | null;
+  units: CourseUnit[];
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface CourseMessage {
+  id: string;
+  role: 'system' | 'assistant' | 'user' | 'note_generated';
+  content: string;
+  metadata: Record<string, unknown> | null;
+  created_at: string | null;
+}
+
+export interface CourseNoteResult {
+  title: string;
+  content: string;
+  folder: string;
+  tag_ids: string[];
+  tag_names: string[];
+}
+
+export interface AdvancedFocusSuggestion {
+  title: string;
+  description: string;
+  topic: string;
+}

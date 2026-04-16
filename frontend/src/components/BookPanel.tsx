@@ -8,8 +8,7 @@ import {
 } from 'react-icons/fi';
 import { LuBrain } from 'react-icons/lu';
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { markdownComponents } from '@/lib/markdownComponents';
+import { markdownComponents, remarkPlugins, rehypePlugins } from '@/lib/markdownComponents';
 import { useStore } from '@/lib/store';
 import {
     searchBook, getBookToc, generateChapterNote, generateTopicNote,
@@ -835,7 +834,7 @@ export default function BookPanel() {
                                     {/* Note content preview */}
                                     <div className="px-6 py-5 overflow-y-auto">
                                         <div className="markdown-content text-sm">
-                                            <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                                            <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
                                                 {currentNote.content}
                                             </ReactMarkdown>
                                         </div>

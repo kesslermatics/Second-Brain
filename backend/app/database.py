@@ -91,3 +91,52 @@ async def init_db():
             )
         except Exception:
             pass
+        # Ensure courses / course_units / course_messages tables exist (Infinite Teacher)
+        try:
+            await conn.execute(
+                __import__('sqlalchemy').text(
+                    "CREATE TABLE IF NOT EXISTS courses ("
+                    "id UUID PRIMARY KEY, "
+                    "topic VARCHAR(512) NOT NULL, "
+                    "title VARCHAR(512) NOT NULL, "
+                    "description TEXT, "
+                    "status VARCHAR(50) NOT NULL DEFAULT 'draft', "
+                    "parent_course_id UUID REFERENCES courses(id) ON DELETE SET NULL, "
+                    "user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, "
+                    "created_at TIMESTAMPTZ DEFAULT NOW(), "
+                    "updated_at TIMESTAMPTZ DEFAULT NOW()"
+                    ")"
+                )
+            )
+            await conn.execute(
+                __import__('sqlalchemy').text(
+                    "CREATE TABLE IF NOT EXISTS course_units ("
+                    "id UUID PRIMARY KEY, "
+                    "course_id UUID NOT NULL REFERENCES courses(id) ON DELETE CASCADE, "
+                    "unit_number VARCHAR(20) NOT NULL, "
+                    "title VARCHAR(512) NOT NULL, "
+                    "description TEXT, "
+                    "learning_objectives JSONB, "
+                    "level INTEGER NOT NULL DEFAULT 1, "
+                    "enabled BOOLEAN NOT NULL DEFAULT TRUE, "
+                    "status VARCHAR(50) NOT NULL DEFAULT 'pending', "
+                    "order_index INTEGER NOT NULL DEFAULT 0, "
+                    "created_at TIMESTAMPTZ DEFAULT NOW()"
+                    ")"
+                )
+            )
+            await conn.execute(
+                __import__('sqlalchemy').text(
+                    "CREATE TABLE IF NOT EXISTS course_messages ("
+                    "id UUID PRIMARY KEY, "
+                    "course_id UUID NOT NULL REFERENCES courses(id) ON DELETE CASCADE, "
+                    "unit_id UUID REFERENCES course_units(id) ON DELETE CASCADE, "
+                    "role VARCHAR(50) NOT NULL, "
+                    "content TEXT NOT NULL, "
+                    "metadata JSONB, "
+                    "created_at TIMESTAMPTZ DEFAULT NOW()"
+                    ")"
+                )
+            )
+        except Exception:
+            pass
