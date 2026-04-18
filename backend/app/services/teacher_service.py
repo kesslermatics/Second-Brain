@@ -55,6 +55,9 @@ def _extract_json(text: str) -> dict | None:
     logger.warning("Failed to extract JSON from LLM response: %s", text[:300])
     return None
 
+import logging
+_logger = logging.getLogger(__name__)
+
 settings = get_settings()
 
 # ── Shared formatting instructions for all teaching prompts ───────────
@@ -300,8 +303,22 @@ async def generate_lesson_notes(
         if msg["role"] != "note_generated" and msg.get("content", "") not in ("[START]", "[NOTIZEN_ERSTELLT]"):
             chat_text += f"{role_label}: {msg['content'][:3000]}\n"
 
+    # Determine if chat is too short for conversation-based notes
+    thin_chat = len(chat_text.strip()) < 200
+
+    if thin_chat:
+        context_block = f"""HINWEIS: Das Gespräch ist noch sehr kurz. Generiere die Notizen basierend auf dem
+Thema der Lektion selbst. Nutze dein Wissen und aktuelle Recherche, um hochwertige Notizen
+zu den Kernkonzepten der Lektion zu erstellen.
+
+BISHERIGER GESPRÄCHSVERLAUF (kurz):
+{chat_text if chat_text.strip() else '(Noch kein inhaltliches Gespräch)'}"""
+    else:
+        context_block = f"""GESPRÄCHSVERLAUF:
+{chat_text}"""
+
     prompt = f"""Du bist ein Second Brain Assistent. Wir befinden uns im Jahr {year}.
-Basierend auf dem folgenden Unterrichtsgespräch sollst du ATOMIC NOTES erstellen.
+Basierend auf {'der Lektion' if thin_chat else 'dem folgenden Unterrichtsgespräch'} sollst du ATOMIC NOTES erstellen.
 
 KURS: "{course_title}"
 LEKTION: "{unit_title}"
@@ -310,8 +327,7 @@ LEKTION: "{unit_title}"
 LERNZIELE:
 {objectives_str}
 
-GESPRÄCHSVERLAUF:
-{chat_text}
+{context_block}
 
 {ATOMIC_NOTE_RULES}
 
@@ -348,8 +364,11 @@ Antworte NUR mit dem JSON, kein anderer Text:
         for note in notes:
             note.setdefault("suggested_folder", f"Kurse/{course_title}")
             note.setdefault("suggested_tags", [])
-        return notes
+        if notes:
+            return notes
+        _logger.warning("LLM returned empty notes array for lesson %s", unit_title)
 
+    _logger.warning("Failed to generate lesson notes for %s — raw: %s", unit_title, text[:500])
     return []
 
 
@@ -593,14 +612,27 @@ async def generate_book_chapter_notes(
         if msg["role"] != "note_generated" and msg.get("content", "") not in ("[START]", "[NOTIZEN_ERSTELLT]"):
             chat_text += f"{role_label}: {msg['content'][:3000]}\n"
 
+    # Determine if chat is too short for conversation-based notes
+    thin_chat = len(chat_text.strip()) < 200
+
+    if thin_chat:
+        context_block = f"""HINWEIS: Das Gespräch ist noch sehr kurz. Generiere die Notizen basierend auf dem
+Kapitelinhalt selbst. Nutze dein Wissen und aktuelle Recherche über das Buch und dieses Kapitel,
+um hochwertige Notizen zu den Kernkonzepten zu erstellen.
+
+BISHERIGER GESPRÄCHSVERLAUF (kurz):
+{chat_text if chat_text.strip() else '(Noch kein inhaltliches Gespräch)'}"""
+    else:
+        context_block = f"""GESPRÄCHSVERLAUF:
+{chat_text}"""
+
     prompt = f"""Du bist ein Second Brain Assistent. Wir befinden uns im Jahr {year}.
-Basierend auf dem folgenden Gespräch über ein Buchkapitel sollst du ATOMIC NOTES erstellen.
+Basierend auf {'dem Buchkapitel' if thin_chat else 'dem folgenden Gespräch über ein Buchkapitel'} sollst du ATOMIC NOTES erstellen.
 
 BUCH: "{book_title}" von {authors_str}
 KAPITEL: {chapter_number} — "{chapter_title}"
 
-GESPRÄCHSVERLAUF:
-{chat_text}
+{context_block}
 
 {ATOMIC_NOTE_RULES}
 
@@ -636,8 +668,11 @@ Antworte NUR mit dem JSON, kein anderer Text:
         for note in notes:
             note.setdefault("suggested_folder", f"Bücher/{book_title}")
             note.setdefault("suggested_tags", [])
-        return notes
+        if notes:
+            return notes
+        _logger.warning("LLM returned empty notes array for chapter %s %s", chapter_number, chapter_title)
 
+    _logger.warning("Failed to generate book chapter notes for %s %s — raw: %s", chapter_number, chapter_title, text[:500])
     return []
 
 
