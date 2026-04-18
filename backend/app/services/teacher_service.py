@@ -162,11 +162,11 @@ Formatierungsregeln (SEHR WICHTIG — befolge jede einzelne):
   > [!TIPP]
   > Für hilfreiche Tipps und Eselsbrücken
 
-- MATHEMATISCHE FORMELN: Verwende IMMER LaTeX-Notation:
+- MATHEMATISCHE FORMELN: Wenn das Thema mathematische Inhalte hat, verwende LaTeX-Notation:
   - Inline-Formeln: $E = mc^2$
   - Zentrierte Block-Formeln: $$\\int_0^\\infty e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}$$
-  - JEDE mathematische Formel oder Gleichung MUSS in LaTeX geschrieben werden
   - Block-Formeln ($$...$$) sollen auf eigener Zeile stehen, zentriert
+  - Verwende Mathe-Formeln NUR wenn sie zum Thema gehören — erzwinge keine Formeln bei nicht-mathematischen Themen
 """
 
 ATOMIC_NOTE_RULES = """
@@ -220,12 +220,9 @@ Der Lehrplan soll:
 - Themen sollen natürlich ineinander übergehen und aufeinander aufbauen
 - Lernziele pro Lektion definieren (was der Student danach können/wissen soll)
 - Praxisrelevant und tiefgehend sein, wie ein guter Universitätskurs
-- AKTUELLE FORSCHUNG UND STATE OF THE ART einbeziehen: Recherchiere nach den neuesten
-  Entwicklungen, Methoden und Erkenntnissen in diesem Fachgebiet (Stand {year}).
-  Neben den Grundlagen sollen auch aktuelle Trends, moderne Ansätze und neue
-  Forschungsergebnisse als Lektionen enthalten sein. Wenn das Thema sich schnell
-  weiterentwickelt (z.B. KI, Medizin, Technologie), widme mindestens ein Modul
-  explizit den aktuellen Entwicklungen und dem Stand der Forschung ({year}).
+- Wenn das Thema sich dynamisch weiterentwickelt (z.B. KI, Medizin, Technologie),
+  beziehe aktuelle Forschung und den State of the Art (Stand {year}) mit ein.
+  Bei zeitlosen oder historischen Themen ist das NICHT nötig.
 
 Antworte NUR mit dem JSON, kein anderer Text:
 {{
@@ -339,14 +336,14 @@ DEINE AUFGABE:
 - SPEZIAL-NACHRICHTEN:
   - "[START]": Der Student hat die Lektion gerade geöffnet. Begrüße ihn kurz und beginne mit der Einführung des Themas.
   - "[NOTIZEN_ERSTELLT]": Es wurden gerade Notizen zum aktuellen Thema erstellt und gespeichert. Frage den Studenten freundlich und kurz (2-3 Sätze), ob er noch Fragen zum aktuellen Thema hat oder ob er bereit ist, zur nächsten Lektion überzugehen.
-- AKTUALITÄT: Recherchiere aktiv nach dem aktuellen State of the Art, neuesten Forschungsergebnissen,
-  modernen Best Practices und aktuellen Entwicklungen zu diesem Thema. Bringe diese proaktiv ein,
-  wenn sie relevant sind. Kennzeichne aktuelle Erkenntnisse z.B. mit "Aktueller Stand ({year}):..."
-  oder "Neuere Forschung zeigt...". Wenn klassisches Wissen inzwischen überholt ist, weise darauf hin.
+- AKTUALITÄT: Wenn das Thema sich seit der klassischen Lehrmeinung weiterentwickelt hat
+  oder es relevante neue Erkenntnisse gibt, bringe diese ein und kennzeichne sie z.B. mit
+  "Aktueller Stand ({year}):...". Bei zeitlosen Themen (z.B. Philosophie, Geschichte,
+  Grundlagentheorie) ist das NICHT nötig — erzwinge keine künstliche Aktualität.
 
 {FORMATTING_RULES}
 
-HINWEIS zu Mathe-Formeln: Wenn das Thema mathematische Inhalte hat, verwende IMMER die LaTeX-Notation ($...$ inline, $$...$$ als Block).
+HINWEIS zu Mathe-Formeln: Wenn das Thema mathematische Inhalte hat, verwende die LaTeX-Notation ($...$ inline, $$...$$ als Block). Bei nicht-mathematischen Themen verwende KEINE Formeln.
 
 Antworte auf Deutsch (oder in der Sprache, die der Student verwendet).
 Sei warmherzig aber sachlich. Kein Smalltalk — fokussiere dich auf den Lehrinhalt.
@@ -418,9 +415,9 @@ Bevorzuge bestehende Tags wenn sie passen.
 Erstelle so viele Notizen wie nötig, um ALLE wichtigen Konzepte der Lektion abzudecken.
 Typischerweise 2-5 Notizen pro Lektion.
 
-ACHTUNG AKTUALITÄT: Wenn im Gespräch aktuelle Forschungsergebnisse, moderne Methoden oder
-State-of-the-Art-Entwicklungen besprochen wurden, schreibe diese MIT in die Notizen.
-Recherchiere zusätzlich, ob es relevante aktuelle Erkenntnisse (Stand {year}) gibt, die in die Notizen gehören.
+ACHTUNG AKTUALITÄT: Wenn im Gespräch aktuelle Forschungsergebnisse oder moderne Entwicklungen
+besprochen wurden, schreibe diese MIT in die Notizen. Bei zeitlosen Themen (Philosophie,
+Geschichte, Grundlagentheorie) ist keine künstliche Aktualitätsrecherche nötig.
 
 Antworte NUR mit dem JSON, kein anderer Text:
 {{
@@ -486,8 +483,8 @@ KONTEXT: Kurs "{course_title}", Lektion "{unit_title}"
 Aktueller Gesprächskontext:
 {chat_text}
 
-WICHTIG: Recherchiere den aktuellen Stand der Forschung / State of the Art (Stand {year}) zu diesem Begriff.
-Wenn es neuere Erkenntnisse oder Entwicklungen gibt, integriere sie in die Notiz.
+Wenn es für diesen Begriff relevante aktuelle Entwicklungen gibt (Stand {year}), erwähne sie.
+Bei zeitlosen Konzepten ist keine künstliche Aktualitätsrecherche nötig.
 
 {ATOMIC_NOTE_RULES}
 {FORMATTING_RULES}
@@ -659,12 +656,13 @@ DEINE AUFGABE:
   - "[NOTIZEN_ERSTELLT]": Es wurden gerade Notizen erstellt und gespeichert. Frage den Studenten freundlich
     und kurz (2-3 Sätze), ob er noch Fragen zum aktuellen Kapitel hat oder ob er bereit ist, zum nächsten
     Kapitel überzugehen.
-- AKTUALITÄT: Wenn das Buchthema sich seit Veröffentlichung weiterentwickelt hat, bringe aktuelle
-  Ergänzungen ein und kennzeichne sie z.B. mit "Aktueller Stand ({year}):..." oder "Neuere Forschung zeigt...".
+- AKTUALITÄT: Wenn das Buchthema sich seit Veröffentlichung relevant weiterentwickelt hat,
+  bringe aktuelle Ergänzungen ein und kennzeichne sie z.B. mit "Aktueller Stand ({year}):...".
+  Bei zeitlosen Themen (Philosophie, klassische Literatur, etc.) ist das NICHT nötig.
 
 {FORMATTING_RULES}
 
-HINWEIS zu Mathe-Formeln: Wenn das Kapitel mathematische Inhalte hat, verwende IMMER die LaTeX-Notation ($...$ inline, $$...$$ als Block).
+HINWEIS zu Mathe-Formeln: Wenn das Kapitel mathematische Inhalte hat, verwende die LaTeX-Notation ($...$ inline, $$...$$ als Block). Bei nicht-mathematischen Themen verwende KEINE Formeln.
 
 Antworte auf Deutsch (oder in der Sprache des Buches).
 Sei warmherzig aber sachlich. Fokussiere dich auf den Inhalt des Kapitels.
@@ -790,7 +788,8 @@ KONTEXT: Buch "{book_title}" von {authors_str}, Kapitel "{chapter_title}"
 Aktueller Gesprächskontext:
 {chat_text}
 
-WICHTIG: Recherchiere den aktuellen Stand der Forschung / State of the Art (Stand {year}) zu diesem Begriff.
+Wenn es für diesen Begriff relevante aktuelle Entwicklungen gibt (Stand {year}), erwähne sie.
+Bei zeitlosen Konzepten ist keine künstliche Aktualitätsrecherche nötig.
 
 {ATOMIC_NOTE_RULES}
 {FORMATTING_RULES}
