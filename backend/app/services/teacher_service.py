@@ -16,7 +16,8 @@ def _current_year() -> int:
 def _extract_json(text: str) -> dict | None:
     """Robustly extract a JSON object from LLM response text.
 
-    Handles markdown code fences, preamble text with braces, etc.
+    Handles markdown code fences, preamble text with braces,
+    braces inside JSON string values, and truncated responses.
     """
     import logging
     logger = logging.getLogger(__name__)
@@ -30,27 +31,105 @@ def _extract_json(text: str) -> dict | None:
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # 3. Find first valid JSON object using balanced braces
-    i = 0
-    while i < len(cleaned):
-        if cleaned[i] == '{':
-            depth = 0
-            for j in range(i, len(cleaned)):
-                if cleaned[j] == '{':
-                    depth += 1
-                elif cleaned[j] == '}':
-                    depth -= 1
-                    if depth == 0:
-                        candidate = cleaned[i:j + 1]
-                        try:
-                            return json.loads(candidate)
-                        except json.JSONDecodeError:
-                            break  # This opening brace wasn't it, skip past it
-            i = cleaned.find('{', i + 1)
-            if i == -1:
-                break
-        else:
-            i += 1
+    # 3. Find the outermost JSON object using string-aware balanced braces
+    def _find_json_object(s: str, start: int = 0) -> dict | None:
+        """Find a balanced JSON object starting from position start, respecting strings."""
+        i = s.find('{', start)
+        if i == -1:
+            return None
+
+        depth = 0
+        in_string = False
+        escape_next = False
+
+        for j in range(i, len(s)):
+            c = s[j]
+            if escape_next:
+                escape_next = False
+                continue
+            if c == '\\' and in_string:
+                escape_next = True
+                continue
+            if c == '"' and not escape_next:
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if c == '{':
+                depth += 1
+            elif c == '}':
+                depth -= 1
+                if depth == 0:
+                    candidate = s[i:j + 1]
+                    try:
+                        return json.loads(candidate)
+                    except json.JSONDecodeError:
+                        # Try next opening brace
+                        return _find_json_object(s, i + 1)
+        return None
+
+    result = _find_json_object(cleaned)
+    if result:
+        return result
+
+    # 4. Try to repair truncated JSON (LLM output cut off)
+    #    Find the start of the JSON, then try appending closing brackets
+    first_brace = cleaned.find('{')
+    if first_brace >= 0:
+        fragment = cleaned[first_brace:]
+        # Try progressively adding closing tokens
+        for suffix in [
+            '"}]}',      # truncated inside a string value in last note
+            '"}]}',
+            ']}'  ,      # truncated after last complete note
+            '}'   ,      # truncated inside notes array
+        ]:
+            try:
+                repaired = json.loads(fragment + suffix)
+                if isinstance(repaired, dict):
+                    logger.info("Repaired truncated JSON with suffix: %s", suffix)
+                    return repaired
+            except (json.JSONDecodeError, ValueError):
+                continue
+
+        # More aggressive: try to close all open braces/brackets
+        open_braces = 0
+        open_brackets = 0
+        in_str = False
+        esc = False
+        for c in fragment:
+            if esc:
+                esc = False
+                continue
+            if c == '\\' and in_str:
+                esc = True
+                continue
+            if c == '"':
+                in_str = not in_str
+                continue
+            if in_str:
+                continue
+            if c == '{':
+                open_braces += 1
+            elif c == '}':
+                open_braces -= 1
+            elif c == '[':
+                open_brackets += 1
+            elif c == ']':
+                open_brackets -= 1
+
+        if open_braces > 0 or open_brackets > 0:
+            # We're in a truncated string value most likely — close it first
+            closer = '"'
+            closer += ']' * max(0, open_brackets)
+            closer += '}' * max(0, open_braces)
+            try:
+                repaired = json.loads(fragment + closer)
+                if isinstance(repaired, dict):
+                    logger.info("Repaired truncated JSON by closing %d braces, %d brackets", open_braces, open_brackets)
+                    return repaired
+            except (json.JSONDecodeError, ValueError):
+                pass
 
     logger.warning("Failed to extract JSON from LLM response: %s", text[:300])
     return None
@@ -361,6 +440,9 @@ Antworte NUR mit dem JSON, kein anderer Text:
     result = _extract_json(text)
     if result:
         notes = result.get("notes", [])
+        # Fallback: if _extract_json found a single note object instead of the wrapper
+        if not notes and "title" in result and "content" in result:
+            notes = [result]
         for note in notes:
             note.setdefault("suggested_folder", f"Kurse/{course_title}")
             note.setdefault("suggested_tags", [])
@@ -665,6 +747,9 @@ Antworte NUR mit dem JSON, kein anderer Text:
     result = _extract_json(text)
     if result:
         notes = result.get("notes", [])
+        # Fallback: if _extract_json found a single note object instead of the wrapper
+        if not notes and "title" in result and "content" in result:
+            notes = [result]
         for note in notes:
             note.setdefault("suggested_folder", f"Bücher/{book_title}")
             note.setdefault("suggested_tags", [])
