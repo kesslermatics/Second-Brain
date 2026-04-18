@@ -298,7 +298,7 @@ export default function BookPanel() {
         try {
             const folder = await ensureFolderPath(note.folder);
             await createNote(note.title, note.content, folder.id, note.tag_ids);
-            await loadFolderTree();
+            loadFolderTree();  // fire-and-forget — don't block UI
             advanceNoteReview();
         } catch {
             setError('Fehler beim Speichern der Notiz.');

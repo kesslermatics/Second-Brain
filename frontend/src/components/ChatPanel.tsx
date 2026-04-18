@@ -236,7 +236,7 @@ export default function ChatPanel({ session, type }: Props) {
         try {
             const folder = await ensureFolderPath(noteData.folder);
             const note = await createNote(noteData.title, noteData.content, folder.id, noteData.tag_ids);
-            await loadFolderTree();
+            loadFolderTree();  // fire-and-forget — don't block UI
             const msgId = messages.find(m => m.content === content)?.id || content;
             setSavedNotes((prev) => addToPersistedSet(prev, msgId, 'brain_saved_notes'));
             setDismissedNotes((prev) => addToPersistedSet(prev, msgId, 'brain_dismissed_notes'));

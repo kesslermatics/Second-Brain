@@ -57,8 +57,10 @@ async def _cleanup_removed_images(old_content: str, new_content: str, user_id: U
 
 async def _auto_link_note(note_id: str, user_id: str, title: str, content: str):
     """Auto-link a note to related notes using vector search + AI."""
+    import asyncio
     try:
-        similar = _vector_search(
+        similar = await asyncio.to_thread(
+            _vector_search,
             query=f"{title} {content[:500]}",
             user_id=user_id,
             limit=15,
@@ -170,8 +172,9 @@ async def _embed_and_auto_link(
     note_id: str, user_id: str, title: str, content: str, folder_path: str
 ):
     """Background task: enrich image references with AI descriptions, embed in Qdrant, then auto-link."""
+    import asyncio
     enriched = await _enrich_content_with_image_descriptions(content, user_id)
-    upsert_note_embedding(note_id, user_id, title, enriched, folder_path)
+    await asyncio.to_thread(upsert_note_embedding, note_id, user_id, title, enriched, folder_path)
     await _auto_link_note(note_id, user_id, title, enriched)
 
 
