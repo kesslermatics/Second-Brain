@@ -356,6 +356,7 @@ WICHTIG: DUZE den Studenten IMMER. Verwende "du/dein/dir", NIEMALS "Sie/Ihr/Ihne
 async def generate_lesson_notes(
     course_title: str,
     unit_title: str,
+    unit_number: str,
     unit_description: str,
     learning_objectives: list[str],
     chat_history: list[dict],
@@ -394,10 +395,10 @@ BISHERIGER GESPRÄCHSVERLAUF (kurz):
 {chat_text}"""
 
     prompt = f"""Du bist ein Second Brain Assistent. Wir befinden uns im Jahr {year}.
-Basierend auf {'der Lektion' if thin_chat else 'dem folgenden Unterrichtsgespräch'} sollst du ATOMIC NOTES erstellen.
+Basierend auf {'der Lektion' if thin_chat else 'dem folgenden Unterrichtsgespräch'} sollst du Notizen erstellen.
 
 KURS: "{course_title}"
-LEKTION: "{unit_title}"
+LEKTION {unit_number}: "{unit_title}"
 {unit_description}
 
 LERNZIELE:
@@ -405,15 +406,17 @@ LERNZIELE:
 
 {context_block}
 
-{ATOMIC_NOTE_RULES}
+STRUKTUR DER NOTIZEN:
+1. ERSTE NOTIZ = ÜBERBLICKSNOTIZ: Eine zusammenfassende Notiz mit dem Titel "Lektion {unit_number}: {unit_title}".
+   Diese fasst die gesamte Lektion kompakt zusammen: Kernaussagen, wichtige Konzepte, Zusammenhänge.
+   Sie dient als Einstiegspunkt und gibt einen Überblick über die gesamte Lektion.
+2. WEITERE NOTIZEN = ATOMIC NOTES: Für jedes wichtige Einzelkonzept eine eigene kurze Notiz.
+   {ATOMIC_NOTE_RULES}
 
 Bestehende Tags im System: {tags_str}
 Bevorzuge bestehende Tags wenn sie passen.
 
 {FORMATTING_RULES}
-
-Erstelle so viele Notizen wie nötig, um ALLE wichtigen Konzepte der Lektion abzudecken.
-Typischerweise 2-5 Notizen pro Lektion.
 
 ACHTUNG AKTUALITÄT: Wenn im Gespräch aktuelle Forschungsergebnisse oder moderne Entwicklungen
 besprochen wurden, schreibe diese MIT in die Notizen. Bei zeitlosen Themen (Philosophie,
@@ -423,9 +426,15 @@ Antworte NUR mit dem JSON, kein anderer Text:
 {{
     "notes": [
         {{
-            "title": "Konzeptname als Titel",
-            "content": "Markdown-formatierter Inhalt der Notiz",
+            "title": "Lektion {unit_number}: {unit_title}",
+            "content": "Überblick über die gesamte Lektion...",
             "suggested_tags": ["tag1", "tag2"],
+            "suggested_folder": "Kurse/{course_title}"
+        }},
+        {{
+            "title": "Konzeptname als Titel",
+            "content": "Atomic Note Inhalt...",
+            "suggested_tags": ["tag1"],
             "suggested_folder": "Kurse/{course_title}"
         }}
     ]
@@ -707,23 +716,26 @@ BISHERIGER GESPRÄCHSVERLAUF (kurz):
 {chat_text}"""
 
     prompt = f"""Du bist ein Second Brain Assistent. Wir befinden uns im Jahr {year}.
-Basierend auf {'dem Buchkapitel' if thin_chat else 'dem folgenden Gespräch über ein Buchkapitel'} sollst du ATOMIC NOTES erstellen.
+Basierend auf {'dem Buchkapitel' if thin_chat else 'dem folgenden Gespräch über ein Buchkapitel'} sollst du Notizen erstellen.
 
 BUCH: "{book_title}" von {authors_str}
 KAPITEL: {chapter_number} — "{chapter_title}"
 
 {context_block}
 
-{ATOMIC_NOTE_RULES}
+STRUKTUR DER NOTIZEN:
+1. ERSTE NOTIZ = ÜBERBLICKSNOTIZ: Eine zusammenfassende Notiz mit dem Titel "Kapitel {chapter_number}: {chapter_title}".
+   Diese fasst das gesamte Kapitel kompakt zusammen: Kernaussagen, Hauptargumente, zentrale Begriffe.
+   Sie dient als Einstiegspunkt und gibt einen Überblick über das gesamte Kapitel.
+   Beginne mit einer kurzen Einordnung (Buch + Autor).
+2. WEITERE NOTIZEN = ATOMIC NOTES: Für jedes wichtige Einzelkonzept eine eigene kurze Notiz.
+   {ATOMIC_NOTE_RULES}
+   Beginne jede Notiz mit einer kurzen Einordnung: Aus welchem Buch und Kapitel das Konzept stammt.
 
 Bestehende Tags im System: {tags_str}
 Bevorzuge bestehende Tags wenn sie passen.
 
 {FORMATTING_RULES}
-
-Erstelle so viele Notizen wie nötig, um ALLE wichtigen Konzepte des Kapitels abzudecken.
-Typischerweise 2-5 Notizen pro Kapitel.
-Beginne jede Notiz mit einer kurzen Einordnung: Aus welchem Buch und Kapitel das Konzept stammt.
 
 ACHTUNG: Wenn im Gespräch aktuelle Ergänzungen zum Buchinhalt besprochen wurden, integriere diese in die Notizen.
 
@@ -731,9 +743,15 @@ Antworte NUR mit dem JSON, kein anderer Text:
 {{
     "notes": [
         {{
-            "title": "Konzeptname als Titel",
-            "content": "Markdown-formatierter Inhalt der Notiz",
+            "title": "Kapitel {chapter_number}: {chapter_title}",
+            "content": "Überblick über das gesamte Kapitel...",
             "suggested_tags": ["tag1", "tag2"],
+            "suggested_folder": "Bücher/{book_title}"
+        }},
+        {{
+            "title": "Konzeptname als Titel",
+            "content": "Atomic Note Inhalt...",
+            "suggested_tags": ["tag1"],
             "suggested_folder": "Bücher/{book_title}"
         }}
     ]

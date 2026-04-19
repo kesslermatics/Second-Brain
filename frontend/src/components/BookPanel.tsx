@@ -63,6 +63,10 @@ export default function BookPanel() {
     const [termInput, setTermInput] = useState('');
     const [generatingTerm, setGeneratingTerm] = useState(false);
 
+    // Prefetched notes cache: unitId -> notes
+    const prefetchedNotesRef = useRef<Map<string, CourseNoteResult[]>>(new Map());
+    const userSentMessageRef = useRef(false);
+
     // Summaries
     const [summaryChapters, setSummaryChapters] = useState<BookSummaryChapter[]>([]);
     const [loadingSummaries, setLoadingSummaries] = useState(false);
@@ -197,6 +201,7 @@ export default function BookPanel() {
     const openUnitChat = async (course: CourseDetail, unit: CourseUnit) => {
         setLoadingMessages(true);
         setMessages([]);
+        userSentMessageRef.current = false;
         setView({ kind: 'lesson-chat', course, unit });
         try {
             const msgs = await getUnitMessages(course.id, unit.id);
@@ -211,8 +216,14 @@ export default function BookPanel() {
                     response,
                 ]);
                 setSendingChat(false);
+            } else {
+                // User has been here before — they may have sent messages
+                userSentMessageRef.current = msgs.some(
+                    m => m.role === 'user' && m.content !== '[START]' && m.content !== '[NOTIZEN_ERSTELLT]'
+                );
             }
-            // Prefetch next chapter greeting in background
+            // Prefetch notes for THIS unit (from initial greeting) + next unit greeting
+            prefetchNotesForUnit(course.id, unit.id);
             prefetchNextUnit(course, unit);
         } catch {
             setError('Fehler beim Laden des Chats.');
@@ -220,6 +231,14 @@ export default function BookPanel() {
             setLoadingMessages(false);
             setSendingChat(false);
         }
+    };
+
+    // ── Prefetch notes for a unit in background ─────────────────────
+    const prefetchNotesForUnit = (courseId: string, unitId: string) => {
+        if (prefetchedNotesRef.current.has(unitId)) return;
+        generateLessonNotes(courseId, unitId).then(notes => {
+            if (notes.length > 0) prefetchedNotesRef.current.set(unitId, notes);
+        }).catch(() => {});
     };
 
     // ── Prefetch next unit greeting ──────────────────────────────────
@@ -230,10 +249,14 @@ export default function BookPanel() {
             u => u.enabled && (u.status === 'pending' || u.status === 'active')
         );
         if (!nextUnit) return;
-        // Fire-and-forget: check if already has messages, if not send [START]
+        // Fire-and-forget: check if already has messages, if not send [START] + prefetch notes
         getUnitMessages(course.id, nextUnit.id).then(msgs => {
             if (msgs.length === 0) {
-                sendTeacherChat(course.id, nextUnit.id, '[START]').catch(() => {});
+                sendTeacherChat(course.id, nextUnit.id, '[START]').then(() => {
+                    prefetchNotesForUnit(course.id, nextUnit.id);
+                }).catch(() => {});
+            } else {
+                prefetchNotesForUnit(course.id, nextUnit.id);
             }
         }).catch(() => {});
     };
@@ -244,6 +267,7 @@ export default function BookPanel() {
         const msg = chatInput.trim();
         setChatInput('');
         setSendingChat(true);
+        userSentMessageRef.current = true;  // invalidate prefetched notes
 
         const tempId = `temp-${Date.now()}`;
         setMessages((prev) => [
@@ -272,7 +296,11 @@ export default function BookPanel() {
         setGeneratingNotes(true);
         setError(null);
         try {
-            const notes = await generateLessonNotes(view.course.id, view.unit.id);
+            // Use prefetched notes if user didn't add messages
+            const unitId = view.unit.id;
+            const cached = !userSentMessageRef.current ? prefetchedNotesRef.current.get(unitId) : undefined;
+            const notes = cached || await generateLessonNotes(view.course.id, unitId);
+            prefetchedNotesRef.current.delete(unitId);
             if (notes.length > 0) {
                 setView({
                     kind: 'note-review',
@@ -355,15 +383,9 @@ export default function BookPanel() {
         try {
             const msgs = await getUnitMessages(course.id, unit.id);
             setMessages(msgs);
-            setLoadingMessages(false);
-            setSendingChat(true);
-            await sendTeacherChat(course.id, unit.id, '[NOTIZEN_ERSTELLT]');
-            const refreshed = await getUnitMessages(course.id, unit.id);
-            setMessages(refreshed);
         } catch {
             setError('Fehler beim Laden des Chats.');
         } finally {
-            setSendingChat(false);
             setLoadingMessages(false);
         }
     };

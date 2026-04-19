@@ -59,6 +59,10 @@ export default function TeacherPanel() {
     const [termInput, setTermInput] = useState('');
     const [generatingTerm, setGeneratingTerm] = useState(false);
 
+    // Prefetched notes cache: unitId -> notes
+    const prefetchedNotesRef = useRef<Map<string, CourseNoteResult[]>>(new Map());
+    const userSentMessageRef = useRef(false);
+
     // Advanced focus
     const [loadingFocus, setLoadingFocus] = useState(false);
     const [customFocusInput, setCustomFocusInput] = useState('');
@@ -161,6 +165,7 @@ export default function TeacherPanel() {
     const openUnitChat = async (course: CourseDetail, unit: CourseUnit) => {
         setLoadingMessages(true);
         setMessages([]);
+        userSentMessageRef.current = false;
         setView({ kind: 'lesson-chat', course, unit });
         try {
             const msgs = await getUnitMessages(course.id, unit.id);
@@ -179,8 +184,13 @@ export default function TeacherPanel() {
                     response,
                 ]);
                 setSendingChat(false);
+            } else {
+                userSentMessageRef.current = msgs.some(
+                    m => m.role === 'user' && m.content !== '[START]' && m.content !== '[NOTIZEN_ERSTELLT]'
+                );
             }
-            // Prefetch next lesson greeting in background
+            // Prefetch notes for THIS unit + next unit greeting
+            prefetchNotesForUnit(course.id, unit.id);
             prefetchNextUnit(course, unit);
         } catch {
             setError('Fehler beim Laden des Chats.');
@@ -188,6 +198,14 @@ export default function TeacherPanel() {
             setLoadingMessages(false);
             setSendingChat(false);
         }
+    };
+
+    // ── Prefetch notes for a unit in background ─────────────────────
+    const prefetchNotesForUnit = (courseId: string, unitId: string) => {
+        if (prefetchedNotesRef.current.has(unitId)) return;
+        generateLessonNotes(courseId, unitId).then(notes => {
+            if (notes.length > 0) prefetchedNotesRef.current.set(unitId, notes);
+        }).catch(() => {});
     };
 
     // ── Prefetch next unit greeting ──────────────────────────────────
@@ -198,10 +216,14 @@ export default function TeacherPanel() {
             u => u.enabled && (u.status === 'pending' || u.status === 'active')
         );
         if (!nextUnit) return;
-        // Fire-and-forget: check if already has messages, if not send [START]
+        // Fire-and-forget: check if already has messages, if not send [START] + prefetch notes
         getUnitMessages(course.id, nextUnit.id).then(msgs => {
             if (msgs.length === 0) {
-                sendTeacherChat(course.id, nextUnit.id, '[START]').catch(() => {});
+                sendTeacherChat(course.id, nextUnit.id, '[START]').then(() => {
+                    prefetchNotesForUnit(course.id, nextUnit.id);
+                }).catch(() => {});
+            } else {
+                prefetchNotesForUnit(course.id, nextUnit.id);
             }
         }).catch(() => {});
     };
@@ -212,6 +234,7 @@ export default function TeacherPanel() {
         const msg = chatInput.trim();
         setChatInput('');
         setSendingChat(true);
+        userSentMessageRef.current = true;  // invalidate prefetched notes
 
         // Optimistic add user message
         const tempId = `temp-${Date.now()}`;
@@ -242,7 +265,10 @@ export default function TeacherPanel() {
         setGeneratingNotes(true);
         setError(null);
         try {
-            const notes = await generateLessonNotes(view.course.id, view.unit.id);
+            const unitId = view.unit.id;
+            const cached = !userSentMessageRef.current ? prefetchedNotesRef.current.get(unitId) : undefined;
+            const notes = cached || await generateLessonNotes(view.course.id, unitId);
+            prefetchedNotesRef.current.delete(unitId);
             if (notes.length > 0) {
                 setView({
                     kind: 'note-review',
@@ -327,16 +353,9 @@ export default function TeacherPanel() {
         try {
             const msgs = await getUnitMessages(course.id, unit.id);
             setMessages(msgs);
-            setLoadingMessages(false);
-            // Automatically send follow-up so teacher asks about more questions
-            setSendingChat(true);
-            await sendTeacherChat(course.id, unit.id, '[NOTIZEN_ERSTELLT]');
-            const refreshed = await getUnitMessages(course.id, unit.id);
-            setMessages(refreshed);
         } catch {
             setError('Fehler beim Laden des Chats.');
         } finally {
-            setSendingChat(false);
             setLoadingMessages(false);
         }
     };

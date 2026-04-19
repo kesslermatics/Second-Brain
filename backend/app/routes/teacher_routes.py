@@ -596,6 +596,7 @@ async def unit_generate_notes(
         notes = await generate_lesson_notes(
             course_title=course.title,
             unit_title=unit.title,
+            unit_number=unit.unit_number,
             unit_description=unit.description or "",
             learning_objectives=unit.learning_objectives or [],
             chat_history=chat_history,
