@@ -53,7 +53,6 @@ export default function BookPanel() {
     const [messages, setMessages] = useState<CourseMessage[]>([]);
     const [chatInput, setChatInput] = useState('');
     const [sendingChat, setSendingChat] = useState(false);
-    const [loadingMessages, setLoadingMessages] = useState(false);
 
     // Note generation
     const [generatingNotes, setGeneratingNotes] = useState(false);
@@ -199,16 +198,14 @@ export default function BookPanel() {
 
     // ── Open unit chat ───────────────────────────────────────────────
     const openUnitChat = async (course: CourseDetail, unit: CourseUnit) => {
-        setLoadingMessages(true);
         setMessages([]);
         userSentMessageRef.current = false;
         setView({ kind: 'lesson-chat', course, unit });
         try {
             const msgs = await getUnitMessages(course.id, unit.id);
             setMessages(msgs);
-            setLoadingMessages(false);
             if (msgs.length === 0) {
-                // Show typing indicator instead of generic spinner during LLM call
+                // Show typing indicator during LLM call
                 setSendingChat(true);
                 const response = await sendTeacherChat(course.id, unit.id, '[START]');
                 setMessages([
@@ -228,7 +225,6 @@ export default function BookPanel() {
         } catch {
             setError('Fehler beim Laden des Chats.');
         } finally {
-            setLoadingMessages(false);
             setSendingChat(false);
         }
     };
@@ -377,7 +373,6 @@ export default function BookPanel() {
 
     // ── Return to chat after note review ─────────────────────────────
     const returnToChat = async (course: CourseDetail, unit: CourseUnit) => {
-        setLoadingMessages(true);
         setMessages([]);
         setView({ kind: 'lesson-chat', course, unit });
         try {
@@ -385,8 +380,6 @@ export default function BookPanel() {
             setMessages(msgs);
         } catch {
             setError('Fehler beim Laden des Chats.');
-        } finally {
-            setLoadingMessages(false);
         }
     };
 
@@ -975,12 +968,6 @@ export default function BookPanel() {
 
                 {/* Messages */}
                 <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                    {loadingMessages && (
-                        <div className="flex justify-center py-8">
-                            <div className="w-6 h-6 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
-                        </div>
-                    )}
-
                     {messages.filter(m => m.role !== 'user' || (m.content !== '[START]' && m.content !== '[NOTIZEN_ERSTELLT]')).map((msg, idx, arr) => {
                         const isLastAssistant = msg.role === 'assistant' && idx === arr.length - 1;
                         return (
