@@ -1,4 +1,6 @@
-# 🧠 Brain - The AI-Powered Second Brain & Interactive Tutor
+import urllib.parse
+
+content = """# 🧠 Brain - The AI-Powered Second Brain & Interactive Tutor
 
 Ein KI-gestütztes persönliches Wissensmanagement-System kombiniert mit einem interaktiven **Infinite Teacher** und **Buch-Tutor**. Notizen diktieren, automatisch mit Markdown und Meta-Daten strukturieren lassen, Dateien per Vision AI durchsuchen, und sogar interaktive Kurse oder Bücher generieren lassen, die dir jedes Konzept im Detail erklären.
 
@@ -213,3 +215,8 @@ Das System erzeugt über den `backup_service.py` jeden Tag um 03:00 Uhr UTC eine
 ---
 
 *Wissen wächst, wenn man es teilt. Viel Spaß beim Lernen und Notieren!*
+"""
+
+with open("README.md", "w") as f:
+    f.write(content)
+print("Generiert!")
