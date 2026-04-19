@@ -70,6 +70,7 @@ export default function BookPanel() {
     const [generatingSummaryFor, setGeneratingSummaryFor] = useState<string | null>(null);
 
     const chatEndRef = useRef<HTMLDivElement>(null);
+    const lastAssistantRef = useRef<HTMLDivElement>(null);
     const chatInputRef = useRef<HTMLTextAreaElement>(null);
     const { loadFolderTree } = useStore();
 
@@ -90,10 +91,15 @@ export default function BookPanel() {
         loadCourses();
     }, [loadCourses]);
 
-    // Scroll to bottom of chat when new messages arrive
+    // Scroll to the start of the last assistant message so the user can read from the top
     useEffect(() => {
-        if (view.kind === 'lesson-chat') {
-            chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        if (view.kind === 'lesson-chat' && messages.length > 0) {
+            const lastMsg = messages[messages.length - 1];
+            if (lastMsg.role === 'assistant' && lastAssistantRef.current) {
+                lastAssistantRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            } else {
+                chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+            }
         }
     }, [messages, view]);
 
@@ -935,9 +941,12 @@ export default function BookPanel() {
                         </div>
                     )}
 
-                    {messages.filter(m => m.role !== 'user' || (m.content !== '[START]' && m.content !== '[NOTIZEN_ERSTELLT]')).map((msg) => (
+                    {messages.filter(m => m.role !== 'user' || (m.content !== '[START]' && m.content !== '[NOTIZEN_ERSTELLT]')).map((msg, idx, arr) => {
+                        const isLastAssistant = msg.role === 'assistant' && idx === arr.length - 1;
+                        return (
                         <div
                             key={msg.id}
+                            ref={isLastAssistant ? lastAssistantRef : undefined}
                             className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                         >
                             {msg.role === 'note_generated' ? (
@@ -986,7 +995,8 @@ export default function BookPanel() {
                                 </div>
                             )}
                         </div>
-                    ))}
+                    );
+                    })}
 
                     {sendingChat && (
                         <div className="flex justify-start">
