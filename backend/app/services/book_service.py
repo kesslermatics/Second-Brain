@@ -4,6 +4,7 @@ import google.generativeai as genai
 from google.ai.generativelanguage_v1beta import types as glm_types
 from app.services.ai_service import get_gemini_model, DEFAULT_NOTE_PROMPT
 from app.config import get_settings
+import asyncio
 import json
 import re
 
@@ -40,7 +41,7 @@ Wenn kein passendes Buch gefunden wird:
     "suggestion": "Meintest du vielleicht...?"
 }}"""
 
-    response = model.generate_content(prompt, tools=[GOOGLE_SEARCH_TOOL])
+    response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
     text = response.text.strip()
 
     json_match = re.search(r'\{[\s\S]*\}', text)
@@ -92,7 +93,7 @@ Lasse folgende Einträge KOMPLETT WEG (sie haben keinen inhaltlichen Mehrwert):
 
 Nur inhaltliche Kapitel mit echtem Lerninhalt sollen aufgelistet werden."""
 
-    response = model.generate_content(prompt, tools=[GOOGLE_SEARCH_TOOL])
+    response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
     text = response.text.strip()
 
     json_match = re.search(r'\{[\s\S]*\}', text)
@@ -158,7 +159,7 @@ Formatierungsregeln für formatted_content (sehr wichtig!):
 - Die Notiz soll wie eine gute Zusammenfassung sein, die man zum Lernen nutzen kann
 - Schreibe in der Sprache des Buches"""
 
-    response = model.generate_content(prompt, tools=[GOOGLE_SEARCH_TOOL])
+    response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
     text = response.text.strip()
 
     json_match = re.search(r'\{[\s\S]*\}', text)
@@ -232,7 +233,7 @@ Formatierungsregeln für formatted_content (sehr wichtig!):
 - Die Notiz soll wie ein guter Lexikon-/Wikipedia-Eintrag sein, den man zum Lernen nutzen kann
 - Schreibe in der Sprache des Buches"""
 
-    response = model.generate_content(prompt, tools=[GOOGLE_SEARCH_TOOL])
+    response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
     text = response.text.strip()
 
     json_match = re.search(r'\{[\s\S]*\}', text)
@@ -269,7 +270,7 @@ ANWEISUNG: {instruction}
 
 Gib NUR den neuen, vollständigen Notiz-Inhalt zurück (Markdown). Kein JSON, keine Erklärung, nur der Inhalt."""
 
-    response = model.generate_content(prompt)
+    response = await asyncio.to_thread(model.generate_content, prompt)
     return response.text.strip()
 
 
@@ -328,7 +329,7 @@ AUFGABE: Erstelle eine Zusammenfassung, die:
 Gib NUR den Markdown-Inhalt zurück, kein JSON, keine Erklärung.
 Beginne NICHT mit dem Kapiteltitel als Heading (der wird separat angezeigt)."""
 
-        response = model.generate_content(prompt)
+        response = await asyncio.to_thread(model.generate_content, prompt)
     else:
         # No chat history — generate from AI knowledge
         prompt = f"""Du bist ein Second Brain Assistent. Erstelle eine hochwertige, gut strukturierte Zusammenfassung
@@ -357,6 +358,6 @@ AUFGABE: Erstelle eine Zusammenfassung, die:
 Gib NUR den Markdown-Inhalt zurück, kein JSON, keine Erklärung.
 Beginne NICHT mit dem Kapiteltitel als Heading (der wird separat angezeigt)."""
 
-        response = model.generate_content(prompt, tools=[GOOGLE_SEARCH_TOOL])
+        response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
 
     return response.text.strip()

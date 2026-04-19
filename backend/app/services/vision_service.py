@@ -1,6 +1,7 @@
 """
 Gemini Vision service — interprets images and generates text descriptions for RAG.
 """
+import asyncio
 import google.generativeai as genai
 from pathlib import Path
 from app.config import get_settings
@@ -53,7 +54,7 @@ async def describe_image(file_path: str, custom_prompt: str | None = None) -> st
     model = genai.GenerativeModel(VISION_MODEL)
     prompt = custom_prompt or DESCRIBE_PROMPT
 
-    response = model.generate_content([prompt, uploaded])
+    response = await asyncio.to_thread(model.generate_content, [prompt, uploaded])
 
     # Clean up the uploaded file
     try:
@@ -81,5 +82,5 @@ async def describe_image_from_bytes(
         "data": image_bytes,
     }
 
-    response = model.generate_content([prompt, image_part])
+    response = await asyncio.to_thread(model.generate_content, [prompt, image_part])
     return response.text.strip()

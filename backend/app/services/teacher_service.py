@@ -4,6 +4,7 @@ import google.generativeai as genai
 from google.ai.generativelanguage_v1beta import types as glm_types
 from app.services.ai_service import get_gemini_model
 from app.config import get_settings
+import asyncio
 import json
 import re
 from datetime import datetime
@@ -252,7 +253,7 @@ WICHTIG:
 - Die Lektionsnamen sollen das THEMA beschreiben, nicht "Stunde 1" oder "Lektion 1"
 - Module (level 1) sind übergeordnete Themenbereiche, Lektionen (level 2) sind die konkreten Unterrichtseinheiten"""
 
-    response = model.generate_content(prompt, tools=[GOOGLE_SEARCH_TOOL])
+    response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
     text = response.text.strip()
 
     result = _extract_json(text)
@@ -349,7 +350,7 @@ Antworte auf Deutsch (oder in der Sprache, die der Student verwendet).
 Sei warmherzig aber sachlich. Kein Smalltalk — fokussiere dich auf den Lehrinhalt.
 WICHTIG: DUZE den Studenten IMMER. Verwende "du/dein/dir", NIEMALS "Sie/Ihr/Ihnen"."""
 
-    response = model.generate_content(prompt, tools=[GOOGLE_SEARCH_TOOL])
+    response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
     return response.text.strip()
 
 
@@ -440,7 +441,7 @@ Antworte NUR mit dem JSON, kein anderer Text:
     ]
 }}"""
 
-    response = model.generate_content(prompt, tools=[GOOGLE_SEARCH_TOOL])
+    response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
     text = response.text.strip()
 
     result = _extract_json(text)
@@ -509,7 +510,7 @@ Antworte NUR mit dem JSON, kein anderer Text:
     "suggested_folder": "Kurse/{course_title}"
 }}"""
 
-    response = model.generate_content(prompt, tools=[GOOGLE_SEARCH_TOOL])
+    response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
     text = response.text.strip()
 
     result = _extract_json(text)
@@ -570,7 +571,7 @@ Antworte NUR mit dem JSON:
     ]
 }}"""
 
-    response = model.generate_content(prompt, tools=[GOOGLE_SEARCH_TOOL])
+    response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
     text = response.text.strip()
 
     result = _extract_json(text)
@@ -596,7 +597,7 @@ ANWEISUNG: {instruction}
 
 Gib NUR den neuen, vollständigen Notiz-Inhalt zurück (Markdown). Kein JSON, keine Erklärung, nur der Inhalt."""
 
-    response = model.generate_content(prompt)
+    response = await asyncio.to_thread(model.generate_content, prompt)
     return response.text.strip()
 
 
@@ -677,7 +678,7 @@ Antworte auf Deutsch (oder in der Sprache des Buches).
 Sei warmherzig aber sachlich. Fokussiere dich auf den Inhalt des Kapitels.
 WICHTIG: DUZE den Studenten IMMER. Verwende "du/dein/dir", NIEMALS "Sie/Ihr/Ihnen"."""
 
-    response = model.generate_content(prompt, tools=[GOOGLE_SEARCH_TOOL])
+    response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
     return response.text.strip()
 
 
@@ -757,7 +758,7 @@ Antworte NUR mit dem JSON, kein anderer Text:
     ]
 }}"""
 
-    response = model.generate_content(prompt, tools=[GOOGLE_SEARCH_TOOL])
+    response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
     text = response.text.strip()
 
     result = _extract_json(text)
@@ -823,7 +824,7 @@ Antworte NUR mit dem JSON, kein anderer Text:
     "suggested_folder": "Bücher/{book_title}"
 }}"""
 
-    response = model.generate_content(prompt, tools=[GOOGLE_SEARCH_TOOL])
+    response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
     text = response.text.strip()
 
     result = _extract_json(text)

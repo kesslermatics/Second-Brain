@@ -1,5 +1,6 @@
 import google.generativeai as genai
 from app.config import get_settings
+import asyncio
 import json
 import re
 
@@ -17,6 +18,12 @@ def _ensure_genai():
 def get_gemini_model():
     _ensure_genai()
     return genai.GenerativeModel("gemini-3-flash-preview")
+
+
+async def _generate(model, prompt) -> str:
+    """Run synchronous Gemini generate_content in a thread so we never block the event loop."""
+    response = await asyncio.to_thread(model.generate_content, prompt)
+    return response.text
 
 
 # ── Default Prompt Templates ──────────────────────────────────────────
@@ -135,8 +142,7 @@ Beispiel: "suggested_tags": ["python", "machine-learning", "tutorial"]"""
         .replace("{{BENUTZEREINGABE}}", user_input)
     ) + tags_instruction
 
-    response = model.generate_content(prompt)
-    text = response.text.strip()
+    text = (await _generate(model, prompt)).strip()
 
     json_match = re.search(r'\{[\s\S]*\}', text)
     if json_match:
@@ -184,8 +190,7 @@ async def answer_with_rag(question: str, context_notes: list[dict], chat_history
         .replace("{{FRAGE}}", question)
     )
 
-    response = model.generate_content(prompt)
-    return response.text
+    return await _generate(model, prompt)
 
 
 async def edit_note_with_ai(current_content: str, instruction: str, custom_prompt: str = None) -> str:
@@ -199,8 +204,7 @@ async def edit_note_with_ai(current_content: str, instruction: str, custom_promp
         .replace("{{ANWEISUNG}}", instruction)
     )
 
-    response = model.generate_content(prompt)
-    return response.text.strip()
+    return (await _generate(model, prompt)).strip()
 
 
 # ── AI: Tag suggestion ────────────────────────────────────────────────
@@ -224,8 +228,7 @@ Notiz-Inhalt (Auszug): {content[:1500]}
 
 Antworte NUR mit einem JSON-Array von Strings, z.B.: ["tag1", "tag2", "tag3"]"""
 
-    response = model.generate_content(prompt)
-    text = response.text.strip()
+    text = (await _generate(model, prompt)).strip()
 
     json_match = re.search(r'\[[\s\S]*?\]', text)
     if json_match:
@@ -256,8 +259,7 @@ Antworte NUR mit einem JSON-Array:
     {{"question": "Frage 2?", "answer": "Antwort 2"}}
 ]"""
 
-    response = model.generate_content(prompt)
-    text = response.text.strip()
+    text = (await _generate(model, prompt)).strip()
 
     json_match = re.search(r'\[[\s\S]*\]', text)
     if json_match:
@@ -295,8 +297,7 @@ Inhalt (Auszug): {note_content[:1000]}
 Kandidaten:
 {candidates_str}"""
 
-    response = model.generate_content(prompt)
-    text = response.text.strip()
+    text = (await _generate(model, prompt)).strip()
 
     json_match = re.search(r'\[[\s\S]*?\]', text)
     if json_match:
@@ -323,8 +324,7 @@ Nachricht: {first_message[:500]}
 Titel:"""
 
     try:
-        response = model.generate_content(prompt)
-        title = response.text.strip().strip('"\'')
+        title = (await _generate(model, prompt)).strip().strip('"\'')
         # Enforce max length
         if len(title) > 60:
             title = title[:57] + "..."
@@ -355,5 +355,4 @@ Notizen:
 
 Zusammenfassung:"""
 
-    response = model.generate_content(prompt)
-    return response.text
+    return await _generate(model, prompt)
