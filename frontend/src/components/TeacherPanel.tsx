@@ -159,6 +159,7 @@ export default function TeacherPanel() {
         try {
             const msgs = await getUnitMessages(course.id, unit.id);
             setMessages(msgs);
+            setLoadingMessages(false);
             // If no messages yet, send initial greeting
             if (msgs.length === 0) {
                 setSendingChat(true);
@@ -171,15 +172,13 @@ export default function TeacherPanel() {
                     { id: 'start', role: 'user', content: '[START]', metadata: null, created_at: null },
                     response,
                 ]);
-                // Reload to get full message list
-                const refreshed = await getUnitMessages(course.id, unit.id);
-                setMessages(refreshed);
                 setSendingChat(false);
             }
         } catch {
             setError('Fehler beim Laden des Chats.');
         } finally {
             setLoadingMessages(false);
+            setSendingChat(false);
         }
     };
 
@@ -322,24 +321,30 @@ export default function TeacherPanel() {
     const handleCompleteUnit = async () => {
         if (view.kind !== 'lesson-chat') return;
         setError(null);
-        try {
-            await updateCourseUnit(view.course.id, view.unit.id, { status: 'completed' });
-            // Reload course
-            const course = await getTeacherCourse(view.course.id);
-            // Find next unit
-            const nextUnit = course.units.find(
-                (u) => u.enabled && (u.status === 'pending' || u.status === 'active')
-            );
-            if (nextUnit) {
-                await openUnitChat(course, nextUnit);
-            } else {
-                // Course completed
-                await updateCourseStatus(course.id, 'completed');
-                const final = await getTeacherCourse(course.id);
+
+        const currentCourse = view.course;
+        const currentUnit = view.unit;
+
+        // Find next unit locally — no need to refetch the whole course
+        const sorted = [...currentCourse.units].sort((a, b) => a.order_index - b.order_index);
+        const curIdx = sorted.findIndex(u => u.id === currentUnit.id);
+        const nextUnit = sorted.slice(curIdx + 1).find(
+            u => u.enabled && (u.status === 'pending' || u.status === 'active')
+        );
+
+        // Fire completion in background — don't block navigation
+        updateCourseUnit(currentCourse.id, currentUnit.id, { status: 'completed' }).catch(() => {});
+
+        if (nextUnit) {
+            await openUnitChat(currentCourse, nextUnit);
+        } else {
+            try {
+                await updateCourseStatus(currentCourse.id, 'completed');
+                const final = await getTeacherCourse(currentCourse.id);
                 setView({ kind: 'course-completed', course: final });
+            } catch {
+                setError('Fehler beim Abschließen des Kurses.');
             }
-        } catch {
-            setError('Fehler beim Abschließen der Lektion.');
         }
     };
 
@@ -347,21 +352,29 @@ export default function TeacherPanel() {
     const handleSkipUnit = async () => {
         if (view.kind !== 'lesson-chat') return;
         setError(null);
-        try {
-            await updateCourseUnit(view.course.id, view.unit.id, { status: 'skipped' });
-            const course = await getTeacherCourse(view.course.id);
-            const nextUnit = course.units.find(
-                (u) => u.enabled && (u.status === 'pending' || u.status === 'active')
-            );
-            if (nextUnit) {
-                await openUnitChat(course, nextUnit);
-            } else {
-                await updateCourseStatus(course.id, 'completed');
-                const final = await getTeacherCourse(course.id);
+
+        const currentCourse = view.course;
+        const currentUnit = view.unit;
+
+        const sorted = [...currentCourse.units].sort((a, b) => a.order_index - b.order_index);
+        const curIdx = sorted.findIndex(u => u.id === currentUnit.id);
+        const nextUnit = sorted.slice(curIdx + 1).find(
+            u => u.enabled && (u.status === 'pending' || u.status === 'active')
+        );
+
+        // Fire skip in background
+        updateCourseUnit(currentCourse.id, currentUnit.id, { status: 'skipped' }).catch(() => {});
+
+        if (nextUnit) {
+            await openUnitChat(currentCourse, nextUnit);
+        } else {
+            try {
+                await updateCourseStatus(currentCourse.id, 'completed');
+                const final = await getTeacherCourse(currentCourse.id);
                 setView({ kind: 'course-completed', course: final });
+            } catch {
+                setError('Fehler beim Überspringen.');
             }
-        } catch {
-            setError('Fehler beim Überspringen.');
         }
     };
 
