@@ -13,12 +13,31 @@ from app.services.vector_service import delete_note_embedding
 router = APIRouter(prefix="/folders", tags=["folders"])
 
 
+import re
+
+_CHAPTER_RE = re.compile(r"^(Kapitel|Lektion|Kurs)\s", re.IGNORECASE)
+
+
+def _sort_notes(notes: list) -> list:
+    """Sort notes: chapter/lesson overviews first (chronologically), then the rest alphabetically."""
+    chapters = []
+    regular = []
+    for n in notes:
+        if _CHAPTER_RE.match(n.title):
+            chapters.append(n)
+        else:
+            regular.append(n)
+    chapters.sort(key=lambda n: n.created_at)
+    regular.sort(key=lambda n: n.title.lower())
+    return chapters + regular
+
+
 def build_tree(folders: list[Folder], notes_by_folder: dict, parent_id=None) -> list[dict]:
     """Build tree structure from flat folder list."""
     tree = []
     for folder in folders:
         if folder.parent_id == parent_id:
-            folder_notes = notes_by_folder.get(folder.id, [])
+            folder_notes = _sort_notes(notes_by_folder.get(folder.id, []))
             children = build_tree(folders, notes_by_folder, folder.id)
             tree.append(
                 FolderTreeResponse(
