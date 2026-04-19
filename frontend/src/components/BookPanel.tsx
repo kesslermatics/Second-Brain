@@ -212,12 +212,30 @@ export default function BookPanel() {
                 ]);
                 setSendingChat(false);
             }
+            // Prefetch next chapter greeting in background
+            prefetchNextUnit(course, unit);
         } catch {
             setError('Fehler beim Laden des Chats.');
         } finally {
             setLoadingMessages(false);
             setSendingChat(false);
         }
+    };
+
+    // ── Prefetch next unit greeting ──────────────────────────────────
+    const prefetchNextUnit = (course: CourseDetail, currentUnit: CourseUnit) => {
+        const sorted = [...course.units].sort((a, b) => a.order_index - b.order_index);
+        const curIdx = sorted.findIndex(u => u.id === currentUnit.id);
+        const nextUnit = sorted.slice(curIdx + 1).find(
+            u => u.enabled && (u.status === 'pending' || u.status === 'active')
+        );
+        if (!nextUnit) return;
+        // Fire-and-forget: check if already has messages, if not send [START]
+        getUnitMessages(course.id, nextUnit.id).then(msgs => {
+            if (msgs.length === 0) {
+                sendTeacherChat(course.id, nextUnit.id, '[START]').catch(() => {});
+            }
+        }).catch(() => {});
     };
 
     // ── Send chat message ────────────────────────────────────────────
