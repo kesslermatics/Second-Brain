@@ -58,8 +58,9 @@ export default function TeacherPanel() {
     const [termInput, setTermInput] = useState('');
     const [generatingTerm, setGeneratingTerm] = useState(false);
 
-    // Prefetched notes cache: unitId -> notes
+    // Prefetched caches: unitId -> data
     const prefetchedNotesRef = useRef<Map<string, CourseNoteResult[]>>(new Map());
+    const prefetchedMessagesRef = useRef<Map<string, CourseMessage[]>>(new Map());
     const userSentMessageRef = useRef(false);
 
     // Advanced focus
@@ -162,20 +163,31 @@ export default function TeacherPanel() {
 
     // ── Open unit chat ───────────────────────────────────────────────
     const openUnitChat = async (course: CourseDetail, unit: CourseUnit) => {
-        setMessages([]);
         userSentMessageRef.current = false;
         setView({ kind: 'lesson-chat', course, unit });
+
+        // Use prefetched messages from memory if available (instant)
+        const cached = prefetchedMessagesRef.current.get(unit.id);
+        prefetchedMessagesRef.current.delete(unit.id);
+
+        if (cached && cached.length > 0) {
+            setMessages(cached);
+            userSentMessageRef.current = cached.some(
+                m => m.role === 'user' && m.content !== '[START]' && m.content !== '[NOTIZEN_ERSTELLT]'
+            );
+            prefetchNotesForUnit(course.id, unit.id);
+            prefetchNextUnit(course, unit);
+            return;
+        }
+
+        // No cache — fetch from server
+        setMessages([]);
         try {
             const msgs = await getUnitMessages(course.id, unit.id);
             setMessages(msgs);
-            // If no messages yet, send initial greeting
             if (msgs.length === 0) {
                 setSendingChat(true);
-                const response = await sendTeacherChat(
-                    course.id,
-                    unit.id,
-                    '[START]'
-                );
+                const response = await sendTeacherChat(course.id, unit.id, '[START]');
                 setMessages([
                     { id: 'start', role: 'user', content: '[START]', metadata: null, created_at: null },
                     response,
@@ -186,7 +198,6 @@ export default function TeacherPanel() {
                     m => m.role === 'user' && m.content !== '[START]' && m.content !== '[NOTIZEN_ERSTELLT]'
                 );
             }
-            // Prefetch notes for THIS unit + next unit greeting
             prefetchNotesForUnit(course.id, unit.id);
             prefetchNextUnit(course, unit);
         } catch {
@@ -212,14 +223,20 @@ export default function TeacherPanel() {
             u => u.enabled && (u.status === 'pending' || u.status === 'active')
         );
         if (!nextUnit) return;
-        // Fire-and-forget: check if already has messages, if not send [START] + prefetch notes
+        if (prefetchedMessagesRef.current.has(nextUnit.id)) return; // already cached
+        // Fire-and-forget: fetch or create greeting, cache in memory
         getUnitMessages(course.id, nextUnit.id).then(msgs => {
-            if (msgs.length === 0) {
-                sendTeacherChat(course.id, nextUnit.id, '[START]').then(() => {
+            if (msgs.length > 0) {
+                prefetchedMessagesRef.current.set(nextUnit.id, msgs);
+                prefetchNotesForUnit(course.id, nextUnit.id);
+            } else {
+                sendTeacherChat(course.id, nextUnit.id, '[START]').then(response => {
+                    prefetchedMessagesRef.current.set(nextUnit.id, [
+                        { id: 'start', role: 'user', content: '[START]', metadata: null, created_at: null },
+                        response,
+                    ]);
                     prefetchNotesForUnit(course.id, nextUnit.id);
                 }).catch(() => {});
-            } else {
-                prefetchNotesForUnit(course.id, nextUnit.id);
             }
         }).catch(() => {});
     };
