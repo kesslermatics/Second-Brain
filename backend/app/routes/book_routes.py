@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import get_db
 from app.auth import get_current_user
-from app.models import User, Folder, Tag
+from app.models import User, Folder, Tag, Note
 from app.services.book_service import search_book, get_book_toc, generate_chapter_note, generate_topic_note, ai_edit_book_content
 
 router = APIRouter(prefix="/books", tags=["books"])
@@ -69,12 +69,32 @@ async def book_generate_chapter_note(
     all_tags = tag_result.scalars().all()
     existing_tag_names = [t.name for t in all_tags]
 
+    # Load existing note titles for this book to avoid duplicates
+    existing_note_titles = []
+    book_folder_result = await db.execute(
+        select(Folder).where(
+            Folder.user_id == current_user.id,
+            Folder.path.like(f"Bücher/{book_title}%"),
+        )
+    )
+    book_folders = book_folder_result.scalars().all()
+    if book_folders:
+        folder_ids = [f.id for f in book_folders]
+        notes_result = await db.execute(
+            select(Note.title).where(
+                Note.folder_id.in_(folder_ids),
+                Note.user_id == current_user.id,
+            )
+        )
+        existing_note_titles = [row[0] for row in notes_result.all()]
+
     result = await generate_chapter_note(
         book_title=book_title,
         authors=authors,
         chapter=chapter,
         folder_structure=folder_structure,
         existing_tags=existing_tag_names,
+        existing_note_titles=existing_note_titles,
     )
 
     # Resolve suggested tags to IDs (create new ones if needed)

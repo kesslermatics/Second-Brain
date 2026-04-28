@@ -221,9 +221,6 @@ Der Lehrplan soll:
 - Themen sollen natürlich ineinander übergehen und aufeinander aufbauen
 - Lernziele pro Lektion definieren (was der Student danach können/wissen soll)
 - Praxisrelevant und tiefgehend sein, wie ein guter Universitätskurs
-- Wenn das Thema sich dynamisch weiterentwickelt (z.B. KI, Medizin, Technologie),
-  beziehe aktuelle Forschung und den State of the Art (Stand {year}) mit ein.
-  Bei zeitlosen oder historischen Themen ist das NICHT nötig.
 
 Antworte NUR mit dem JSON, kein anderer Text:
 {{
@@ -337,11 +334,6 @@ DEINE AUFGABE:
 - SPEZIAL-NACHRICHTEN:
   - "[START]": Der Student hat die Lektion gerade geöffnet. Begrüße ihn kurz und beginne mit der Einführung des Themas.
   - "[NOTIZEN_ERSTELLT]": Es wurden gerade Notizen zum aktuellen Thema erstellt und gespeichert. Frage den Studenten freundlich und kurz (2-3 Sätze), ob er noch Fragen zum aktuellen Thema hat oder ob er bereit ist, zur nächsten Lektion überzugehen.
-- AKTUALITÄT: Wenn das Thema sich seit der klassischen Lehrmeinung weiterentwickelt hat
-  oder es relevante neue Erkenntnisse gibt, bringe diese ein und kennzeichne sie z.B. mit
-  "Aktueller Stand ({year}):...". Bei zeitlosen Themen (z.B. Philosophie, Geschichte,
-  Grundlagentheorie) ist das NICHT nötig — erzwinge keine künstliche Aktualität.
-
 {FORMATTING_RULES}
 
 HINWEIS zu Mathe-Formeln: Wenn das Thema mathematische Inhalte hat, verwende die LaTeX-Notation ($...$ inline, $$...$$ als Block). Bei nicht-mathematischen Themen verwende KEINE Formeln.
@@ -362,13 +354,13 @@ async def generate_lesson_notes(
     learning_objectives: list[str],
     chat_history: list[dict],
     existing_tags: list[str] | None = None,
+    existing_note_titles: list[str] | None = None,
 ) -> list[dict]:
     """Generate atomic notes for the current lesson based on what was discussed.
 
     Returns a list of notes: [{title, content, suggested_tags, suggested_folder}]
     """
     model = get_gemini_model()
-    year = _current_year()
 
     tags_str = ", ".join(existing_tags) if existing_tags else "(keine)"
 
@@ -395,7 +387,22 @@ BISHERIGER GESPRÄCHSVERLAUF (kurz):
         context_block = f"""GESPRÄCHSVERLAUF:
 {chat_text}"""
 
-    prompt = f"""Du bist ein Second Brain Assistent. Wir befinden uns im Jahr {year}.
+    # Build deduplication context
+    dedup_block = ""
+    if existing_note_titles:
+        titles_list = "\n".join(f"- {t}" for t in existing_note_titles)
+        dedup_block = f"""
+BEREITS EXISTIERENDE NOTIZEN zu diesem Kurs (aus vorherigen Lektionen):
+{titles_list}
+
+WICHTIGE REGEL ZUR VERMEIDUNG VON DUPLIKATEN:
+- Erstelle KEINE neuen Atomic Notes für Konzepte, die oben bereits als Notiz existieren.
+- Wenn ein Konzept aus dieser Lektion bereits als Notiz existiert, erwähne es nur kurz in der Überblicksnotiz und verweise darauf, statt eine neue Notiz zu erstellen.
+- Verwende ANDERE Beispiele als in vorherigen Lektionen — bringe frische, lektionsspezifische Beispiele.
+- Erstelle nur Notizen für NEUE Konzepte, die in den bisherigen Notizen noch nicht behandelt wurden.
+"""
+
+    prompt = f"""Du bist ein Second Brain Assistent.
 Basierend auf {'der Lektion' if thin_chat else 'dem folgenden Unterrichtsgespräch'} sollst du Notizen erstellen.
 
 KURS: "{course_title}"
@@ -406,7 +413,7 @@ LERNZIELE:
 {objectives_str}
 
 {context_block}
-
+{dedup_block}
 STRUKTUR DER NOTIZEN:
 1. ERSTE NOTIZ = ÜBERBLICKSNOTIZ: Eine zusammenfassende Notiz mit dem Titel "Lektion {unit_number}: {unit_title}".
    Diese fasst die gesamte Lektion kompakt zusammen: Kernaussagen, wichtige Konzepte, Zusammenhänge.
@@ -418,10 +425,6 @@ Bestehende Tags im System: {tags_str}
 Bevorzuge bestehende Tags wenn sie passen.
 
 {FORMATTING_RULES}
-
-ACHTUNG AKTUALITÄT: Wenn im Gespräch aktuelle Forschungsergebnisse oder moderne Entwicklungen
-besprochen wurden, schreibe diese MIT in die Notizen. Bei zeitlosen Themen (Philosophie,
-Geschichte, Grundlagentheorie) ist keine künstliche Aktualitätsrecherche nötig.
 
 Antworte NUR mit dem JSON, kein anderer Text:
 {{
@@ -473,7 +476,6 @@ async def generate_term_note(
     Returns: {title, content, suggested_tags, suggested_folder}
     """
     model = get_gemini_model()
-    year = _current_year()
 
     tags_str = ", ".join(existing_tags) if existing_tags else "(keine)"
 
@@ -484,7 +486,7 @@ async def generate_term_note(
         if msg["role"] != "note_generated" and msg.get("content", "") not in ("[START]", "[NOTIZEN_ERSTELLT]"):
             chat_text += f"{role_label}: {msg['content'][:1500]}\n"
 
-    prompt = f"""Du bist ein Second Brain Assistent. Wir befinden uns im Jahr {year}.
+    prompt = f"""Du bist ein Second Brain Assistent.
 Erstelle eine ATOMIC NOTE zum folgenden Begriff:
 
 BEGRIFF: "{term}"
@@ -492,9 +494,6 @@ KONTEXT: Kurs "{course_title}", Lektion "{unit_title}"
 
 Aktueller Gesprächskontext:
 {chat_text}
-
-Wenn es für diesen Begriff relevante aktuelle Entwicklungen gibt (Stand {year}), erwähne sie.
-Bei zeitlosen Konzepten ist keine künstliche Aktualitätsrecherche nötig.
 
 {ATOMIC_NOTE_RULES}
 {FORMATTING_RULES}
@@ -540,10 +539,9 @@ async def generate_advanced_focus(
     Returns: [{title, description, topic}]
     """
     model = get_gemini_model()
-    year = _current_year()
 
     prompt = f"""Du bist ein Studienberater und Lehrplanentwickler.
-Wir befinden uns im Jahr {year}. Du DUZT den Studierenden.
+Du DUZT den Studierenden.
 
 Der Studierende hat folgenden Kurs abgeschlossen:
 KURS: "{course_title}" (Thema: {course_topic})
@@ -557,8 +555,6 @@ Diese sollen:
 - Fortgeschrittene oder spezialisierte Aspekte des Themas abdecken
 - Wie Master-/Vertiefungsmodule sein
 - Praktisch relevant und interessant sein
-- AKTUELLE TRENDS berücksichtigen: Recherchiere die neuesten Entwicklungen und Forschungsrichtungen
-  in diesem Fachgebiet (Stand {year}) und schlage auch Schwerpunkte vor, die sich mit State-of-the-Art-Themen befassen
 
 Antworte NUR mit dem JSON:
 {{
@@ -666,10 +662,6 @@ DEINE AUFGABE:
   - "[NOTIZEN_ERSTELLT]": Es wurden gerade Notizen erstellt und gespeichert. Frage den Studenten freundlich
     und kurz (2-3 Sätze), ob er noch Fragen zum aktuellen Kapitel hat oder ob er bereit ist, zum nächsten
     Kapitel überzugehen.
-- AKTUALITÄT: Wenn das Buchthema sich seit Veröffentlichung relevant weiterentwickelt hat,
-  bringe aktuelle Ergänzungen ein und kennzeichne sie z.B. mit "Aktueller Stand ({year}):...".
-  Bei zeitlosen Themen (Philosophie, klassische Literatur, etc.) ist das NICHT nötig.
-
 {FORMATTING_RULES}
 
 HINWEIS zu Mathe-Formeln: Wenn das Kapitel mathematische Inhalte hat, verwende die LaTeX-Notation ($...$ inline, $$...$$ als Block). Bei nicht-mathematischen Themen verwende KEINE Formeln.
@@ -689,10 +681,10 @@ async def generate_book_chapter_notes(
     chapter_title: str,
     chat_history: list[dict],
     existing_tags: list[str] | None = None,
+    existing_note_titles: list[str] | None = None,
 ) -> list[dict]:
     """Generate atomic notes for a book chapter based on the interactive discussion."""
     model = get_gemini_model()
-    year = _current_year()
     authors_str = ", ".join(book_authors) if book_authors else "unbekannter Autor"
     tags_str = ", ".join(existing_tags) if existing_tags else "(keine)"
 
@@ -716,14 +708,29 @@ BISHERIGER GESPRÄCHSVERLAUF (kurz):
         context_block = f"""GESPRÄCHSVERLAUF:
 {chat_text}"""
 
-    prompt = f"""Du bist ein Second Brain Assistent. Wir befinden uns im Jahr {year}.
+    # Build deduplication context
+    dedup_block = ""
+    if existing_note_titles:
+        titles_list = "\n".join(f"- {t}" for t in existing_note_titles)
+        dedup_block = f"""
+BEREITS EXISTIERENDE NOTIZEN zu diesem Buch (aus vorherigen Kapiteln):
+{titles_list}
+
+WICHTIGE REGEL ZUR VERMEIDUNG VON DUPLIKATEN:
+- Erstelle KEINE neuen Atomic Notes für Konzepte, die oben bereits als Notiz existieren.
+- Wenn ein Konzept aus diesem Kapitel bereits als Notiz existiert, erwähne es nur kurz in der Überblicksnotiz und verweise darauf, statt eine neue Notiz zu erstellen.
+- Verwende ANDERE Beispiele als in vorherigen Kapiteln — bringe frische, kapitelspezifische Beispiele.
+- Erstelle nur Notizen für NEUE Konzepte, die in den bisherigen Notizen noch nicht behandelt wurden.
+"""
+
+    prompt = f"""Du bist ein Second Brain Assistent.
 Basierend auf {'dem Buchkapitel' if thin_chat else 'dem folgenden Gespräch über ein Buchkapitel'} sollst du Notizen erstellen.
 
 BUCH: "{book_title}" von {authors_str}
 KAPITEL: {chapter_number} — "{chapter_title}"
 
 {context_block}
-
+{dedup_block}
 STRUKTUR DER NOTIZEN:
 1. ERSTE NOTIZ = ÜBERBLICKSNOTIZ: Eine zusammenfassende Notiz mit dem Titel "Kapitel {chapter_number}: {chapter_title}".
    Diese fasst das gesamte Kapitel kompakt zusammen: Kernaussagen, Hauptargumente, zentrale Begriffe.
@@ -737,8 +744,6 @@ Bestehende Tags im System: {tags_str}
 Bevorzuge bestehende Tags wenn sie passen.
 
 {FORMATTING_RULES}
-
-ACHTUNG: Wenn im Gespräch aktuelle Ergänzungen zum Buchinhalt besprochen wurden, integriere diese in die Notizen.
 
 Antworte NUR mit dem JSON, kein anderer Text:
 {{
@@ -788,7 +793,6 @@ async def generate_book_term_note(
 ) -> dict:
     """Generate a single atomic note for a term from a book chapter context."""
     model = get_gemini_model()
-    year = _current_year()
     authors_str = ", ".join(book_authors) if book_authors else "unbekannter Autor"
     tags_str = ", ".join(existing_tags) if existing_tags else "(keine)"
 
@@ -798,7 +802,7 @@ async def generate_book_term_note(
         if msg["role"] != "note_generated" and msg.get("content", "") not in ("[START]", "[NOTIZEN_ERSTELLT]"):
             chat_text += f"{role_label}: {msg['content'][:1500]}\n"
 
-    prompt = f"""Du bist ein Second Brain Assistent. Wir befinden uns im Jahr {year}.
+    prompt = f"""Du bist ein Second Brain Assistent.
 Erstelle eine ATOMIC NOTE zum folgenden Begriff:
 
 BEGRIFF: "{term}"
@@ -806,9 +810,6 @@ KONTEXT: Buch "{book_title}" von {authors_str}, Kapitel "{chapter_title}"
 
 Aktueller Gesprächskontext:
 {chat_text}
-
-Wenn es für diesen Begriff relevante aktuelle Entwicklungen gibt (Stand {year}), erwähne sie.
-Bei zeitlosen Konzepten ist keine künstliche Aktualitätsrecherche nötig.
 
 {ATOMIC_NOTE_RULES}
 {FORMATTING_RULES}

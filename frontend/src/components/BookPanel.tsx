@@ -248,7 +248,7 @@ export default function BookPanel() {
         if (prefetchedNotesRef.current.has(unitId)) return;
         generateLessonNotes(courseId, unitId).then(notes => {
             if (notes.length > 0) prefetchedNotesRef.current.set(unitId, notes);
-        }).catch(() => {});
+        }).catch(() => { });
     };
 
     // ── Prefetch next unit greeting ──────────────────────────────────
@@ -272,9 +272,9 @@ export default function BookPanel() {
                         response,
                     ]);
                     prefetchNotesForUnit(course.id, nextUnit.id);
-                }).catch(() => {});
+                }).catch(() => { });
             }
-        }).catch(() => {});
+        }).catch(() => { });
     };
 
     // ── Send chat message ────────────────────────────────────────────
@@ -419,7 +419,7 @@ export default function BookPanel() {
         );
 
         // Fire completion in background — don't block navigation
-        updateCourseUnit(currentCourse.id, currentUnit.id, { status: 'completed' }).catch(() => {});
+        updateCourseUnit(currentCourse.id, currentUnit.id, { status: 'completed' }).catch(() => { });
 
         if (nextUnit) {
             await openUnitChat(currentCourse, nextUnit);
@@ -449,7 +449,7 @@ export default function BookPanel() {
         );
 
         // Fire skip in background
-        updateCourseUnit(currentCourse.id, currentUnit.id, { status: 'skipped' }).catch(() => {});
+        updateCourseUnit(currentCourse.id, currentUnit.id, { status: 'skipped' }).catch(() => { });
 
         if (nextUnit) {
             await openUnitChat(currentCourse, nextUnit);
@@ -908,7 +908,7 @@ export default function BookPanel() {
                                             {ch.chapter_number}
                                         </span>
                                         <span className={`text-left ${ch.level === 1 ? 'text-white font-semibold' :
-                                                ch.level === 2 ? 'text-dark-300' : 'text-dark-500'
+                                            ch.level === 2 ? 'text-dark-300' : 'text-dark-500'
                                             }`}>
                                             {ch.title}
                                         </span>
@@ -991,58 +991,58 @@ export default function BookPanel() {
                     {messages.filter(m => m.role !== 'user' || (m.content !== '[START]' && m.content !== '[NOTIZEN_ERSTELLT]')).map((msg, idx, arr) => {
                         const isLastAssistant = msg.role === 'assistant' && idx === arr.length - 1;
                         return (
-                        <div
-                            key={msg.id}
-                            ref={isLastAssistant ? lastAssistantRef : undefined}
-                            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                        >
-                            {msg.role === 'note_generated' ? (
-                                <div className="flex items-center gap-2 px-3 py-2 bg-green-900/20 border border-green-800/30 rounded-lg text-xs text-green-400">
-                                    <FiCheck className="w-3.5 h-3.5" />
-                                    {msg.content}
-                                </div>
-                            ) : (
-                                <div
-                                    className={`max-w-[85%] sm:max-w-[75%] px-4 py-3 rounded-2xl text-sm ${msg.role === 'user'
+                            <div
+                                key={msg.id}
+                                ref={isLastAssistant ? lastAssistantRef : undefined}
+                                className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                            >
+                                {msg.role === 'note_generated' ? (
+                                    <div className="flex items-center gap-2 px-3 py-2 bg-green-900/20 border border-green-800/30 rounded-lg text-xs text-green-400">
+                                        <FiCheck className="w-3.5 h-3.5" />
+                                        {msg.content}
+                                    </div>
+                                ) : (
+                                    <div
+                                        className={`max-w-[85%] sm:max-w-[75%] px-4 py-3 rounded-2xl text-sm ${msg.role === 'user'
                                             ? 'bg-amber-600 text-white rounded-br-md'
                                             : 'bg-dark-800 border border-dark-700 text-dark-200 rounded-bl-md'
-                                        }`}
-                                >
-                                    {msg.role === 'assistant' ? (
-                                        (() => {
-                                            const { cleanContent, requests } = extractNoteRequests(msg.content);
-                                            return (
-                                                <>
-                                                    <div className="markdown-content text-sm leading-relaxed">
-                                                        <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
-                                                            {cleanContent}
-                                                        </ReactMarkdown>
-                                                    </div>
-                                                    {requests.length > 0 && (
-                                                        <div className="mt-3 flex flex-wrap gap-1.5">
-                                                            {requests.map((topic, i) => (
-                                                                <button
-                                                                    key={i}
-                                                                    onClick={() => handleGenerateTermNote(topic)}
-                                                                    disabled={generatingTerm}
-                                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600/20 text-amber-300 hover:bg-amber-600/30 text-xs font-medium rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                                                                >
-                                                                    <FiBookOpen className="w-3.5 h-3.5" />
-                                                                    Notiz erstellen: {topic}
-                                                                </button>
-                                                            ))}
+                                            }`}
+                                    >
+                                        {msg.role === 'assistant' ? (
+                                            (() => {
+                                                const { cleanContent, requests } = extractNoteRequests(msg.content);
+                                                return (
+                                                    <>
+                                                        <div className="markdown-content text-sm leading-relaxed">
+                                                            <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
+                                                                {cleanContent}
+                                                            </ReactMarkdown>
                                                         </div>
-                                                    )}
-                                                </>
-                                            );
-                                        })()
-                                    ) : (
-                                        <p className="whitespace-pre-wrap">{msg.content}</p>
-                                    )}
-                                </div>
-                            )}
-                        </div>
-                    );
+                                                        {requests.length > 0 && (
+                                                            <div className="mt-3 flex flex-wrap gap-1.5">
+                                                                {requests.map((topic, i) => (
+                                                                    <button
+                                                                        key={i}
+                                                                        onClick={() => handleGenerateTermNote(topic)}
+                                                                        disabled={generatingTerm}
+                                                                        className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600/20 text-amber-300 hover:bg-amber-600/30 text-xs font-medium rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                                                    >
+                                                                        <FiBookOpen className="w-3.5 h-3.5" />
+                                                                        Notiz erstellen: {topic}
+                                                                    </button>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                    </>
+                                                );
+                                            })()
+                                        ) : (
+                                            <p className="whitespace-pre-wrap">{msg.content}</p>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        );
                     })}
 
                     {sendingChat && (
@@ -1319,11 +1319,10 @@ export default function BookPanel() {
                                         <button
                                             onClick={() => hasSummary ? toggleSummaryChapter(ch.id) : canGenerate ? handleGenerateSummary(courseId, ch.id) : undefined}
                                             disabled={!hasSummary && !canGenerate}
-                                            className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors ${
-                                                hasSummary ? 'hover:bg-dark-800/50 cursor-pointer' :
-                                                canGenerate ? 'hover:bg-dark-800/50 cursor-pointer' :
-                                                'opacity-40 cursor-default'
-                                            }`}
+                                            className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors ${hasSummary ? 'hover:bg-dark-800/50 cursor-pointer' :
+                                                    canGenerate ? 'hover:bg-dark-800/50 cursor-pointer' :
+                                                        'opacity-40 cursor-default'
+                                                }`}
                                             style={{ paddingLeft: `${(ch.level - 1) * 16 + 16}px` }}
                                         >
                                             {/* Expand/collapse indicator */}
@@ -1342,18 +1341,16 @@ export default function BookPanel() {
                                             </div>
 
                                             {/* Status indicator */}
-                                            <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                                                isCompleted ? 'bg-green-500' :
-                                                isActive ? 'bg-amber-400' :
-                                                'bg-dark-700'
-                                            }`} />
+                                            <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isCompleted ? 'bg-green-500' :
+                                                    isActive ? 'bg-amber-400' :
+                                                        'bg-dark-700'
+                                                }`} />
 
                                             {/* Chapter info */}
                                             <span className="text-dark-500 font-mono text-[10px] w-8 flex-shrink-0">{ch.unit_number}</span>
-                                            <span className={`text-sm flex-1 min-w-0 truncate ${
-                                                ch.level === 1 ? 'font-semibold text-white' :
-                                                ch.level === 2 ? 'text-dark-300' : 'text-dark-500'
-                                            }`}>
+                                            <span className={`text-sm flex-1 min-w-0 truncate ${ch.level === 1 ? 'font-semibold text-white' :
+                                                    ch.level === 2 ? 'text-dark-300' : 'text-dark-500'
+                                                }`}>
                                                 {ch.title}
                                             </span>
 

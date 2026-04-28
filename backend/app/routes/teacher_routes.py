@@ -10,7 +10,7 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 from app.database import get_db, async_session
 from app.auth import get_current_user
-from app.models import User, Tag, Course, CourseUnit, CourseMessage
+from app.models import User, Tag, Course, CourseUnit, CourseMessage, Note, Folder
 from app.services.teacher_service import (
     generate_curriculum,
     chat_with_teacher,
@@ -582,6 +582,31 @@ async def unit_generate_notes(
     all_tags = list(tag_result.scalars().all())
     existing_tag_names = [t.name for t in all_tags]
 
+    # Load existing note titles for this course/book to avoid duplicates
+    # Find the target folder based on course kind
+    if (course.kind or "teacher") == "book":
+        folder_prefix = f"Bücher/{course.title}"
+    else:
+        folder_prefix = f"Kurse/{course.title}"
+
+    existing_note_titles = []
+    folder_result = await db.execute(
+        select(Folder).where(
+            Folder.user_id == current_user.id,
+            Folder.path.like(f"{folder_prefix}%"),
+        )
+    )
+    course_folders = folder_result.scalars().all()
+    if course_folders:
+        folder_ids = [f.id for f in course_folders]
+        notes_result = await db.execute(
+            select(Note.title).where(
+                Note.folder_id.in_(folder_ids),
+                Note.user_id == current_user.id,
+            )
+        )
+        existing_note_titles = [row[0] for row in notes_result.all()]
+
     # Generate notes — dispatch by course kind
     if (course.kind or "teacher") == "book":
         notes = await generate_book_chapter_notes(
@@ -591,6 +616,7 @@ async def unit_generate_notes(
             chapter_title=unit.title,
             chat_history=chat_history,
             existing_tags=existing_tag_names,
+            existing_note_titles=existing_note_titles,
         )
     else:
         notes = await generate_lesson_notes(
@@ -601,6 +627,7 @@ async def unit_generate_notes(
             learning_objectives=unit.learning_objectives or [],
             chat_history=chat_history,
             existing_tags=existing_tag_names,
+            existing_note_titles=existing_note_titles,
         )
 
     # Resolve tags for each note

@@ -212,7 +212,7 @@ export default function TeacherPanel() {
         if (prefetchedNotesRef.current.has(unitId)) return;
         generateLessonNotes(courseId, unitId).then(notes => {
             if (notes.length > 0) prefetchedNotesRef.current.set(unitId, notes);
-        }).catch(() => {});
+        }).catch(() => { });
     };
 
     // ── Prefetch next unit greeting ──────────────────────────────────
@@ -236,9 +236,9 @@ export default function TeacherPanel() {
                         response,
                     ]);
                     prefetchNotesForUnit(course.id, nextUnit.id);
-                }).catch(() => {});
+                }).catch(() => { });
             }
-        }).catch(() => {});
+        }).catch(() => { });
     };
 
     // ── Send chat message ────────────────────────────────────────────
@@ -386,7 +386,7 @@ export default function TeacherPanel() {
         );
 
         // Fire completion in background — don't block navigation
-        updateCourseUnit(currentCourse.id, currentUnit.id, { status: 'completed' }).catch(() => {});
+        updateCourseUnit(currentCourse.id, currentUnit.id, { status: 'completed' }).catch(() => { });
 
         if (nextUnit) {
             await openUnitChat(currentCourse, nextUnit);
@@ -416,7 +416,7 @@ export default function TeacherPanel() {
         );
 
         // Fire skip in background
-        updateCourseUnit(currentCourse.id, currentUnit.id, { status: 'skipped' }).catch(() => {});
+        updateCourseUnit(currentCourse.id, currentUnit.id, { status: 'skipped' }).catch(() => { });
 
         if (nextUnit) {
             await openUnitChat(currentCourse, nextUnit);
@@ -559,8 +559,8 @@ export default function TeacherPanel() {
                                                         <div className="flex-1 min-w-0">
                                                             <div className="flex items-center gap-2 mb-1">
                                                                 <span className={`px-2 py-0.5 text-[10px] font-medium rounded-full ${course.status === 'active'
-                                                                        ? 'bg-teal-600/20 text-teal-400'
-                                                                        : 'bg-dark-700 text-dark-400'
+                                                                    ? 'bg-teal-600/20 text-teal-400'
+                                                                    : 'bg-dark-700 text-dark-400'
                                                                     }`}>
                                                                     {course.status === 'active' ? 'Aktiv' : 'Entwurf'}
                                                                 </span>
@@ -834,58 +834,58 @@ export default function TeacherPanel() {
                     {messages.filter(m => m.role !== 'user' || (m.content !== '[START]' && m.content !== '[NOTIZEN_ERSTELLT]')).map((msg, idx, arr) => {
                         const isLastAssistant = msg.role === 'assistant' && idx === arr.length - 1;
                         return (
-                        <div
-                            key={msg.id}
-                            ref={isLastAssistant ? lastAssistantRef : undefined}
-                            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                        >
-                            {msg.role === 'note_generated' ? (
-                                <div className="flex items-center gap-2 px-3 py-2 bg-green-900/20 border border-green-800/30 rounded-lg text-xs text-green-400">
-                                    <FiCheck className="w-3.5 h-3.5" />
-                                    {msg.content}
-                                </div>
-                            ) : (
-                                <div
-                                    className={`max-w-[85%] sm:max-w-[75%] px-4 py-3 rounded-2xl text-sm ${msg.role === 'user'
+                            <div
+                                key={msg.id}
+                                ref={isLastAssistant ? lastAssistantRef : undefined}
+                                className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                            >
+                                {msg.role === 'note_generated' ? (
+                                    <div className="flex items-center gap-2 px-3 py-2 bg-green-900/20 border border-green-800/30 rounded-lg text-xs text-green-400">
+                                        <FiCheck className="w-3.5 h-3.5" />
+                                        {msg.content}
+                                    </div>
+                                ) : (
+                                    <div
+                                        className={`max-w-[85%] sm:max-w-[75%] px-4 py-3 rounded-2xl text-sm ${msg.role === 'user'
                                             ? 'bg-teal-600 text-white rounded-br-md'
                                             : 'bg-dark-800 border border-dark-700 text-dark-200 rounded-bl-md'
-                                        }`}
-                                >
-                                    {msg.role === 'assistant' ? (
-                                        (() => {
-                                            const { cleanContent, requests } = extractNoteRequests(msg.content);
-                                            return (
-                                                <>
-                                                    <div className="markdown-content text-sm leading-relaxed">
-                                                        <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
-                                                            {cleanContent}
-                                                        </ReactMarkdown>
-                                                    </div>
-                                                    {requests.length > 0 && (
-                                                        <div className="mt-3 flex flex-wrap gap-1.5">
-                                                            {requests.map((topic, i) => (
-                                                                <button
-                                                                    key={i}
-                                                                    onClick={() => handleGenerateTermNote(topic)}
-                                                                    disabled={generatingTerm}
-                                                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-600/20 text-teal-300 hover:bg-teal-600/30 text-xs font-medium rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                                                                >
-                                                                    <FiBookOpen className="w-3.5 h-3.5" />
-                                                                    Notiz erstellen: {topic}
-                                                                </button>
-                                                            ))}
+                                            }`}
+                                    >
+                                        {msg.role === 'assistant' ? (
+                                            (() => {
+                                                const { cleanContent, requests } = extractNoteRequests(msg.content);
+                                                return (
+                                                    <>
+                                                        <div className="markdown-content text-sm leading-relaxed">
+                                                            <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
+                                                                {cleanContent}
+                                                            </ReactMarkdown>
                                                         </div>
-                                                    )}
-                                                </>
-                                            );
-                                        })()
-                                    ) : (
-                                        <p className="whitespace-pre-wrap">{msg.content}</p>
-                                    )}
-                                </div>
-                            )}
-                        </div>
-                    );
+                                                        {requests.length > 0 && (
+                                                            <div className="mt-3 flex flex-wrap gap-1.5">
+                                                                {requests.map((topic, i) => (
+                                                                    <button
+                                                                        key={i}
+                                                                        onClick={() => handleGenerateTermNote(topic)}
+                                                                        disabled={generatingTerm}
+                                                                        className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-600/20 text-teal-300 hover:bg-teal-600/30 text-xs font-medium rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                                                    >
+                                                                        <FiBookOpen className="w-3.5 h-3.5" />
+                                                                        Notiz erstellen: {topic}
+                                                                    </button>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                    </>
+                                                );
+                                            })()
+                                        ) : (
+                                            <p className="whitespace-pre-wrap">{msg.content}</p>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        );
                     })}
 
                     {sendingChat && (

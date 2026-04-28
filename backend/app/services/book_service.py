@@ -113,6 +113,7 @@ async def generate_chapter_note(
     folder_structure: list[dict],
     existing_tags: list[str] = None,
     custom_prompt: str = None,
+    existing_note_titles: list[str] | None = None,
 ) -> dict:
     """Generate a structured note for a specific book chapter."""
     model = get_gemini_model()
@@ -122,11 +123,26 @@ async def generate_chapter_note(
 
     chapter_ref = f"Kapitel {chapter['chapter_number']}: {chapter['title']}"
 
+    # Build deduplication context
+    dedup_block = ""
+    if existing_note_titles:
+        titles_list = "\n".join(f"- {t}" for t in existing_note_titles)
+        dedup_block = f"""
+BEREITS EXISTIERENDE NOTIZEN zu diesem Buch (aus vorherigen Kapiteln):
+{titles_list}
+
+WICHTIGE REGEL ZUR VERMEIDUNG VON DUPLIKATEN:
+- Wiederhole KEINE Inhalte, die in den oben genannten Notizen bereits behandelt wurden.
+- Wenn ein Konzept bereits als Notiz existiert, verweise kurz darauf statt es erneut zu erklären.
+- Verwende ANDERE Beispiele als in vorherigen Kapiteln — bringe frische, kapitelspezifische Beispiele.
+"""
+
     prompt = f"""Du bist ein Second Brain Assistent. Erstelle eine ausführliche, gut strukturierte Notiz 
 für das folgende Buchkapitel:
 
 Buch: "{book_title}" von {authors_str}
 Kapitel: {chapter_ref}
+{dedup_block}
 
 Erstelle die Notiz im folgenden JSON-Format (NUR das JSON, kein anderer Text):
 {{
