@@ -353,15 +353,17 @@ export default function BookPanel() {
         }
     };
 
-    // ── Has the current context already produced notes? ──────────────
+    // True when a note_generated marker exists and no new content
+    // came after it. A section advance ([ABSCHNITT_WEITER]) counts as new
+    // material, so notes can be generated again after moving on.
     const notesGeneratedForContext = (() => {
         let lastMarker = -1;
-        let lastUser = -1;
+        let lastContent = -1;
         messages.forEach((m, i) => {
             if (m.role === 'note_generated') lastMarker = i;
-            if (m.role === 'user' && !isControlMessage(m.content)) lastUser = i;
+            if (m.role === 'user' && (!isControlMessage(m.content) || m.content === '[ABSCHNITT_WEITER]')) lastContent = i;
         });
-        return lastMarker >= 0 && lastMarker > lastUser;
+        return lastMarker >= 0 && lastMarker > lastContent;
     })();
 
     // ── Record that notes were generated for the current unit ────────
@@ -1200,9 +1202,9 @@ export default function BookPanel() {
                                     </div>
                                 ) : (
                                     <div
-                                        className={`max-w-[85%] sm:max-w-[75%] px-4 py-3 rounded-2xl text-sm ${msg.role === 'user'
+                                        className={`max-w-[85%] sm:max-w-[78%] px-4 py-3 rounded-2xl text-sm ${msg.role === 'user'
                                             ? 'bg-amber-600 text-white rounded-br-md'
-                                            : 'bg-dark-800 border border-dark-700 text-dark-200 rounded-bl-md'
+                                            : 'bg-dark-900 border border-dark-700 text-dark-100 rounded-bl-md'
                                             }`}
                                     >
                                         {msg.role === 'assistant' ? (
@@ -1210,7 +1212,7 @@ export default function BookPanel() {
                                                 const { cleanContent, requests } = extractNoteRequests(msg.content);
                                                 return (
                                                     <>
-                                                        <div className="markdown-content text-sm leading-relaxed">
+                                                        <div className="markdown-content lesson-prose">
                                                             <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
                                                                 {cleanContent}
                                                             </ReactMarkdown>
