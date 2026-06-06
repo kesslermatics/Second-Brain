@@ -235,9 +235,31 @@ async def teacher_generate_curriculum(
         )
         parent_course = parent_result.scalars().first()
         if parent_course:
-            completed = [u for u in parent_course.units if u.status == "completed" and u.level == 2]
-            parent_context = f"Kurs: {parent_course.title}\nBehandelte Themen:\n"
-            parent_context += "\n".join(f"- {u.title}" for u in completed)
+            ctx_lines = [f"Basiskurs: {parent_course.title}"]
+            if parent_course.topic and parent_course.topic != parent_course.title:
+                ctx_lines.append(f"Ursprungsthema: {parent_course.topic}")
+            if parent_course.description:
+                ctx_lines.append(f"Kursbeschreibung: {parent_course.description}")
+
+            # Include ALL lessons (level 2) with their status + objectives, so the
+            # deepening builds on the actual curriculum — not just finished lessons.
+            lessons = sorted(
+                [u for u in parent_course.units if u.level == 2 and u.enabled],
+                key=lambda x: x.order_index,
+            )
+            if lessons:
+                ctx_lines.append("\nLehrinhalte des Basiskurses (mit Status):")
+                for u in lessons:
+                    status_label = {
+                        "completed": "abgeschlossen",
+                        "active": "begonnen",
+                        "skipped": "übersprungen",
+                    }.get(u.status, "noch offen")
+                    ctx_lines.append(f"- {u.title} [{status_label}]")
+                    for obj in (u.learning_objectives or []):
+                        ctx_lines.append(f"    • {obj}")
+
+            parent_context = "\n".join(ctx_lines)
 
     # Generate curriculum via LLM
     curriculum = await generate_curriculum(

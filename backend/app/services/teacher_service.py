@@ -209,11 +209,15 @@ async def generate_curriculum(
     context_section = ""
     if parent_context:
         context_section = f"""
-KONTEXT: Der Studierende hat bereits folgenden Kurs abgeschlossen:
+KONTEXT — DIES IST EINE VERTIEFUNG EINES BESTEHENDEN KURSES:
 {parent_context}
 
-Baue auf diesem Wissen auf und vertiefe es. Wiederhole KEINE bereits behandelten Themen,
-sondern gehe auf fortgeschrittene Aspekte ein.
+Der Studierende möchte auf diesem Basiskurs aufbauen. Beachte dabei:
+- Baue auf dem bereits vermittelten Wissen auf und vertiefe es gezielt.
+- Wiederhole KEINE bereits behandelten Themen aus dem Basiskurs, sondern gehe auf
+  fortgeschrittene, weiterführende oder spezialisierte Aspekte ein.
+- Knüpfe inhaltlich sinnvoll an die Lehrinhalte des Basiskurses an (gleiche Terminologie,
+  passendes Niveau), sodass sich die Vertiefung wie eine natürliche Fortsetzung anfühlt.
 """
     if custom_focus:
         context_section += f"\nGEWÜNSCHTER SCHWERPUNKT: {custom_focus}\n"

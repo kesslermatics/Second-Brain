@@ -1417,27 +1417,12 @@ export default function TeacherPanel() {
                         </p>
                     </div>
 
-                    <div className="space-y-3 mb-6">
-                        {suggestions.map((s, i) => (
-                            <button
-                                key={i}
-                                onClick={() => handleDeepen(course, s.topic)}
-                                className="w-full bg-dark-800 border border-dark-700 hover:border-purple-500/50 rounded-xl p-4 text-left transition-colors group"
-                            >
-                                <div className="flex items-center justify-between mb-1">
-                                    <h4 className="text-sm font-semibold text-white group-hover:text-purple-300 transition-colors">
-                                        {s.title}
-                                    </h4>
-                                    <FiChevronRight className="w-4 h-4 text-dark-600 group-hover:text-purple-400 transition-colors" />
-                                </div>
-                                <p className="text-xs text-dark-500">{s.description}</p>
-                            </button>
-                        ))}
-                    </div>
-
-                    {/* Shared deepening options — apply to the chosen suggestion or custom topic */}
-                    <div className="bg-dark-800/50 border border-dark-700 rounded-xl p-4 mb-4 space-y-2.5">
+                    {/* Shared deepening options — applied to whichever topic you pick below */}
+                    <div className="bg-dark-800/50 border border-dark-700 rounded-xl p-4 mb-3 space-y-2.5">
                         <p className="text-xs text-dark-400 font-medium">Optionen für die Vertiefung</p>
+                        <p className="text-[11px] text-dark-600 -mt-1">
+                            Diese Einstellungen gelten für das Thema, das du unten auswählst oder eingibst.
+                        </p>
                         <textarea
                             value={focusDescriptionInput}
                             onChange={(e) => setFocusDescriptionInput(e.target.value)}
@@ -1460,9 +1445,9 @@ export default function TeacherPanel() {
                         </div>
                     </div>
 
-                    {/* Custom focus */}
-                    <div className="bg-dark-800 border border-dark-700 rounded-xl p-4">
-                        <p className="text-xs text-dark-400 mb-2 font-medium">Oder eigenes Thema eingeben:</p>
+                    {/* Custom topic — primary path with its own clear action button */}
+                    <div className="bg-dark-800 border border-dark-700 rounded-xl p-4 mb-5">
+                        <p className="text-xs text-dark-400 mb-2 font-medium">Eigenes Vertiefungsthema</p>
                         <div className="flex gap-2">
                             <input
                                 type="text"
@@ -1470,16 +1455,37 @@ export default function TeacherPanel() {
                                 onChange={(e) => setCustomFocusInput(e.target.value)}
                                 onKeyDown={(e) => e.key === 'Enter' && customFocusInput.trim() && handleDeepen(course, customFocusInput, customFocusInput)}
                                 placeholder="z.B. Eigenwertprobleme, Fourier-Transformation..."
-                                className="flex-1 px-3 py-2 bg-dark-900 border border-dark-700 rounded-lg text-white text-xs placeholder-dark-600 focus:outline-none focus:border-purple-500"
+                                className="flex-1 px-3 py-2 bg-dark-900 border border-dark-700 rounded-lg text-white text-sm placeholder-dark-600 focus:outline-none focus:border-purple-500"
                             />
                             <button
                                 onClick={() => customFocusInput.trim() && handleDeepen(course, customFocusInput, customFocusInput)}
                                 disabled={!customFocusInput.trim()}
-                                className="px-3 py-2 bg-purple-600 hover:bg-purple-500 text-white text-xs rounded-lg transition-colors disabled:opacity-50"
+                                className="flex items-center gap-1.5 px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
                             >
-                                <FiChevronRight className="w-4 h-4" />
+                                <LuGraduationCap className="w-4 h-4" />
+                                Erstellen
                             </button>
                         </div>
+                    </div>
+
+                    {/* AI suggestions — pick one to generate with the options above */}
+                    <p className="text-xs text-dark-400 font-medium mb-2">Oder ein vorgeschlagenes Thema wählen:</p>
+                    <div className="space-y-3 mb-4">
+                        {suggestions.map((s, i) => (
+                            <button
+                                key={i}
+                                onClick={() => handleDeepen(course, s.topic)}
+                                className="w-full bg-dark-800 border border-dark-700 hover:border-purple-500/50 rounded-xl p-4 text-left transition-colors group"
+                            >
+                                <div className="flex items-center justify-between mb-1">
+                                    <h4 className="text-sm font-semibold text-white group-hover:text-purple-300 transition-colors">
+                                        {s.title}
+                                    </h4>
+                                    <FiChevronRight className="w-4 h-4 text-dark-600 group-hover:text-purple-400 transition-colors" />
+                                </div>
+                                <p className="text-xs text-dark-500">{s.description}</p>
+                            </button>
+                        ))}
                     </div>
                 </div>
             </div>
