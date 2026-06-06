@@ -208,6 +208,14 @@ async def teacher_generate_curriculum(
     topic = data.get("topic", "").strip()
     parent_course_id = data.get("parent_course_id")
     custom_focus = data.get("custom_focus")
+    focus_description = (data.get("focus_description") or "").strip() or None
+    num_lessons = data.get("num_lessons")
+    try:
+        num_lessons = int(num_lessons) if num_lessons else None
+        if num_lessons is not None and num_lessons <= 0:
+            num_lessons = None
+    except (ValueError, TypeError):
+        num_lessons = None
 
     if not topic:
         raise HTTPException(status_code=400, detail="Topic required")
@@ -227,7 +235,11 @@ async def teacher_generate_curriculum(
             parent_context += "\n".join(f"- {u.title}" for u in completed)
 
     # Generate curriculum via LLM
-    curriculum = await generate_curriculum(topic, parent_context, custom_focus)
+    curriculum = await generate_curriculum(
+        topic, parent_context, custom_focus,
+        focus_description=focus_description,
+        num_lessons=num_lessons,
+    )
 
     if not curriculum.get("units"):
         raise HTTPException(status_code=500, detail="Konnte keinen Lehrplan generieren")
@@ -575,6 +587,15 @@ async def unit_generate_notes(
     messages = msg_result.scalars().all()
     chat_history = [{"role": m.role, "content": m.content} for m in messages]
 
+    # Only consider conversation that happened AFTER the last note generation,
+    # so re-generating notes only covers the newly added content.
+    last_marker_idx = -1
+    for i, m in enumerate(chat_history):
+        if m["role"] == "note_generated":
+            last_marker_idx = i
+    if last_marker_idx >= 0:
+        chat_history = chat_history[last_marker_idx + 1:]
+
     # Get existing tags
     tag_result = await db.execute(
         select(Tag).where(Tag.user_id == current_user.id).order_by(Tag.name)
@@ -646,19 +667,52 @@ async def unit_generate_notes(
 
     await db.commit()
 
-    # Record note generation in chat
-    note_titles = [n["title"] for n in result_notes]
+    # NOTE: We intentionally do NOT record a "note_generated" marker here.
+    # This endpoint is also called by background prefetch when a lesson is opened,
+    # so recording here would falsely mark notes as created. The marker is only
+    # written via the dedicated /record-notes endpoint after an explicit user action.
+
+    return {"notes": result_notes}
+
+
+@router.post("/courses/{course_id}/units/{unit_id}/record-notes")
+async def unit_record_notes(
+    course_id: str,
+    unit_id: str,
+    data: dict,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Record that notes were generated/saved for a unit (explicit user action).
+
+    This writes the 'note_generated' marker into the chat so the teacher knows
+    notes exist and future note generation only covers newly added content.
+    """
+    # Verify the course belongs to the user
+    course_result = await db.execute(
+        select(Course).where(Course.id == course_id, Course.user_id == current_user.id)
+    )
+    course = course_result.scalars().first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    note_titles = data.get("note_titles") or []
+    if note_titles:
+        content = f"Notizen generiert: {', '.join(note_titles)}"
+    else:
+        content = "Notizen generiert"
+
     gen_msg = CourseMessage(
         course_id=course.id,
-        unit_id=unit.id,
+        unit_id=uuid.UUID(unit_id),
         role="note_generated",
-        content=f"Notizen generiert: {', '.join(note_titles)}",
+        content=content,
         metadata_={"note_titles": note_titles},
     )
     db.add(gen_msg)
     await db.commit()
 
-    return {"notes": result_notes}
+    return {"ok": True}
 
 
 @router.post("/courses/{course_id}/units/{unit_id}/generate-term-note")

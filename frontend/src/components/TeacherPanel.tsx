@@ -15,6 +15,7 @@ import {
     generateCurriculum, updateCourseStatus, updateCourseUnit,
     getUnitMessages, sendTeacherChat,
     generateLessonNotes, generateTermNote,
+    recordNotesGenerated,
     generateAdvancedFocus,
     ensureFolderPath, createNote,
 } from '@/lib/api';
@@ -41,6 +42,8 @@ export default function TeacherPanel() {
 
     // Curriculum generation
     const [topicInput, setTopicInput] = useState('');
+    const [descriptionInput, setDescriptionInput] = useState('');
+    const [lessonCountInput, setLessonCountInput] = useState('');
 
     // curriculum confirmation
     const [enabledUnits, setEnabledUnits] = useState<Record<string, boolean>>({});
@@ -66,6 +69,8 @@ export default function TeacherPanel() {
     // Advanced focus
     const [loadingFocus, setLoadingFocus] = useState(false);
     const [customFocusInput, setCustomFocusInput] = useState('');
+    const [focusDescriptionInput, setFocusDescriptionInput] = useState('');
+    const [focusLessonCountInput, setFocusLessonCountInput] = useState('');
 
     const chatEndRef = useRef<HTMLDivElement>(null);
     const lastAssistantRef = useRef<HTMLDivElement>(null);
@@ -102,12 +107,17 @@ export default function TeacherPanel() {
     }, [messages, view]);
 
     // ── Curriculum generation ────────────────────────────────────────
-    const handleGenerateCurriculum = async (topic: string, parentCourseId?: string, customFocus?: string) => {
+    const handleGenerateCurriculum = async (
+        topic: string,
+        parentCourseId?: string,
+        customFocus?: string,
+        opts?: { focusDescription?: string; numLessons?: number },
+    ) => {
         if (!topic.trim()) return;
         setError(null);
         setView({ kind: 'generating-curriculum', topic: topic.trim() });
         try {
-            const course = await generateCurriculum(topic.trim(), parentCourseId, customFocus);
+            const course = await generateCurriculum(topic.trim(), parentCourseId, customFocus, opts);
             const defaults: Record<string, boolean> = {};
             course.units.forEach((u) => { defaults[u.id] = true; });
             setEnabledUnits(defaults);
@@ -116,6 +126,35 @@ export default function TeacherPanel() {
             setError('Fehler beim Generieren des Lehrplans. Bitte versuche es erneut.');
             setView({ kind: 'courses' });
         }
+    };
+
+    // ── Create course from the main form (topic + description + lessons) ─
+    const handleCreateCourse = () => {
+        if (!topicInput.trim()) return;
+        const parsed = parseInt(lessonCountInput, 10);
+        const numLessons = Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+        handleGenerateCurriculum(topicInput, undefined, undefined, {
+            focusDescription: descriptionInput.trim() || undefined,
+            numLessons,
+        });
+        // Reset the form for next time
+        setDescriptionInput('');
+        setLessonCountInput('');
+    };
+
+    // ── Start a deepening course (advanced focus) ────────────────────
+    const handleDeepen = (course: CourseDetail, topic: string, customFocus?: string) => {
+        if (!topic.trim()) return;
+        const parsed = parseInt(focusLessonCountInput, 10);
+        const numLessons = Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+        handleGenerateCurriculum(topic, course.id, customFocus, {
+            focusDescription: focusDescriptionInput.trim() || undefined,
+            numLessons,
+        });
+        // Reset deepening form
+        setFocusDescriptionInput('');
+        setFocusLessonCountInput('');
+        setCustomFocusInput('');
     };
 
     // ── Start course (activate) ──────────────────────────────────────
@@ -272,9 +311,40 @@ export default function TeacherPanel() {
         }
     };
 
-    // ── "Verstanden" → generate notes ────────────────────────────────
-    const handleUnderstood = async () => {
-        if (view.kind !== 'lesson-chat' || generatingNotes) return;
+    // ── Has the current context already produced notes? ──────────────
+    // True when a note_generated marker exists and no new user message
+    // came after it. In that case the generate buttons are disabled until
+    // the student asks something new.
+    const notesGeneratedForContext = (() => {
+        let lastMarker = -1;
+        let lastUser = -1;
+        messages.forEach((m, i) => {
+            if (m.role === 'note_generated') lastMarker = i;
+            if (m.role === 'user' && m.content !== '[START]' && m.content !== '[NOTIZEN_ERSTELLT]') lastUser = i;
+        });
+        return lastMarker >= 0 && lastMarker > lastUser;
+    })();
+
+    // ── Record that notes were generated for the current unit ────────
+    const markNotesGenerated = (course: CourseDetail, unit: CourseUnit, noteTitles: string[]) => {
+        // Optimistic local marker so the indicator shows and buttons disable instantly
+        setMessages((prev) => [
+            ...prev,
+            {
+                id: `notegen-${Date.now()}`,
+                role: 'note_generated',
+                content: `Notizen generiert: ${noteTitles.join(', ')}`,
+                metadata: null,
+                created_at: new Date().toISOString(),
+            },
+        ]);
+        userSentMessageRef.current = false;
+        recordNotesGenerated(course.id, unit.id, noteTitles).catch(() => { });
+    };
+
+    // ── "Notizen prüfen" → generate notes and open preview ───────────
+    const handlePreviewNotes = async () => {
+        if (view.kind !== 'lesson-chat' || generatingNotes || notesGeneratedForContext) return;
         setGeneratingNotes(true);
         setError(null);
         try {
@@ -283,6 +353,7 @@ export default function TeacherPanel() {
             const notes = cached || await generateLessonNotes(view.course.id, unitId);
             prefetchedNotesRef.current.delete(unitId);
             if (notes.length > 0) {
+                markNotesGenerated(view.course, view.unit, notes.map((n) => n.title));
                 setView({
                     kind: 'note-review',
                     course: view.course,
@@ -295,6 +366,34 @@ export default function TeacherPanel() {
             }
         } catch {
             setError('Fehler beim Generieren der Notizen.');
+        } finally {
+            setGeneratingNotes(false);
+        }
+    };
+
+    // ── "Notizen direkt speichern" → generate and save without preview ─
+    const handleGenerateAndSaveNotes = async () => {
+        if (view.kind !== 'lesson-chat' || generatingNotes || notesGeneratedForContext) return;
+        setGeneratingNotes(true);
+        setError(null);
+        try {
+            const unitId = view.unit.id;
+            const cached = !userSentMessageRef.current ? prefetchedNotesRef.current.get(unitId) : undefined;
+            const notes = cached || await generateLessonNotes(view.course.id, unitId);
+            prefetchedNotesRef.current.delete(unitId);
+            if (notes.length === 0) {
+                setError('Keine Notizen generiert. Versuche es nach mehr Konversation erneut.');
+                return;
+            }
+            // Save every note directly
+            for (const note of notes) {
+                const folder = await ensureFolderPath(note.folder);
+                await createNote(note.title, note.content, folder.id, note.tag_ids);
+            }
+            loadFolderTree();  // fire-and-forget
+            markNotesGenerated(view.course, view.unit, notes.map((n) => n.title));
+        } catch {
+            setError('Fehler beim Speichern der Notizen.');
         } finally {
             setGeneratingNotes(false);
         }
@@ -499,24 +598,51 @@ export default function TeacherPanel() {
         <div className="h-full flex flex-col">
             {/* New course input */}
             <div className="p-4 border-b border-dark-800">
-                <div className="max-w-lg mx-auto">
+                <div className="max-w-lg mx-auto space-y-2.5">
+                    {/* Topic */}
                     <div className="flex gap-2">
                         <input
                             type="text"
                             value={topicInput}
                             onChange={(e) => setTopicInput(e.target.value)}
-                            onKeyDown={(e) => e.key === 'Enter' && handleGenerateCurriculum(topicInput)}
+                            onKeyDown={(e) => e.key === 'Enter' && handleCreateCourse()}
                             placeholder='Thema eingeben, z.B. "Lineare Algebra" oder "Organische Chemie"'
                             className="flex-1 px-4 py-3 bg-dark-800 border border-dark-700 rounded-xl text-white text-sm placeholder-dark-600 focus:outline-none focus:border-teal-500"
                             autoFocus
                         />
                         <button
-                            onClick={() => handleGenerateCurriculum(topicInput)}
+                            onClick={handleCreateCourse}
                             disabled={!topicInput.trim()}
+                            title="Lehrplan generieren"
                             className="px-4 py-3 bg-teal-600 hover:bg-teal-500 text-white rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             <LuGraduationCap className="w-5 h-5" />
                         </button>
+                    </div>
+
+                    {/* Description / deepening */}
+                    <textarea
+                        value={descriptionInput}
+                        onChange={(e) => setDescriptionInput(e.target.value)}
+                        placeholder="Beschreibung & Vertiefung (optional) — worauf legst du besonderen Wert? z.B. 'Fokus auf Beweise und praktische Beispiele, weniger Geschichte'"
+                        rows={2}
+                        className="w-full px-4 py-2.5 bg-dark-800 border border-dark-700 rounded-xl text-white text-sm placeholder-dark-600 focus:outline-none focus:border-teal-500 resize-none"
+                    />
+
+                    {/* Lesson count */}
+                    <div className="flex items-center gap-2">
+                        <label className="text-xs text-dark-500 flex-shrink-0">Anzahl der Lektionen</label>
+                        <input
+                            type="number"
+                            min={1}
+                            max={60}
+                            value={lessonCountInput}
+                            onChange={(e) => setLessonCountInput(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && handleCreateCourse()}
+                            placeholder="auto"
+                            className="w-24 px-3 py-2 bg-dark-800 border border-dark-700 rounded-lg text-white text-sm placeholder-dark-600 focus:outline-none focus:border-teal-500"
+                        />
+                        <span className="text-[11px] text-dark-600">leer lassen = KI entscheidet</span>
                     </div>
                 </div>
             </div>
@@ -938,10 +1064,11 @@ export default function TeacherPanel() {
                         </button>
                     </div>
                     {/* Action buttons */}
-                    <div className="flex gap-2 mt-2">
+                    <div className="flex flex-wrap gap-2 mt-2">
                         <button
-                            onClick={handleUnderstood}
-                            disabled={generatingNotes || sendingChat || messages.length < 2}
+                            onClick={handlePreviewNotes}
+                            disabled={generatingNotes || sendingChat || messages.length < 2 || notesGeneratedForContext}
+                            title={notesGeneratedForContext ? 'Für diesen Stand wurden bereits Notizen erstellt. Stelle eine neue Frage, um weitere zu generieren.' : 'Notizen generieren und vor dem Speichern ansehen'}
                             className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600/20 text-green-400 hover:bg-green-600/30 text-xs font-medium rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                         >
                             {generatingNotes ? (
@@ -949,7 +1076,20 @@ export default function TeacherPanel() {
                             ) : (
                                 <FiCheck className="w-3.5 h-3.5" />
                             )}
-                            Verstanden — Notizen generieren
+                            Notizen prüfen & speichern
+                        </button>
+                        <button
+                            onClick={handleGenerateAndSaveNotes}
+                            disabled={generatingNotes || sendingChat || messages.length < 2 || notesGeneratedForContext}
+                            title={notesGeneratedForContext ? 'Für diesen Stand wurden bereits Notizen erstellt. Stelle eine neue Frage, um weitere zu generieren.' : 'Notizen generieren und sofort ohne Vorschau speichern'}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600/10 text-green-400 hover:bg-green-600/20 text-xs font-medium rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                            {generatingNotes ? (
+                                <div className="w-3 h-3 border-2 border-green-400 border-t-transparent rounded-full animate-spin" />
+                            ) : (
+                                <FiZap className="w-3.5 h-3.5" />
+                            )}
+                            Direkt speichern
                         </button>
                         <button
                             onClick={handleCompleteUnit}
@@ -1107,7 +1247,7 @@ export default function TeacherPanel() {
                         {suggestions.map((s, i) => (
                             <button
                                 key={i}
-                                onClick={() => handleGenerateCurriculum(s.topic, course.id)}
+                                onClick={() => handleDeepen(course, s.topic)}
                                 className="w-full bg-dark-800 border border-dark-700 hover:border-purple-500/50 rounded-xl p-4 text-left transition-colors group"
                             >
                                 <div className="flex items-center justify-between mb-1">
@@ -1121,6 +1261,31 @@ export default function TeacherPanel() {
                         ))}
                     </div>
 
+                    {/* Shared deepening options — apply to the chosen suggestion or custom topic */}
+                    <div className="bg-dark-800/50 border border-dark-700 rounded-xl p-4 mb-4 space-y-2.5">
+                        <p className="text-xs text-dark-400 font-medium">Optionen für die Vertiefung</p>
+                        <textarea
+                            value={focusDescriptionInput}
+                            onChange={(e) => setFocusDescriptionInput(e.target.value)}
+                            placeholder="Beschreibung & Vertiefung (optional) — worauf legst du besonderen Wert? z.B. 'Mehr Beweise, konkrete Anwendungsbeispiele'"
+                            rows={2}
+                            className="w-full px-3 py-2 bg-dark-900 border border-dark-700 rounded-lg text-white text-xs placeholder-dark-600 focus:outline-none focus:border-purple-500 resize-none"
+                        />
+                        <div className="flex items-center gap-2">
+                            <label className="text-xs text-dark-500 flex-shrink-0">Anzahl der Lektionen</label>
+                            <input
+                                type="number"
+                                min={1}
+                                max={60}
+                                value={focusLessonCountInput}
+                                onChange={(e) => setFocusLessonCountInput(e.target.value)}
+                                placeholder="auto"
+                                className="w-24 px-3 py-1.5 bg-dark-900 border border-dark-700 rounded-lg text-white text-xs placeholder-dark-600 focus:outline-none focus:border-purple-500"
+                            />
+                            <span className="text-[11px] text-dark-600">leer lassen = KI entscheidet</span>
+                        </div>
+                    </div>
+
                     {/* Custom focus */}
                     <div className="bg-dark-800 border border-dark-700 rounded-xl p-4">
                         <p className="text-xs text-dark-400 mb-2 font-medium">Oder eigenes Thema eingeben:</p>
@@ -1129,12 +1294,12 @@ export default function TeacherPanel() {
                                 type="text"
                                 value={customFocusInput}
                                 onChange={(e) => setCustomFocusInput(e.target.value)}
-                                onKeyDown={(e) => e.key === 'Enter' && customFocusInput.trim() && handleGenerateCurriculum(customFocusInput, course.id, customFocusInput)}
+                                onKeyDown={(e) => e.key === 'Enter' && customFocusInput.trim() && handleDeepen(course, customFocusInput, customFocusInput)}
                                 placeholder="z.B. Eigenwertprobleme, Fourier-Transformation..."
                                 className="flex-1 px-3 py-2 bg-dark-900 border border-dark-700 rounded-lg text-white text-xs placeholder-dark-600 focus:outline-none focus:border-purple-500"
                             />
                             <button
-                                onClick={() => customFocusInput.trim() && handleGenerateCurriculum(customFocusInput, course.id, customFocusInput)}
+                                onClick={() => customFocusInput.trim() && handleDeepen(course, customFocusInput, customFocusInput)}
                                 disabled={!customFocusInput.trim()}
                                 className="px-3 py-2 bg-purple-600 hover:bg-purple-500 text-white text-xs rounded-lg transition-colors disabled:opacity-50"
                             >

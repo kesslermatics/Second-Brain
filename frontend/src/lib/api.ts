@@ -427,11 +427,18 @@ export const deleteTeacherCourse = async (courseId: string) => {
   await api.delete(`/teacher/courses/${courseId}`);
 };
 
-export const generateCurriculum = async (topic: string, parentCourseId?: string, customFocus?: string) => {
+export const generateCurriculum = async (
+  topic: string,
+  parentCourseId?: string,
+  customFocus?: string,
+  opts?: { focusDescription?: string; numLessons?: number },
+) => {
   const { data } = await api.post<CourseDetail>('/teacher/generate-curriculum', {
     topic,
     parent_course_id: parentCourseId || null,
     custom_focus: customFocus || null,
+    focus_description: opts?.focusDescription || null,
+    num_lessons: opts?.numLessons || null,
   });
   return data;
 };
@@ -459,6 +466,11 @@ export const sendTeacherChat = async (courseId: string, unitId: string, message:
 export const generateLessonNotes = async (courseId: string, unitId: string) => {
   const { data } = await api.post<{ notes: CourseNoteResult[] }>(`/teacher/courses/${courseId}/units/${unitId}/generate-notes`);
   return data.notes;
+};
+
+export const recordNotesGenerated = async (courseId: string, unitId: string, noteTitles: string[]) => {
+  const { data } = await api.post<{ ok: boolean }>(`/teacher/courses/${courseId}/units/${unitId}/record-notes`, { note_titles: noteTitles });
+  return data;
 };
 
 export const generateTermNote = async (courseId: string, unitId: string, term: string) => {

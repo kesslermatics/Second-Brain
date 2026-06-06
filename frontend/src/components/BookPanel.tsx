@@ -16,6 +16,7 @@ import {
     createBookCourse, updateCourseStatus, updateCourseUnit,
     getUnitMessages, sendTeacherChat,
     generateLessonNotes, generateTermNote,
+    recordNotesGenerated,
     ensureFolderPath, createNote,
     getBookSummaries, generateChapterSummary,
 } from '@/lib/api';
@@ -306,9 +307,36 @@ export default function BookPanel() {
         }
     };
 
-    // ── "Verstanden" → generate notes ────────────────────────────────
-    const handleUnderstood = async () => {
-        if (view.kind !== 'lesson-chat' || generatingNotes) return;
+    // ── Has the current context already produced notes? ──────────────
+    const notesGeneratedForContext = (() => {
+        let lastMarker = -1;
+        let lastUser = -1;
+        messages.forEach((m, i) => {
+            if (m.role === 'note_generated') lastMarker = i;
+            if (m.role === 'user' && m.content !== '[START]' && m.content !== '[NOTIZEN_ERSTELLT]') lastUser = i;
+        });
+        return lastMarker >= 0 && lastMarker > lastUser;
+    })();
+
+    // ── Record that notes were generated for the current unit ────────
+    const markNotesGenerated = (course: CourseDetail, unit: CourseUnit, noteTitles: string[]) => {
+        setMessages((prev) => [
+            ...prev,
+            {
+                id: `notegen-${Date.now()}`,
+                role: 'note_generated',
+                content: `Notizen generiert: ${noteTitles.join(', ')}`,
+                metadata: null,
+                created_at: new Date().toISOString(),
+            },
+        ]);
+        userSentMessageRef.current = false;
+        recordNotesGenerated(course.id, unit.id, noteTitles).catch(() => { });
+    };
+
+    // ── "Notizen prüfen" → generate notes and open preview ───────────
+    const handlePreviewNotes = async () => {
+        if (view.kind !== 'lesson-chat' || generatingNotes || notesGeneratedForContext) return;
         setGeneratingNotes(true);
         setError(null);
         try {
@@ -318,6 +346,7 @@ export default function BookPanel() {
             const notes = cached || await generateLessonNotes(view.course.id, unitId);
             prefetchedNotesRef.current.delete(unitId);
             if (notes.length > 0) {
+                markNotesGenerated(view.course, view.unit, notes.map((n) => n.title));
                 setView({
                     kind: 'note-review',
                     course: view.course,
@@ -330,6 +359,33 @@ export default function BookPanel() {
             }
         } catch {
             setError('Fehler beim Generieren der Notizen.');
+        } finally {
+            setGeneratingNotes(false);
+        }
+    };
+
+    // ── "Notizen direkt speichern" → generate and save without preview ─
+    const handleGenerateAndSaveNotes = async () => {
+        if (view.kind !== 'lesson-chat' || generatingNotes || notesGeneratedForContext) return;
+        setGeneratingNotes(true);
+        setError(null);
+        try {
+            const unitId = view.unit.id;
+            const cached = !userSentMessageRef.current ? prefetchedNotesRef.current.get(unitId) : undefined;
+            const notes = cached || await generateLessonNotes(view.course.id, unitId);
+            prefetchedNotesRef.current.delete(unitId);
+            if (notes.length === 0) {
+                setError('Keine Notizen generiert. Versuche es nach mehr Konversation erneut.');
+                return;
+            }
+            for (const note of notes) {
+                const folder = await ensureFolderPath(note.folder);
+                await createNote(note.title, note.content, folder.id, note.tag_ids);
+            }
+            loadFolderTree();  // fire-and-forget
+            markNotesGenerated(view.course, view.unit, notes.map((n) => n.title));
+        } catch {
+            setError('Fehler beim Speichern der Notizen.');
         } finally {
             setGeneratingNotes(false);
         }
@@ -1095,10 +1151,11 @@ export default function BookPanel() {
                         </button>
                     </div>
                     {/* Action buttons */}
-                    <div className="flex gap-2 mt-2">
+                    <div className="flex flex-wrap gap-2 mt-2">
                         <button
-                            onClick={handleUnderstood}
-                            disabled={generatingNotes || sendingChat || messages.length < 2}
+                            onClick={handlePreviewNotes}
+                            disabled={generatingNotes || sendingChat || messages.length < 2 || notesGeneratedForContext}
+                            title={notesGeneratedForContext ? 'Für diesen Stand wurden bereits Notizen erstellt. Stelle eine neue Frage, um weitere zu generieren.' : 'Notizen generieren und vor dem Speichern ansehen'}
                             className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600/20 text-green-400 hover:bg-green-600/30 text-xs font-medium rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                         >
                             {generatingNotes ? (
@@ -1106,7 +1163,20 @@ export default function BookPanel() {
                             ) : (
                                 <FiCheck className="w-3.5 h-3.5" />
                             )}
-                            Verstanden — Notizen generieren
+                            Notizen prüfen & speichern
+                        </button>
+                        <button
+                            onClick={handleGenerateAndSaveNotes}
+                            disabled={generatingNotes || sendingChat || messages.length < 2 || notesGeneratedForContext}
+                            title={notesGeneratedForContext ? 'Für diesen Stand wurden bereits Notizen erstellt. Stelle eine neue Frage, um weitere zu generieren.' : 'Notizen generieren und sofort ohne Vorschau speichern'}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600/10 text-green-400 hover:bg-green-600/20 text-xs font-medium rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                            {generatingNotes ? (
+                                <div className="w-3 h-3 border-2 border-green-400 border-t-transparent rounded-full animate-spin" />
+                            ) : (
+                                <FiFileText className="w-3.5 h-3.5" />
+                            )}
+                            Direkt speichern
                         </button>
                         <button
                             onClick={handleCompleteUnit}
@@ -1320,8 +1390,8 @@ export default function BookPanel() {
                                             onClick={() => hasSummary ? toggleSummaryChapter(ch.id) : canGenerate ? handleGenerateSummary(courseId, ch.id) : undefined}
                                             disabled={!hasSummary && !canGenerate}
                                             className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors ${hasSummary ? 'hover:bg-dark-800/50 cursor-pointer' :
-                                                    canGenerate ? 'hover:bg-dark-800/50 cursor-pointer' :
-                                                        'opacity-40 cursor-default'
+                                                canGenerate ? 'hover:bg-dark-800/50 cursor-pointer' :
+                                                    'opacity-40 cursor-default'
                                                 }`}
                                             style={{ paddingLeft: `${(ch.level - 1) * 16 + 16}px` }}
                                         >
@@ -1342,14 +1412,14 @@ export default function BookPanel() {
 
                                             {/* Status indicator */}
                                             <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isCompleted ? 'bg-green-500' :
-                                                    isActive ? 'bg-amber-400' :
-                                                        'bg-dark-700'
+                                                isActive ? 'bg-amber-400' :
+                                                    'bg-dark-700'
                                                 }`} />
 
                                             {/* Chapter info */}
                                             <span className="text-dark-500 font-mono text-[10px] w-8 flex-shrink-0">{ch.unit_number}</span>
                                             <span className={`text-sm flex-1 min-w-0 truncate ${ch.level === 1 ? 'font-semibold text-white' :
-                                                    ch.level === 2 ? 'text-dark-300' : 'text-dark-500'
+                                                ch.level === 2 ? 'text-dark-300' : 'text-dark-500'
                                                 }`}>
                                                 {ch.title}
                                             </span>

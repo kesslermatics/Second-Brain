@@ -185,8 +185,17 @@ async def generate_curriculum(
     topic: str,
     parent_context: str | None = None,
     custom_focus: str | None = None,
+    focus_description: str | None = None,
+    num_lessons: int | None = None,
 ) -> dict:
     """Generate a full curriculum / study plan for a topic.
+
+    Args:
+        topic: The course topic.
+        parent_context: Summary of a parent course when extending an existing one.
+        custom_focus: Short focus term (used by advanced-focus deepening).
+        focus_description: Free-text description of what the student wants to emphasise / deepen.
+        num_lessons: Desired number of lessons (level-2 units). When None the AI decides.
 
     Returns: {title, description, units: [{unit_number, title, description, learning_objectives, level}]}
     """
@@ -203,6 +212,24 @@ sondern gehe auf fortgeschrittene Aspekte ein.
 """
     if custom_focus:
         context_section += f"\nGEWÜNSCHTER SCHWERPUNKT: {custom_focus}\n"
+    if focus_description:
+        context_section += f"""
+BESCHREIBUNG & VERTIEFUNG DES STUDENTEN (worauf besonderer Wert gelegt werden soll):
+{focus_description}
+
+Richte den Lehrplan gezielt an diesen Wünschen aus und vertiefe die genannten Aspekte.
+"""
+
+    # Lesson-count instruction — either honour the requested number or let the AI decide.
+    if num_lessons and num_lessons > 0:
+        lessons_instruction = (
+            f"- Erstelle GENAU {num_lessons} Lektionen (level 2), aufgeteilt in eine sinnvolle "
+            f"Anzahl von Modulen (level 1)"
+        )
+    else:
+        lessons_instruction = (
+            "- Erstelle einen UMFASSENDEN Lehrplan mit mindestens 5 Modulen und insgesamt 15-30 Lektionen"
+        )
 
     year = _current_year()
 
@@ -245,7 +272,7 @@ Antworte NUR mit dem JSON, kein anderer Text:
 }}
 
 WICHTIG:
-- Erstelle einen UMFASSENDEN Lehrplan mit mindestens 5 Modulen und insgesamt 15-30 Lektionen
+{lessons_instruction}
 - Jede Lektion hat klare, messbare Lernziele
 - Die Lektionsnamen sollen das THEMA beschreiben, nicht "Stunde 1" oder "Lektion 1"
 - Module (level 1) sind übergeordnete Themenbereiche, Lektionen (level 2) sind die konkreten Unterrichtseinheiten"""
