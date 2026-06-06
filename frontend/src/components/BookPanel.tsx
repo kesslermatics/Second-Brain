@@ -28,7 +28,7 @@ import type {
 } from '@/lib/types';
 import {
     LessonObjectivesCard, LearningPathButton, LearningPathOverlay,
-    LessonQuiz, LessonCompleteCelebration,
+    LessonQuiz, LessonCompleteCelebration, isControlMessage,
 } from './TeachingComponents';
 
 type View =
@@ -76,9 +76,13 @@ export default function BookPanel() {
     const [loadingRecap, setLoadingRecap] = useState(false);
     const [showPath, setShowPath] = useState(false);
 
+    // Section walk-through state for the current chapter
+    const [section, setSection] = useState<{ current: number; total: number }>({ current: 0, total: 0 });
+
     // Prefetched caches: unitId -> data
     const prefetchedNotesRef = useRef<Map<string, CourseNoteResult[]>>(new Map());
     const prefetchedMessagesRef = useRef<Map<string, CourseMessage[]>>(new Map());
+    const prefetchedSectionRef = useRef<Map<string, { current: number; total: number }>>(new Map());
     const userSentMessageRef = useRef(false);
 
     // Summaries
@@ -223,8 +227,14 @@ export default function BookPanel() {
         if (cached && cached.length > 0) {
             setMessages(cached);
             userSentMessageRef.current = cached.some(
-                m => m.role === 'user' && m.content !== '[START]' && m.content !== '[NOTIZEN_ERSTELLT]'
+                m => m.role === 'user' && !isControlMessage(m.content)
             );
+            const cachedSection = prefetchedSectionRef.current.get(unit.id);
+            prefetchedSectionRef.current.delete(unit.id);
+            setSection(cachedSection || {
+                current: unit.current_section || 0,
+                total: unit.sections?.length || 0,
+            });
             prefetchNotesForUnit(course.id, unit.id);
             prefetchNextUnit(course, unit);
             return;
@@ -232,6 +242,7 @@ export default function BookPanel() {
 
         // No cache — fetch from server
         setMessages([]);
+        setSection({ current: unit.current_section || 0, total: unit.sections?.length || 0 });
         try {
             const msgs = await getUnitMessages(course.id, unit.id);
             setMessages(msgs);
@@ -240,12 +251,13 @@ export default function BookPanel() {
                 const response = await sendTeacherChat(course.id, unit.id, '[START]');
                 setMessages([
                     { id: 'start', role: 'user', content: '[START]', metadata: null, created_at: null },
-                    response,
+                    response.message,
                 ]);
+                setSection({ current: response.current_section, total: response.total_sections });
                 setSendingChat(false);
             } else {
                 userSentMessageRef.current = msgs.some(
-                    m => m.role === 'user' && m.content !== '[START]' && m.content !== '[NOTIZEN_ERSTELLT]'
+                    m => m.role === 'user' && !isControlMessage(m.content)
                 );
             }
             prefetchNotesForUnit(course.id, unit.id);
@@ -283,8 +295,12 @@ export default function BookPanel() {
                 sendTeacherChat(course.id, nextUnit.id, '[START]').then(response => {
                     prefetchedMessagesRef.current.set(nextUnit.id, [
                         { id: 'start', role: 'user', content: '[START]', metadata: null, created_at: null },
-                        response,
+                        response.message,
                     ]);
+                    prefetchedSectionRef.current.set(nextUnit.id, {
+                        current: response.current_section,
+                        total: response.total_sections,
+                    });
                     prefetchNotesForUnit(course.id, nextUnit.id);
                 }).catch(() => { });
             }
@@ -309,8 +325,9 @@ export default function BookPanel() {
             const response = await sendTeacherChat(view.course.id, view.unit.id, msg);
             setMessages((prev) => [...prev.filter((m) => m.id !== tempId),
             { id: tempId, role: 'user', content: msg, metadata: null, created_at: new Date().toISOString() },
-                response
+            response.message
             ]);
+            setSection({ current: response.current_section, total: response.total_sections });
         } catch {
             setError('Fehler beim Senden der Nachricht.');
             setMessages((prev) => prev.filter((m) => m.id !== tempId));
@@ -320,13 +337,29 @@ export default function BookPanel() {
         }
     };
 
+    // ── Advance to the next section within the chapter ───────────────
+    const handleNextSection = async () => {
+        if (view.kind !== 'lesson-chat' || sendingChat) return;
+        setSendingChat(true);
+        userSentMessageRef.current = true;
+        try {
+            const response = await sendTeacherChat(view.course.id, view.unit.id, '[ABSCHNITT_WEITER]');
+            setMessages((prev) => [...prev, response.message]);
+            setSection({ current: response.current_section, total: response.total_sections });
+        } catch {
+            setError('Fehler beim Laden des nächsten Abschnitts.');
+        } finally {
+            setSendingChat(false);
+        }
+    };
+
     // ── Has the current context already produced notes? ──────────────
     const notesGeneratedForContext = (() => {
         let lastMarker = -1;
         let lastUser = -1;
         messages.forEach((m, i) => {
             if (m.role === 'note_generated') lastMarker = i;
-            if (m.role === 'user' && m.content !== '[START]' && m.content !== '[NOTIZEN_ERSTELLT]') lastUser = i;
+            if (m.role === 'user' && !isControlMessage(m.content)) lastUser = i;
         });
         return lastMarker >= 0 && lastMarker > lastUser;
     })();
@@ -467,6 +500,15 @@ export default function BookPanel() {
         try {
             const msgs = await getUnitMessages(course.id, unit.id);
             setMessages(msgs);
+            // Restore section state from the (possibly updated) unit
+            const fresh = await getTeacherCourse(course.id);
+            const freshUnit = fresh.units.find((u) => u.id === unit.id);
+            if (freshUnit) {
+                setSection({
+                    current: freshUnit.current_section || 0,
+                    total: freshUnit.sections?.length || 0,
+                });
+            }
         } catch {
             setError('Fehler beim Laden des Chats.');
         }
@@ -1055,6 +1097,12 @@ export default function BookPanel() {
         if (view.kind !== 'lesson-chat') return null;
         const { course, unit } = view;
         const progress = getUnitProgress(course, unit);
+        const hasSections = section.total > 0;
+        const onLastSection = !hasSections || section.current >= section.total - 1;
+        const currentSectionTitle =
+            hasSections && unit.sections && unit.sections[section.current]
+                ? unit.sections[section.current].title
+                : null;
 
         return (
             <div className="h-full flex flex-col relative">
@@ -1071,12 +1119,19 @@ export default function BookPanel() {
                             <div className="min-w-0">
                                 <div className="flex items-center gap-2">
                                     <span className="text-[10px] text-amber-400 font-medium">
-                                        {progress.current}/{progress.total}
+                                        Kapitel {progress.current}/{progress.total}
                                     </span>
                                     <span className="text-dark-500 font-mono text-[10px]">{unit.unit_number}</span>
                                     <h3 className="text-sm font-semibold text-white truncate">{unit.title}</h3>
                                 </div>
-                                <p className="text-[10px] text-dark-500 truncate">{course.title}{course.book_authors && course.book_authors.length > 0 ? ` · ${course.book_authors.join(', ')}` : ''}</p>
+                                {hasSections ? (
+                                    <p className="text-[10px] text-dark-500 truncate">
+                                        <span className="text-amber-500/80">Abschnitt {section.current + 1}/{section.total}</span>
+                                        {currentSectionTitle ? ` · ${currentSectionTitle}` : ''}
+                                    </p>
+                                ) : (
+                                    <p className="text-[10px] text-dark-500 truncate">{course.title}{course.book_authors && course.book_authors.length > 0 ? ` · ${course.book_authors.join(', ')}` : ''}</p>
+                                )}
                             </div>
                         </div>
                         <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -1089,13 +1144,29 @@ export default function BookPanel() {
                             </button>
                         </div>
                     </div>
-                    {/* Progress bar */}
-                    <div className="mt-2 h-1 bg-dark-800 rounded-full overflow-hidden">
-                        <div
-                            className="h-full bg-amber-500 rounded-full transition-all"
-                            style={{ width: `${Math.round((progress.current / progress.total) * 100)}%` }}
-                        />
-                    </div>
+                    {/* Section progress dots / fallback bar */}
+                    {hasSections ? (
+                        <div className="mt-2 flex items-center gap-1">
+                            {Array.from({ length: section.total }).map((_, i) => (
+                                <div
+                                    key={i}
+                                    className={`h-1.5 flex-1 rounded-full transition-colors ${i < section.current
+                                        ? 'bg-amber-500'
+                                        : i === section.current
+                                            ? 'bg-amber-400'
+                                            : 'bg-dark-800'
+                                        }`}
+                                />
+                            ))}
+                        </div>
+                    ) : (
+                        <div className="mt-2 h-1 bg-dark-800 rounded-full overflow-hidden">
+                            <div
+                                className="h-full bg-amber-500 rounded-full transition-all"
+                                style={{ width: `${Math.round((progress.current / progress.total) * 100)}%` }}
+                            />
+                        </div>
+                    )}
                 </div>
 
                 {/* Learning path overlay */}
@@ -1114,7 +1185,7 @@ export default function BookPanel() {
                 <div className="flex-1 overflow-y-auto p-4 space-y-4">
                     {/* Chapter overview — visible at a glance */}
                     <LessonObjectivesCard unit={unit} accent="amber" label="In diesem Kapitel" />
-                    {messages.filter(m => m.role !== 'user' || (m.content !== '[START]' && m.content !== '[NOTIZEN_ERSTELLT]')).map((msg, idx, arr) => {
+                    {messages.filter(m => m.role !== 'user' || !isControlMessage(m.content)).map((msg, idx, arr) => {
                         const isLastAssistant = msg.role === 'assistant' && idx === arr.length - 1;
                         return (
                             <div
@@ -1261,14 +1332,28 @@ export default function BookPanel() {
                             )}
                             Quiz
                         </button>
-                        <button
-                            onClick={handleCompleteUnit}
-                            disabled={sendingChat || messages.length < 2}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600/20 text-amber-400 hover:bg-amber-600/30 text-xs font-medium rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                        >
-                            <FiChevronRight className="w-3.5 h-3.5" />
-                            Nächstes Kapitel
-                        </button>
+                        {/* Section navigation: walk through the chapter, recap only at the end */}
+                        {!onLastSection ? (
+                            <button
+                                onClick={handleNextSection}
+                                disabled={sendingChat || messages.length < 2}
+                                title="Zum nächsten Abschnitt dieses Kapitels"
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                                <FiChevronRight className="w-3.5 h-3.5" />
+                                Weiter
+                            </button>
+                        ) : (
+                            <button
+                                onClick={handleCompleteUnit}
+                                disabled={sendingChat || messages.length < 2}
+                                title="Kapitel abschließen"
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600/20 text-amber-400 hover:bg-amber-600/30 text-xs font-medium rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                                <FiCheck className="w-3.5 h-3.5" />
+                                Kapitel abschließen
+                            </button>
+                        )}
                     </div>
                 </div>
             </div>

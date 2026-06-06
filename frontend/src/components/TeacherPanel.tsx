@@ -26,7 +26,7 @@ import type {
 } from '@/lib/types';
 import {
     LessonObjectivesCard, LearningPathButton, LearningPathOverlay,
-    LessonQuiz, LessonCompleteCelebration,
+    LessonQuiz, LessonCompleteCelebration, isControlMessage,
 } from './TeachingComponents';
 
 type View =
@@ -74,9 +74,13 @@ export default function TeacherPanel() {
     const [loadingRecap, setLoadingRecap] = useState(false);
     const [showPath, setShowPath] = useState(false);
 
+    // Section walk-through state for the current lesson
+    const [section, setSection] = useState<{ current: number; total: number }>({ current: 0, total: 0 });
+
     // Prefetched caches: unitId -> data
     const prefetchedNotesRef = useRef<Map<string, CourseNoteResult[]>>(new Map());
     const prefetchedMessagesRef = useRef<Map<string, CourseMessage[]>>(new Map());
+    const prefetchedSectionRef = useRef<Map<string, { current: number; total: number }>>(new Map());
     const userSentMessageRef = useRef(false);
 
     // Advanced focus
@@ -225,8 +229,14 @@ export default function TeacherPanel() {
         if (cached && cached.length > 0) {
             setMessages(cached);
             userSentMessageRef.current = cached.some(
-                m => m.role === 'user' && m.content !== '[START]' && m.content !== '[NOTIZEN_ERSTELLT]'
+                m => m.role === 'user' && !isControlMessage(m.content)
             );
+            const cachedSection = prefetchedSectionRef.current.get(unit.id);
+            prefetchedSectionRef.current.delete(unit.id);
+            setSection(cachedSection || {
+                current: unit.current_section || 0,
+                total: unit.sections?.length || 0,
+            });
             prefetchNotesForUnit(course.id, unit.id);
             prefetchNextUnit(course, unit);
             return;
@@ -234,6 +244,8 @@ export default function TeacherPanel() {
 
         // No cache — fetch from server
         setMessages([]);
+        // Initialise section state from the unit (may be empty until first [START])
+        setSection({ current: unit.current_section || 0, total: unit.sections?.length || 0 });
         try {
             const msgs = await getUnitMessages(course.id, unit.id);
             setMessages(msgs);
@@ -242,12 +254,13 @@ export default function TeacherPanel() {
                 const response = await sendTeacherChat(course.id, unit.id, '[START]');
                 setMessages([
                     { id: 'start', role: 'user', content: '[START]', metadata: null, created_at: null },
-                    response,
+                    response.message,
                 ]);
+                setSection({ current: response.current_section, total: response.total_sections });
                 setSendingChat(false);
             } else {
                 userSentMessageRef.current = msgs.some(
-                    m => m.role === 'user' && m.content !== '[START]' && m.content !== '[NOTIZEN_ERSTELLT]'
+                    m => m.role === 'user' && !isControlMessage(m.content)
                 );
             }
             prefetchNotesForUnit(course.id, unit.id);
@@ -285,8 +298,12 @@ export default function TeacherPanel() {
                 sendTeacherChat(course.id, nextUnit.id, '[START]').then(response => {
                     prefetchedMessagesRef.current.set(nextUnit.id, [
                         { id: 'start', role: 'user', content: '[START]', metadata: null, created_at: null },
-                        response,
+                        response.message,
                     ]);
+                    prefetchedSectionRef.current.set(nextUnit.id, {
+                        current: response.current_section,
+                        total: response.total_sections,
+                    });
                     prefetchNotesForUnit(course.id, nextUnit.id);
                 }).catch(() => { });
             }
@@ -312,8 +329,9 @@ export default function TeacherPanel() {
             const response = await sendTeacherChat(view.course.id, view.unit.id, msg);
             setMessages((prev) => [...prev.filter((m) => m.id !== tempId),
             { id: tempId, role: 'user', content: msg, metadata: null, created_at: new Date().toISOString() },
-                response
+            response.message
             ]);
+            setSection({ current: response.current_section, total: response.total_sections });
         } catch {
             setError('Fehler beim Senden der Nachricht.');
             // Remove optimistic message
@@ -321,6 +339,24 @@ export default function TeacherPanel() {
         } finally {
             setSendingChat(false);
             chatInputRef.current?.focus();
+        }
+    };
+
+    // ── Advance to the next section within the lesson ────────────────
+    // Sends the [ABSCHNITT_WEITER] control message; the teacher then explains
+    // the next section. When already on the last section this is not shown.
+    const handleNextSection = async () => {
+        if (view.kind !== 'lesson-chat' || sendingChat) return;
+        setSendingChat(true);
+        userSentMessageRef.current = true;
+        try {
+            const response = await sendTeacherChat(view.course.id, view.unit.id, '[ABSCHNITT_WEITER]');
+            setMessages((prev) => [...prev, response.message]);
+            setSection({ current: response.current_section, total: response.total_sections });
+        } catch {
+            setError('Fehler beim Laden des nächsten Abschnitts.');
+        } finally {
+            setSendingChat(false);
         }
     };
 
@@ -333,7 +369,7 @@ export default function TeacherPanel() {
         let lastUser = -1;
         messages.forEach((m, i) => {
             if (m.role === 'note_generated') lastMarker = i;
-            if (m.role === 'user' && m.content !== '[START]' && m.content !== '[NOTIZEN_ERSTELLT]') lastUser = i;
+            if (m.role === 'user' && !isControlMessage(m.content)) lastUser = i;
         });
         return lastMarker >= 0 && lastMarker > lastUser;
     })();
@@ -477,6 +513,15 @@ export default function TeacherPanel() {
         try {
             const msgs = await getUnitMessages(course.id, unit.id);
             setMessages(msgs);
+            // Restore section state from the (possibly updated) unit
+            const fresh = await getTeacherCourse(course.id);
+            const freshUnit = fresh.units.find((u) => u.id === unit.id);
+            if (freshUnit) {
+                setSection({
+                    current: freshUnit.current_section || 0,
+                    total: freshUnit.sections?.length || 0,
+                });
+            }
         } catch {
             setError('Fehler beim Laden des Chats.');
         }
@@ -970,6 +1015,12 @@ export default function TeacherPanel() {
         if (view.kind !== 'lesson-chat') return null;
         const { course, unit } = view;
         const progress = getUnitProgress(course, unit);
+        const hasSections = section.total > 0;
+        const onLastSection = !hasSections || section.current >= section.total - 1;
+        const currentSectionTitle =
+            hasSections && unit.sections && unit.sections[section.current]
+                ? unit.sections[section.current].title
+                : null;
 
         return (
             <div className="h-full flex flex-col relative">
@@ -986,11 +1037,19 @@ export default function TeacherPanel() {
                             <div className="min-w-0">
                                 <div className="flex items-center gap-2">
                                     <span className="text-[10px] text-teal-400 font-medium">
-                                        {progress.current}/{progress.total}
+                                        Lektion {progress.current}/{progress.total}
                                     </span>
                                     <h3 className="text-sm font-semibold text-white truncate">{unit.title}</h3>
                                 </div>
-                                <p className="text-[10px] text-dark-500 truncate">{course.title}</p>
+                                {/* Section sub-status: where in the lesson we are */}
+                                {hasSections ? (
+                                    <p className="text-[10px] text-dark-500 truncate">
+                                        <span className="text-teal-500/80">Abschnitt {section.current + 1}/{section.total}</span>
+                                        {currentSectionTitle ? ` · ${currentSectionTitle}` : ''}
+                                    </p>
+                                ) : (
+                                    <p className="text-[10px] text-dark-500 truncate">{course.title}</p>
+                                )}
                             </div>
                         </div>
                         <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -1003,13 +1062,29 @@ export default function TeacherPanel() {
                             </button>
                         </div>
                     </div>
-                    {/* Progress bar */}
-                    <div className="mt-2 h-1 bg-dark-800 rounded-full overflow-hidden">
-                        <div
-                            className="h-full bg-teal-500 rounded-full transition-all"
-                            style={{ width: `${Math.round((progress.current / progress.total) * 100)}%` }}
-                        />
-                    </div>
+                    {/* Section progress dots — tangible sense of progress within the lesson */}
+                    {hasSections ? (
+                        <div className="mt-2 flex items-center gap-1">
+                            {Array.from({ length: section.total }).map((_, i) => (
+                                <div
+                                    key={i}
+                                    className={`h-1.5 flex-1 rounded-full transition-colors ${i < section.current
+                                        ? 'bg-teal-500'
+                                        : i === section.current
+                                            ? 'bg-teal-400'
+                                            : 'bg-dark-800'
+                                        }`}
+                                />
+                            ))}
+                        </div>
+                    ) : (
+                        <div className="mt-2 h-1 bg-dark-800 rounded-full overflow-hidden">
+                            <div
+                                className="h-full bg-teal-500 rounded-full transition-all"
+                                style={{ width: `${Math.round((progress.current / progress.total) * 100)}%` }}
+                            />
+                        </div>
+                    )}
                 </div>
 
                 {/* Learning path overlay */}
@@ -1028,7 +1103,7 @@ export default function TeacherPanel() {
                 <div className="flex-1 overflow-y-auto p-4 space-y-4">
                     {/* Lesson objectives — visible at a glance without reading prose */}
                     <LessonObjectivesCard unit={unit} accent="teal" />
-                    {messages.filter(m => m.role !== 'user' || (m.content !== '[START]' && m.content !== '[NOTIZEN_ERSTELLT]')).map((msg, idx, arr) => {
+                    {messages.filter(m => m.role !== 'user' || !isControlMessage(m.content)).map((msg, idx, arr) => {
                         const isLastAssistant = msg.role === 'assistant' && idx === arr.length - 1;
                         return (
                             <div
@@ -1175,14 +1250,28 @@ export default function TeacherPanel() {
                             )}
                             Quiz
                         </button>
-                        <button
-                            onClick={handleCompleteUnit}
-                            disabled={sendingChat || messages.length < 2}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-600/20 text-teal-400 hover:bg-teal-600/30 text-xs font-medium rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                        >
-                            <FiChevronRight className="w-3.5 h-3.5" />
-                            Nächste Lektion
-                        </button>
+                        {/* Section navigation: walk through the lesson, recap only at the end */}
+                        {!onLastSection ? (
+                            <button
+                                onClick={handleNextSection}
+                                disabled={sendingChat || messages.length < 2}
+                                title="Zum nächsten Abschnitt dieser Lektion"
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-600 hover:bg-teal-500 text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                                <FiChevronRight className="w-3.5 h-3.5" />
+                                Weiter
+                            </button>
+                        ) : (
+                            <button
+                                onClick={handleCompleteUnit}
+                                disabled={sendingChat || messages.length < 2}
+                                title="Lektion abschließen"
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-600/20 text-teal-400 hover:bg-teal-600/30 text-xs font-medium rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                                <FiCheck className="w-3.5 h-3.5" />
+                                Lektion abschließen
+                            </button>
+                        )}
                     </div>
                 </div>
             </div>

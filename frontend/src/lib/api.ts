@@ -7,7 +7,7 @@ import type {
   ExportRequest, ImageItem, ImageListResponse,
   BookSearchResult, BookTocResult, BookChapter, BookChapterNoteResult,
   CourseListItem, CourseDetail, CourseMessage as CourseMsg, CourseNoteResult, AdvancedFocusSuggestion,
-  BookSummariesResponse, QuizQuestion, LessonRecap,
+  BookSummariesResponse, QuizQuestion, LessonRecap, TeacherChatResponse,
 } from './types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -459,8 +459,8 @@ export const getUnitMessages = async (courseId: string, unitId: string) => {
 };
 
 export const sendTeacherChat = async (courseId: string, unitId: string, message: string) => {
-  const { data } = await api.post<{ message: CourseMsg }>(`/teacher/courses/${courseId}/units/${unitId}/chat`, { message });
-  return data.message;
+  const { data } = await api.post<TeacherChatResponse>(`/teacher/courses/${courseId}/units/${unitId}/chat`, { message });
+  return data;
 };
 
 export const generateLessonNotes = async (courseId: string, unitId: string) => {

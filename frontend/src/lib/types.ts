@@ -281,6 +281,11 @@ export interface CourseListItem {
   updated_at: string | null;
 }
 
+export interface LessonSection {
+  title: string;
+  focus: string;
+}
+
 export interface CourseUnit {
   id: string;
   unit_number: string;
@@ -291,6 +296,8 @@ export interface CourseUnit {
   enabled: boolean;
   status: 'pending' | 'active' | 'completed' | 'skipped';
   order_index: number;
+  sections?: LessonSection[];
+  current_section?: number;
   summary?: string | null;
   summary_generated_at?: string | null;
 }
@@ -362,4 +369,12 @@ export interface QuizQuestion {
 export interface LessonRecap {
   summary_points: string[];
   next_preview: string;
+}
+
+export interface TeacherChatResponse {
+  message: CourseMessage;
+  sections: LessonSection[];
+  current_section: number;
+  total_sections: number;
+  is_last_section: boolean;
 }

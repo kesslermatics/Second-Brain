@@ -15,6 +15,15 @@ import type { CourseUnit, QuizQuestion, LessonRecap } from '@/lib/types';
 // class names, so we keep an explicit map).
 export type Accent = 'teal' | 'amber';
 
+// Control messages drive the lesson flow but are not real student input.
+// They must be hidden from the chat transcript and ignored when detecting
+// whether the student has actually written something.
+export const CONTROL_MESSAGES = ['[START]', '[NOTIZEN_ERSTELLT]', '[ABSCHNITT_WEITER]'];
+
+export function isControlMessage(content: string): boolean {
+    return CONTROL_MESSAGES.includes(content);
+}
+
 interface AccentClasses {
     text: string;
     textSoft: string;

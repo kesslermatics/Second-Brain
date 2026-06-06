@@ -161,6 +161,8 @@ async def init_db():
             for col, dtype in [
                 ("summary", "TEXT"),
                 ("summary_generated_at", "TIMESTAMPTZ"),
+                ("sections", "JSONB"),
+                ("current_section", "INTEGER NOT NULL DEFAULT 0"),
             ]:
                 await conn.execute(
                     __import__('sqlalchemy').text(

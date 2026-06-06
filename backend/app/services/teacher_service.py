@@ -11,6 +11,11 @@ from datetime import datetime
 
 GOOGLE_SEARCH_TOOL = glm_types.Tool(google_search=glm_types.Tool.GoogleSearch())
 
+# Control messages that drive the lesson flow but are not real student input.
+# They must be excluded from note generation, quiz/recap context, and "did the
+# student write something" detection.
+CONTROL_MESSAGES = ("[START]", "[NOTIZEN_ERSTELLT]", "[ABSCHNITT_WEITER]")
+
 def _current_year() -> int:
     return datetime.now().year
 
@@ -300,6 +305,8 @@ async def chat_with_teacher(
     user_message: str,
     previous_units_summary: str | None = None,
     next_unit_title: str | None = None,
+    sections: list[dict] | None = None,
+    current_section: int = 0,
 ) -> str:
     """Send a message to the AI teacher and get a response.
 
@@ -333,6 +340,9 @@ Du kannst auf dieses Vorwissen aufbauen, ohne es komplett zu wiederholen.
 
     year = _current_year()
 
+    sections_block = _build_sections_block(sections, current_section)
+    sections_section = f"\n{sections_block}\n" if sections_block else ""
+
     prompt = f"""Du bist ein freundlicher, geduldiger und kompetenter Universitätsprofessor.
 Wir befinden uns im Jahr {year}.
 Du DUZT den Studenten IMMER ("du", "dein", "dir" — NIEMALS "Sie", "Ihr", "Ihnen").
@@ -344,7 +354,7 @@ AKTUELLE LEKTION: "{unit_title}"
 LERNZIELE dieser Lektion:
 {objectives_str}
 {prev_context}{next_hint}
-
+{sections_section}
 BISHERIGER GESPRÄCHSVERLAUF:
 {history_text}
 
@@ -352,26 +362,19 @@ NEUE NACHRICHT DES STUDENTEN:
 {user_message}
 
 DEINE AUFGABE:
-- DIALOGISCHES LEHREN STATT MONOLOG: Die Lektion wird über MEHRERE Nachrichten hinweg aufgebaut, nicht in einer riesigen Textwand. Vermeide es, die GESAMTE Lektion in einer Nachricht zu erklären — das überfordert und wird nicht gelesen.
-- BALANCE IN DEN ANTWORTEN: Deine einzelnen Nachrichten sollten substantiell genug sein, um etwas beizubringen, aber nicht so lang, dass sie abschrecken. Orientierung:
-  * Eine **normale Antwort im Dialog** sollte 2-4 Absätze haben und EIN Teilkonzept oder EINE Frage beantworten
-  * Wenn du ein Konzept erklärst, erkläre es vollständig mit Beispiel — aber nicht 5 Konzepte auf einmal
-  * Wenn der Student nachfragt, antworte ausführlich auf seine Frage
-- Beende deine Nachrichten so, dass der Dialog weitergeht: mit einer Verständnisfrage, einer Einladung zum Nachfragen, oder dem Angebot, zum nächsten Punkt überzugehen ("Wenn das klar ist, schauen wir uns als nächstes X an")
-- Erkläre Konzepte einfach, klar und angenehm — wie ein guter Tutor
-- Verwende Beispiele und Analogien, um abstrakte Konzepte greifbar zu machen
-- Wenn der Student eine Frage stellt, beantworte sie ausführlich
-- Wenn der Student sagt, er hat verstanden oder weiter möchte, fasse kurz zusammen und leite zum nächsten Aspekt über
+- ABSCHNITTSWEISES LEHREN: Diese Lektion ist in Abschnitte unterteilt (siehe oben). Du behandelst IMMER NUR den aktuell markierten Abschnitt. Du springst NICHT vor und wirfst nicht die ganze Lektion auf einmal raus — das überfordert und wird nicht gelesen.
+- BALANCE IN DEN ANTWORTEN: Erkläre den aktuellen Abschnitt substantiell genug, dass der Student wirklich etwas lernt (mit Beispiel), aber halte es fokussiert auf DIESES eine Teilkonzept. In der Regel 2-4 Absätze.
+- Wenn der Student eine Frage zum aktuellen Abschnitt stellt, beantworte sie ausführlich, bevor es weitergeht.
+- Erkläre Konzepte einfach, klar und angenehm — wie ein guter Tutor, mit Beispielen und Analogien.
 - Wenn der Student nach einer Notiz fragt oder sagt, er will eine Notiz erstellen, signalisiere das mit dem speziellen Marker [NOTIZ_ANFRAGE: Thema der gewünschten Notiz]
-- Wenn du den Eindruck hast, der Student versteht den Stoff, ermutige ihn und schlage vor, eine Notiz zu erstellen
 - SPEZIAL-NACHRICHTEN:
-  - "[START]": Der Student hat die Lektion gerade geöffnet. Für diesen ersten Einstieg gilt:
+  - "[START]": Der Student hat die Lektion gerade geöffnet. Beginne mit dem ERSTEN Abschnitt:
     * Verzichte auf Begrüßungsfloskeln wie "Hallo, schön dass du wieder da bist" — die Lektionsziele werden dem Studenten bereits separat angezeigt.
     * Steige mit einem kurzen, neugierig machenden Hook ein (1-2 Sätze: warum ist das Thema spannend/relevant?).
-    * Erkläre dann die **ersten 1-2 Kernkonzepte** der Lektion substantiell — mit Erklärung, Beispiel und genug Tiefe, dass der Student wirklich etwas lernt. Das sollte 3-5 Absätze sein: genug Substanz für echtes Lernen, aber nicht die ganze Lektion auf einmal.
-    * Beende mit einer Interaktion: Verständnisfrage oder Einladung zur nächsten Etappe ("Ist das soweit klar? Dann schauen wir uns als nächstes X an").
-    * Ziel: Der Student lernt beim Start schon etwas Konkretes, aber es bleibt noch genug für den weiteren Dialog übrig.
-  - "[NOTIZEN_ERSTELLT]": Es wurden gerade Notizen zum aktuellen Thema erstellt und gespeichert. Frage den Studenten freundlich und kurz (2-3 Sätze), ob er noch Fragen zum aktuellen Thema hat oder ob er bereit ist, zur nächsten Lektion überzugehen.
+    * Erkläre dann den ERSTEN Abschnitt substantiell mit Beispiel (2-4 Absätze). NICHT die ganze Lektion.
+    * Beende mit einer kurzen Verständnisfrage oder dem Hinweis, dass es danach mit dem nächsten Abschnitt weitergeht.
+  - "[ABSCHNITT_WEITER]": Der Student möchte zum nächsten Abschnitt. Erkläre jetzt den oben als AKTUELL markierten Abschnitt — substantiell mit Beispiel, fokussiert auf dieses eine Teilkonzept. Knüpfe kurz an das Vorherige an (1 Satz), dann der neue Stoff.
+  - "[NOTIZEN_ERSTELLT]": Es wurden gerade Notizen zum aktuellen Thema erstellt und gespeichert. Frage den Studenten freundlich und kurz (2-3 Sätze), ob er noch Fragen zum aktuellen Abschnitt hat oder ob er bereit ist, weiterzumachen.
 {FORMATTING_RULES}
 
 HINWEIS zu Mathe-Formeln: Wenn das Thema mathematische Inhalte hat, verwende die LaTeX-Notation ($...$ inline, $$...$$ als Block). Bei nicht-mathematischen Themen verwende KEINE Formeln.
@@ -408,7 +411,7 @@ async def generate_lesson_notes(
     chat_text = ""
     for msg in chat_history[-30:]:
         role_label = "Student" if msg["role"] == "user" else "Lehrer"
-        if msg["role"] != "note_generated" and msg.get("content", "") not in ("[START]", "[NOTIZEN_ERSTELLT]"):
+        if msg["role"] != "note_generated" and msg.get("content", "") not in CONTROL_MESSAGES:
             chat_text += f"{role_label}: {msg['content'][:3000]}\n"
 
     # Determine if chat is too short for conversation-based notes
@@ -521,7 +524,7 @@ async def generate_term_note(
     chat_text = ""
     for msg in chat_history[-10:]:
         role_label = "Student" if msg["role"] == "user" else "Lehrer"
-        if msg["role"] != "note_generated" and msg.get("content", "") not in ("[START]", "[NOTIZEN_ERSTELLT]"):
+        if msg["role"] != "note_generated" and msg.get("content", "") not in CONTROL_MESSAGES:
             chat_text += f"{role_label}: {msg['content'][:1500]}\n"
 
     prompt = f"""Du bist ein Second Brain Assistent.
@@ -635,6 +638,119 @@ Gib NUR den neuen, vollständigen Notiz-Inhalt zurück (Markdown). Kein JSON, ke
     return response.text.strip()
 
 
+# ── Lesson sections (break a lesson into walk-through steps) ──────────
+
+async def generate_lesson_sections(
+    title: str,
+    description: str,
+    learning_objectives: list[str],
+    kind: str = "lesson",
+    book_title: str | None = None,
+    book_authors: list[str] | None = None,
+) -> list[dict]:
+    """Break a single lesson / book chapter into a handful of teachable sections.
+
+    Each section is one focused step the tutor walks the student through, one at a
+    time, so a lesson becomes a guided sequence instead of one wall of text.
+
+    Returns a list: [{"title": str, "focus": str}]
+    """
+    model = get_gemini_model()
+    objectives_str = "\n".join(f"  - {o}" for o in learning_objectives) if learning_objectives else "  (keine spezifischen Lernziele)"
+
+    if kind == "book":
+        authors_str = ", ".join(book_authors) if book_authors else "unbekannter Autor"
+        subject_block = (
+            f'BUCH: "{book_title}" von {authors_str}\n'
+            f'KAPITEL: "{title}"'
+        )
+        subject_word = "des Kapitels"
+        research_hint = (
+            "Recherchiere bei Bedarf den tatsächlichen Inhalt dieses Kapitels und teile ihn "
+            "in eine sinnvolle Reihenfolge von Lernabschnitten ein.\n"
+        )
+    else:
+        subject_block = f'LEKTION: "{title}"\n{description}'
+        subject_word = "der Lektion"
+        research_hint = ""
+
+    prompt = f"""Du bist ein erfahrener Didaktiker. Teile die folgende Lerneinheit in eine
+sinnvolle Abfolge kleiner, fokussierter ABSCHNITTE ein, die ein Tutor nacheinander mit dem
+Studenten durchgeht. Jeder Abschnitt behandelt EIN Teilkonzept {subject_word}.
+
+{subject_block}
+
+LERNZIELE:
+{objectives_str}
+
+{research_hint}REGELN:
+- Erstelle 3 bis 6 Abschnitte (je nach Umfang des Themas) — nicht mehr, nicht weniger
+- Die Abschnitte bauen logisch aufeinander auf (vom Grundlegenden zum Komplexeren)
+- Jeder Abschnitt ist ein abgeschlossener Lernschritt, den man in 1-3 Tutor-Nachrichten erklären kann
+- Der letzte Abschnitt soll das Gelernte abrunden / zusammenführen
+- Der "title" ist kurz und konkret (das Teilkonzept selbst, NICHT "Abschnitt 1")
+- Der "focus" beschreibt in 1-2 Sätzen, was in diesem Abschnitt genau vermittelt wird
+
+Antworte NUR mit dem JSON, kein anderer Text:
+{{
+    "sections": [
+        {{"title": "Konkretes Teilkonzept", "focus": "Was in diesem Abschnitt vermittelt wird"}}
+    ]
+}}"""
+
+    response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
+    text = response.text.strip()
+
+    result = _extract_json(text)
+    if result:
+        sections = result.get("sections", [])
+        clean: list[dict] = []
+        for s in sections:
+            t = (s.get("title") or "").strip()
+            if not t:
+                continue
+            clean.append({"title": t, "focus": (s.get("focus") or "").strip()})
+        if clean:
+            return clean
+
+    _logger.warning("Failed to generate sections for %s — raw: %s", title, text[:300])
+    # Fallback: a single section covering the whole lesson
+    return [{"title": title, "focus": description or ""}]
+
+
+def _build_sections_block(
+    sections: list[dict] | None,
+    current_section: int,
+) -> str:
+    """Build the prompt block describing the lesson's section plan and where we are."""
+    if not sections:
+        return ""
+    lines = ["AUFBAU DIESER EINHEIT (Abschnitte, die nacheinander durchgegangen werden):"]
+    for i, s in enumerate(sections):
+        marker = "→ AKTUELL" if i == current_section else ("✓ erledigt" if i < current_section else "")
+        title = s.get("title", f"Abschnitt {i + 1}")
+        lines.append(f"  {i + 1}. {title} {marker}".rstrip())
+    current = sections[current_section] if 0 <= current_section < len(sections) else None
+    is_last = current_section >= len(sections) - 1
+    if current:
+        lines.append("")
+        lines.append(f'DU BEHANDELST JETZT ABSCHNITT {current_section + 1}/{len(sections)}: "{current.get("title", "")}"')
+        if current.get("focus"):
+            lines.append(f'Fokus dieses Abschnitts: {current["focus"]}')
+        lines.append(
+            "Erkläre AUSSCHLIESSLICH diesen Abschnitt — substantiell, mit Beispiel, so dass der "
+            "Student ihn versteht. Gehe NICHT zu späteren Abschnitten über; die kommen später dran."
+        )
+        if is_last:
+            lines.append("Dies ist der LETZTE Abschnitt — runde die Einheit am Ende sauber ab.")
+        else:
+            lines.append(
+                'Wenn du diesen Abschnitt erklärt hast, beende mit einer kurzen Verständnisfrage '
+                'oder einem Hinweis, dass es mit dem nächsten Abschnitt weitergeht.'
+            )
+    return "\n".join(lines)
+
+
 # ── Quiz & Recap (gamified lesson rhythm) ─────────────────────────────
 
 def _build_quiz_context(chat_history: list[dict] | None, limit: int = 30) -> str:
@@ -646,7 +762,7 @@ def _build_quiz_context(chat_history: list[dict] | None, limit: int = 30) -> str
         if msg["role"] in ("user", "assistant"):
             role_label = "Student" if msg["role"] == "user" else "Lehrer"
             content = msg.get("content", "")
-            if content in ("[START]", "[NOTIZEN_ERSTELLT]"):
+            if content in CONTROL_MESSAGES:
                 continue
             chat_text += f"{role_label}: {content[:2000]}\n"
     return chat_text
@@ -833,6 +949,8 @@ async def chat_about_book_chapter(
     user_message: str,
     previous_chapters_summary: str | None = None,
     next_chapter_title: str | None = None,
+    sections: list[dict] | None = None,
+    current_section: int = 0,
 ) -> str:
     """Chat about a specific book chapter, explaining its content interactively."""
     model = get_gemini_model()
@@ -859,6 +977,9 @@ Du kannst auf dieses Vorwissen aufbauen, ohne es komplett zu wiederholen.
         else:
             history_text += f"\n{role_label}: {msg['content']}\n"
 
+    sections_block = _build_sections_block(sections, current_section)
+    sections_section = f"\n{sections_block}\n" if sections_block else ""
+
     prompt = f"""Du bist ein freundlicher, geduldiger und kompetenter Tutor, der einem Studenten beim Durcharbeiten eines Buches hilft.
 Wir befinden uns im Jahr {year}.
 Du DUZT den Studenten IMMER ("du", "dein", "dir" — NIEMALS "Sie", "Ihr", "Ihnen").
@@ -866,7 +987,7 @@ Du DUZT den Studenten IMMER ("du", "dein", "dir" — NIEMALS "Sie", "Ihr", "Ihne
 BUCH: "{book_title}" von {authors_str}
 AKTUELLES KAPITEL: {chapter_number} — "{chapter_title}"
 {prev_context}{next_hint}
-
+{sections_section}
 BISHERIGER GESPRÄCHSVERLAUF:
 {history_text}
 
@@ -875,28 +996,20 @@ NEUE NACHRICHT DES STUDENTEN:
 
 DEINE AUFGABE:
 - Recherchiere zuerst den TATSÄCHLICHEN Inhalt dieses Kapitels aus dem Buch und erkläre ihn dann
-- DIALOGISCHES LEHREN STATT MONOLOG: Das Kapitel wird über MEHRERE Nachrichten hinweg erarbeitet, nicht in einer riesigen Textwand. Vermeide es, das GESAMTE Kapitel in einer Nachricht zu erklären — das überfordert und wird nicht gelesen.
-- BALANCE IN DEN ANTWORTEN: Deine einzelnen Nachrichten sollten substantiell genug sein, um etwas beizubringen, aber nicht so lang, dass sie abschrecken. Orientierung:
-  * Eine **normale Antwort im Dialog** sollte 2-4 Absätze haben und EIN Teilkonzept oder EINE Frage beantworten
-  * Wenn du ein Konzept erklärst, erkläre es vollständig mit Beispiel — aber nicht 5 Konzepte auf einmal
-  * Wenn der Student nachfragt, antworte ausführlich auf seine Frage
-- Beende deine Nachrichten so, dass der Dialog weitergeht: mit einer Verständnisfrage, einer Einladung zum Nachfragen, oder dem Angebot, zum nächsten Punkt überzugehen ("Wenn das klar ist, schauen wir uns als nächstes X an")
-- Erkläre die Kernkonzepte des Kapitels klar und verständlich — wie ein guter Tutor
+- ABSCHNITTSWEISES LEHREN: Dieses Kapitel ist in Abschnitte unterteilt (siehe oben). Du behandelst IMMER NUR den aktuell markierten Abschnitt. Du springst NICHT vor und wirfst nicht das ganze Kapitel auf einmal raus — das überfordert und wird nicht gelesen.
+- BALANCE IN DEN ANTWORTEN: Erkläre den aktuellen Abschnitt substantiell genug, dass der Student wirklich etwas lernt (mit Beispiel), aber halte es fokussiert auf DIESES eine Teilkonzept. In der Regel 2-4 Absätze.
+- Wenn der Student eine Frage zum aktuellen Abschnitt stellt, beantworte sie ausführlich, bevor es weitergeht.
 - Verwende Beispiele und Analogien, um abstrakte Konzepte greifbar zu machen
-- Wenn der Student eine Frage stellt, beantworte sie ausführlich
-- Wenn der Student sagt, er hat verstanden oder weiter möchte, fasse kurz zusammen
 - Wenn der Student nach einer Notiz fragt oder sagt, er will eine Notiz erstellen, signalisiere das mit dem speziellen Marker [NOTIZ_ANFRAGE: Thema der gewünschten Notiz]
-- Wenn du den Eindruck hast, der Student versteht den Stoff, ermutige ihn und schlage vor, Notizen zu erstellen
 - SPEZIAL-NACHRICHTEN:
-  - "[START]": Der Student hat das Kapitel gerade geöffnet. Für diesen ersten Einstieg gilt:
+  - "[START]": Der Student hat das Kapitel gerade geöffnet. Beginne mit dem ERSTEN Abschnitt:
     * Verzichte auf Begrüßungsfloskeln wie "Hallo, schön dass du wieder da bist".
     * Steige mit einem kurzen, neugierig machenden Hook ein (1-2 Sätze: worum geht es in diesem Kapitel und warum lohnt es sich?).
-    * Erkläre dann die **ersten 1-2 Kernkonzepte** des Kapitels substantiell — mit Erklärung, Beispiel und genug Tiefe, dass der Student wirklich etwas lernt. Das sollte 3-5 Absätze sein: genug Substanz für echtes Lernen, aber nicht das ganze Kapitel auf einmal.
-    * Beende mit einer Interaktion: Verständnisfrage oder Einladung zur nächsten Etappe ("Ist das soweit klar? Dann schauen wir uns als nächstes X an").
-    * Ziel: Der Student lernt beim Start schon etwas Konkretes, aber es bleibt noch genug für den weiteren Dialog übrig.
+    * Erkläre dann den ERSTEN Abschnitt substantiell mit Beispiel (2-4 Absätze). NICHT das ganze Kapitel.
+    * Beende mit einer kurzen Verständnisfrage oder dem Hinweis, dass es danach mit dem nächsten Abschnitt weitergeht.
+  - "[ABSCHNITT_WEITER]": Der Student möchte zum nächsten Abschnitt. Erkläre jetzt den oben als AKTUELL markierten Abschnitt — substantiell mit Beispiel, fokussiert auf dieses eine Teilkonzept. Knüpfe kurz an das Vorherige an (1 Satz), dann der neue Stoff.
   - "[NOTIZEN_ERSTELLT]": Es wurden gerade Notizen erstellt und gespeichert. Frage den Studenten freundlich
-    und kurz (2-3 Sätze), ob er noch Fragen zum aktuellen Kapitel hat oder ob er bereit ist, zum nächsten
-    Kapitel überzugehen.
+    und kurz (2-3 Sätze), ob er noch Fragen zum aktuellen Abschnitt hat oder ob er bereit ist, weiterzumachen.
 {FORMATTING_RULES}
 
 HINWEIS zu Mathe-Formeln: Wenn das Kapitel mathematische Inhalte hat, verwende die LaTeX-Notation ($...$ inline, $$...$$ als Block). Bei nicht-mathematischen Themen verwende KEINE Formeln.
@@ -926,7 +1039,7 @@ async def generate_book_chapter_notes(
     chat_text = ""
     for msg in chat_history[-30:]:
         role_label = "Student" if msg["role"] == "user" else "Tutor"
-        if msg["role"] != "note_generated" and msg.get("content", "") not in ("[START]", "[NOTIZEN_ERSTELLT]"):
+        if msg["role"] != "note_generated" and msg.get("content", "") not in CONTROL_MESSAGES:
             chat_text += f"{role_label}: {msg['content'][:3000]}\n"
 
     # Determine if chat is too short for conversation-based notes
@@ -1034,7 +1147,7 @@ async def generate_book_term_note(
     chat_text = ""
     for msg in chat_history[-10:]:
         role_label = "Student" if msg["role"] == "user" else "Tutor"
-        if msg["role"] != "note_generated" and msg.get("content", "") not in ("[START]", "[NOTIZEN_ERSTELLT]"):
+        if msg["role"] != "note_generated" and msg.get("content", "") not in CONTROL_MESSAGES:
             chat_text += f"{role_label}: {msg['content'][:1500]}\n"
 
     prompt = f"""Du bist ein Second Brain Assistent.

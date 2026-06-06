@@ -23,6 +23,7 @@ from app.services.teacher_service import (
     generate_book_term_note,
     generate_quiz,
     generate_recap,
+    generate_lesson_sections,
 )
 from app.services.book_service import generate_chapter_summary
 
@@ -169,6 +170,8 @@ async def get_course(
                 "enabled": u.enabled,
                 "status": u.status,
                 "order_index": u.order_index,
+                "sections": u.sections or [],
+                "current_section": u.current_section or 0,
                 "summary": u.summary,
                 "summary_generated_at": u.summary_generated_at.isoformat() if u.summary_generated_at else None,
             }
@@ -493,6 +496,33 @@ async def unit_chat(
     previous_summary = _build_previous_units_summary(list(course.units), unit.order_index)
     next_title = _get_next_unit_title(list(course.units), unit.order_index)
 
+    is_book = (course.kind or "teacher") == "book"
+
+    # ── Lesson sections: lazily generate a section plan, then walk through it ──
+    # Sections turn one lesson into a guided sequence of steps instead of one wall
+    # of text. We generate them on first contact ([START]) and cache on the unit.
+    if not unit.sections:
+        try:
+            unit.sections = await generate_lesson_sections(
+                title=unit.title,
+                description=unit.description or "",
+                learning_objectives=unit.learning_objectives or [],
+                kind="book" if is_book else "lesson",
+                book_title=course.title if is_book else None,
+                book_authors=course.book_authors if is_book else None,
+            )
+            unit.current_section = 0
+        except Exception:
+            unit.sections = None
+
+    # Advance to the next section when the student asks to continue
+    if user_message == "[ABSCHNITT_WEITER]" and unit.sections:
+        if (unit.current_section or 0) < len(unit.sections) - 1:
+            unit.current_section = (unit.current_section or 0) + 1
+
+    sections_list = unit.sections or None
+    current_section_idx = unit.current_section or 0
+
     # Save user message
     user_msg = CourseMessage(
         course_id=course.id,
@@ -514,6 +544,8 @@ async def unit_chat(
             user_message=user_message,
             previous_chapters_summary=previous_summary,
             next_chapter_title=next_title,
+            sections=sections_list,
+            current_section=current_section_idx,
         )
     else:
         ai_response = await chat_with_teacher(
@@ -525,6 +557,8 @@ async def unit_chat(
             user_message=user_message,
             previous_units_summary=previous_summary,
             next_unit_title=next_title,
+            sections=sections_list,
+            current_section=current_section_idx,
         )
 
     # Save assistant message
@@ -542,13 +576,20 @@ async def unit_chat(
 
     await db.commit()
 
+    total_sections = len(sections_list) if sections_list else 0
+    is_last_section = total_sections == 0 or current_section_idx >= total_sections - 1
+
     return {
         "message": {
             "id": str(assistant_msg.id),
             "role": "assistant",
             "content": ai_response,
             "created_at": assistant_msg.created_at.isoformat() if assistant_msg.created_at else None,
-        }
+        },
+        "sections": sections_list or [],
+        "current_section": current_section_idx,
+        "total_sections": total_sections,
+        "is_last_section": is_last_section,
     }
 
 
