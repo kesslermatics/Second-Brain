@@ -351,3 +351,15 @@ export interface BookSummariesResponse {
   book_authors: string[] | null;
   chapters: BookSummaryChapter[];
 }
+
+export interface QuizQuestion {
+  question: string;
+  options: string[];
+  correct_index: number;
+  explanation: string;
+}
+
+export interface LessonRecap {
+  summary_points: string[];
+  next_preview: string;
+}

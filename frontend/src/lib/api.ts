@@ -7,7 +7,7 @@ import type {
   ExportRequest, ImageItem, ImageListResponse,
   BookSearchResult, BookTocResult, BookChapter, BookChapterNoteResult,
   CourseListItem, CourseDetail, CourseMessage as CourseMsg, CourseNoteResult, AdvancedFocusSuggestion,
-  BookSummariesResponse,
+  BookSummariesResponse, QuizQuestion, LessonRecap,
 } from './types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -470,6 +470,19 @@ export const generateLessonNotes = async (courseId: string, unitId: string) => {
 
 export const recordNotesGenerated = async (courseId: string, unitId: string, noteTitles: string[]) => {
   const { data } = await api.post<{ ok: boolean }>(`/teacher/courses/${courseId}/units/${unitId}/record-notes`, { note_titles: noteTitles });
+  return data;
+};
+
+export const generateUnitQuiz = async (courseId: string, unitId: string, numQuestions?: number) => {
+  const { data } = await api.post<{ questions: QuizQuestion[] }>(
+    `/teacher/courses/${courseId}/units/${unitId}/quiz`,
+    numQuestions ? { num_questions: numQuestions } : {},
+  );
+  return data.questions;
+};
+
+export const generateUnitRecap = async (courseId: string, unitId: string) => {
+  const { data } = await api.post<LessonRecap>(`/teacher/courses/${courseId}/units/${unitId}/recap`);
   return data;
 };
 

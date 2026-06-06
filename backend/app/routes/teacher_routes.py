@@ -21,6 +21,8 @@ from app.services.teacher_service import (
     chat_about_book_chapter,
     generate_book_chapter_notes,
     generate_book_term_note,
+    generate_quiz,
+    generate_recap,
 )
 from app.services.book_service import generate_chapter_summary
 
@@ -795,8 +797,100 @@ async def unit_generate_term_note(
     }
 
 
-# ── Auto Summary Generation (background task) ────────────────────────
+async def _load_course_and_unit(course_id: str, unit_id: str, current_user, db):
+    """Load a course (with units) and a specific unit, validating ownership."""
+    course_result = await db.execute(
+        select(Course)
+        .options(selectinload(Course.units))
+        .where(Course.id == course_id, Course.user_id == current_user.id)
+    )
+    course = course_result.scalars().first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
 
+    unit = None
+    for u in course.units:
+        if str(u.id) == unit_id:
+            unit = u
+            break
+    if not unit:
+        raise HTTPException(status_code=404, detail="Unit not found")
+    return course, unit
+
+
+@router.post("/courses/{course_id}/units/{unit_id}/quiz")
+async def unit_generate_quiz(
+    course_id: str,
+    unit_id: str,
+    data: dict | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Generate a short multiple-choice quiz for a lesson / book chapter."""
+    course, unit = await _load_course_and_unit(course_id, unit_id, current_user, db)
+
+    # Chat history for context
+    msg_result = await db.execute(
+        select(CourseMessage)
+        .where(CourseMessage.course_id == course_id, CourseMessage.unit_id == unit_id)
+        .order_by(CourseMessage.created_at)
+    )
+    messages = msg_result.scalars().all()
+    chat_history = [{"role": m.role, "content": m.content} for m in messages]
+
+    num_questions = 3
+    if data and isinstance(data.get("num_questions"), int):
+        num_questions = max(1, min(5, data["num_questions"]))
+
+    is_book = (course.kind or "teacher") == "book"
+    questions = await generate_quiz(
+        title=unit.title,
+        description=unit.description or "",
+        learning_objectives=unit.learning_objectives or [],
+        chat_history=chat_history,
+        kind="book" if is_book else "lesson",
+        book_title=course.title if is_book else None,
+        num_questions=num_questions,
+    )
+
+    return {"questions": questions}
+
+
+@router.post("/courses/{course_id}/units/{unit_id}/recap")
+async def unit_generate_recap(
+    course_id: str,
+    unit_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Generate a short celebratory recap shown when a unit is completed."""
+    course, unit = await _load_course_and_unit(course_id, unit_id, current_user, db)
+
+    msg_result = await db.execute(
+        select(CourseMessage)
+        .where(CourseMessage.course_id == course_id, CourseMessage.unit_id == unit_id)
+        .order_by(CourseMessage.created_at)
+    )
+    messages = msg_result.scalars().all()
+    chat_history = [{"role": m.role, "content": m.content} for m in messages]
+
+    next_title = _get_next_unit_title(list(course.units), unit.order_index)
+    is_book = (course.kind or "teacher") == "book"
+
+    recap = await generate_recap(
+        title=unit.title,
+        description=unit.description or "",
+        learning_objectives=unit.learning_objectives or [],
+        chat_history=chat_history,
+        kind="book" if is_book else "lesson",
+        book_title=course.title if is_book else None,
+        next_title=next_title,
+    )
+
+    return recap
+
+
+# ── Auto Summary Generation (background task) ────────────────────────
 async def _auto_generate_summary(course_id: str, unit_id: str):
     """Background task to auto-generate a chapter summary after completion."""
     try:

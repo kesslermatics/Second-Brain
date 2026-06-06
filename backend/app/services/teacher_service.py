@@ -352,6 +352,8 @@ NEUE NACHRICHT DES STUDENTEN:
 {user_message}
 
 DEINE AUFGABE:
+- LEHRE IN KLEINEN HÄPPCHEN: Erkläre pro Nachricht immer nur EIN Teilkonzept. Halte deine Antworten kurz und dialogisch (in der Regel ein kurzer Absatz, kein langer Monolog). Wirf niemals die ganze Lektion auf einmal raus — das überfordert und niemand liest lange Textwände.
+- Beende deine Nachrichten so, dass es weitergeht: mit einer kurzen Verständnisfrage oder der Einladung, zum nächsten Punkt überzugehen ("Sag Bescheid, dann schauen wir uns X an"). So entsteht ein Gespräch statt eines Vortrags.
 - Erkläre Konzepte einfach, klar und angenehm — wie ein guter Tutor
 - Verwende Beispiele und Analogien, um abstrakte Konzepte greifbar zu machen
 - Wenn der Student eine Frage stellt, beantworte sie ausführlich
@@ -359,7 +361,11 @@ DEINE AUFGABE:
 - Wenn der Student nach einer Notiz fragt oder sagt, er will eine Notiz erstellen, signalisiere das mit dem speziellen Marker [NOTIZ_ANFRAGE: Thema der gewünschten Notiz]
 - Wenn du den Eindruck hast, der Student versteht den Stoff, ermutige ihn und schlage vor, eine Notiz zu erstellen
 - SPEZIAL-NACHRICHTEN:
-  - "[START]": Der Student hat die Lektion gerade geöffnet. Begrüße ihn kurz und beginne mit der Einführung des Themas.
+  - "[START]": Der Student hat die Lektion gerade geöffnet. WICHTIG für diesen ersten Einstieg:
+    * Verzichte auf Begrüßungsfloskeln wie "Hallo, schön dass du wieder da bist" — die Lektionsziele werden dem Studenten bereits separat angezeigt.
+    * Steige mit EINEM kurzen, neugierig machenden Satz ein (ein Aufhänger: warum ist das Thema spannend oder relevant?).
+    * Erkläre dann NUR das allererste Teilkonzept der Lektion — kurz und konkret, maximal ein kleiner Absatz.
+    * Beende mit einer kleinen Interaktion: einer kurzen Rückfrage oder der Aufforderung weiterzumachen. KEIN Rundumschlag über die ganze Lektion.
   - "[NOTIZEN_ERSTELLT]": Es wurden gerade Notizen zum aktuellen Thema erstellt und gespeichert. Frage den Studenten freundlich und kurz (2-3 Sätze), ob er noch Fragen zum aktuellen Thema hat oder ob er bereit ist, zur nächsten Lektion überzugehen.
 {FORMATTING_RULES}
 
@@ -624,6 +630,193 @@ Gib NUR den neuen, vollständigen Notiz-Inhalt zurück (Markdown). Kein JSON, ke
     return response.text.strip()
 
 
+# ── Quiz & Recap (gamified lesson rhythm) ─────────────────────────────
+
+def _build_quiz_context(chat_history: list[dict] | None, limit: int = 30) -> str:
+    """Compress chat history into a context string for quiz/recap generation."""
+    if not chat_history:
+        return ""
+    chat_text = ""
+    for msg in chat_history[-limit:]:
+        if msg["role"] in ("user", "assistant"):
+            role_label = "Student" if msg["role"] == "user" else "Lehrer"
+            content = msg.get("content", "")
+            if content in ("[START]", "[NOTIZEN_ERSTELLT]"):
+                continue
+            chat_text += f"{role_label}: {content[:2000]}\n"
+    return chat_text
+
+
+async def generate_quiz(
+    title: str,
+    description: str,
+    learning_objectives: list[str],
+    chat_history: list[dict] | None = None,
+    kind: str = "lesson",
+    book_title: str | None = None,
+    num_questions: int = 3,
+) -> list[dict]:
+    """Generate a short multiple-choice quiz to check understanding.
+
+    Works for both lessons and book chapters. Returns a list of questions:
+    [{question, options: [str, ...], correct_index: int, explanation}]
+    """
+    model = get_gemini_model()
+
+    subject = "des Buchkapitels" if kind == "book" else "der Lektion"
+    objectives_str = "\n".join(f"  - {o}" for o in learning_objectives) if learning_objectives else ""
+
+    chat_text = _build_quiz_context(chat_history)
+    if chat_text.strip():
+        context_block = f"BISHER BESPROCHENER INHALT:\n{chat_text}"
+    else:
+        context_block = (
+            f"HINWEIS: Es gibt noch kaum Gesprächsverlauf. Erstelle die Fragen anhand des Themas "
+            f"{subject} selbst und nutze dein Wissen."
+        )
+
+    book_line = f'BUCH: "{book_title}"\n' if book_title else ""
+
+    prompt = f"""Du bist ein motivierender Tutor und erstellst ein kurzes, spielerisches Quiz,
+um das Verständnis {subject} zu überprüfen. Du DUZT den Studenten.
+
+{book_line}THEMA: "{title}"
+{description}
+
+LERNZIELE:
+{objectives_str}
+
+{context_block}
+
+AUFGABE: Erstelle GENAU {num_questions} Multiple-Choice-Fragen, die das Verständnis der
+Kernkonzepte prüfen. Regeln:
+- Jede Frage hat genau 4 Antwortmöglichkeiten, von denen GENAU EINE richtig ist
+- Die Fragen sollen das Verständnis prüfen, nicht stures Auswendiglernen — gerne kleine Anwendungsszenarien
+- Variiere die Position der richtigen Antwort (nicht immer dieselbe)
+- Formuliere klar und nicht zu lang
+- Gib zu jeder Frage eine kurze, freundliche Erklärung, warum die richtige Antwort korrekt ist
+- Schreibe auf Deutsch (oder in der Sprache des bisherigen Gesprächs)
+
+Antworte NUR mit dem JSON, kein anderer Text:
+{{
+    "questions": [
+        {{
+            "question": "Fragetext?",
+            "options": ["Option A", "Option B", "Option C", "Option D"],
+            "correct_index": 0,
+            "explanation": "Kurze Erklärung, warum die Antwort richtig ist."
+        }}
+    ]
+}}"""
+
+    response = await asyncio.to_thread(model.generate_content, prompt)
+    text = response.text.strip()
+
+    result = _extract_json(text)
+    if result:
+        questions = result.get("questions", [])
+        # Sanitise: ensure correct_index is valid and options exist
+        clean: list[dict] = []
+        for q in questions:
+            opts = q.get("options") or []
+            if not isinstance(opts, list) or len(opts) < 2:
+                continue
+            try:
+                idx = int(q.get("correct_index", 0))
+            except (ValueError, TypeError):
+                idx = 0
+            if idx < 0 or idx >= len(opts):
+                idx = 0
+            clean.append({
+                "question": q.get("question", ""),
+                "options": opts,
+                "correct_index": idx,
+                "explanation": q.get("explanation", ""),
+            })
+        if clean:
+            return clean
+
+    _logger.warning("Failed to generate quiz for %s — raw: %s", title, text[:300])
+    return []
+
+
+async def generate_recap(
+    title: str,
+    description: str,
+    learning_objectives: list[str],
+    chat_history: list[dict] | None = None,
+    kind: str = "lesson",
+    book_title: str | None = None,
+    next_title: str | None = None,
+) -> dict:
+    """Generate a short celebratory recap shown when a lesson/chapter is completed.
+
+    Returns: {summary_points: [str, ...], next_preview: str}
+    """
+    model = get_gemini_model()
+
+    subject = "des Buchkapitels" if kind == "book" else "der Lektion"
+    objectives_str = "\n".join(f"  - {o}" for o in learning_objectives) if learning_objectives else ""
+
+    chat_text = _build_quiz_context(chat_history)
+    if chat_text.strip():
+        context_block = f"GESPRÄCHSVERLAUF:\n{chat_text}"
+    else:
+        context_block = (
+            f"HINWEIS: Es gibt kaum Gesprächsverlauf. Fasse die Kernpunkte {subject} "
+            f"anhand des Themas selbst zusammen."
+        )
+
+    book_line = f'BUCH: "{book_title}"\n' if book_title else ""
+    next_block = ""
+    if next_title:
+        next_unit_word = "Das nächste Kapitel" if kind == "book" else "Die nächste Lektion"
+        next_block = f'\n{next_unit_word}: "{next_title}" — gib einen kurzen, neugierig machenden Ausblick darauf.'
+    else:
+        next_block = "\nDies war die letzte Einheit — es gibt keinen Ausblick auf eine nächste Einheit."
+
+    prompt = f"""Du bist ein motivierender Tutor. Der Student hat gerade {subject} "{title}" abgeschlossen.
+Erstelle einen kurzen, motivierenden Rückblick. Du DUZT den Studenten.
+
+{book_line}THEMA: "{title}"
+{description}
+
+LERNZIELE:
+{objectives_str}
+
+{context_block}
+{next_block}
+
+AUFGABE: Fasse zusammen, was der Student gerade gelernt hat — kurz, knackig, motivierend.
+Antworte NUR mit dem JSON, kein anderer Text:
+{{
+    "summary_points": [
+        "Kurzer Stichpunkt zu einem Kernkonzept, das gelernt wurde",
+        "Weiterer Kernpunkt",
+        "Noch ein Kernpunkt"
+    ],
+    "next_preview": "Ein bis zwei Sätze Ausblick auf das nächste Thema (leer lassen wenn es keins gibt)."
+}}
+
+Regeln:
+- 2 bis 4 Stichpunkte, jeder ein kurzer, vollständiger Satz
+- Beziehe dich konkret auf die Inhalte, nicht generisch
+- Schreibe auf Deutsch (oder in der Sprache des Gesprächs)"""
+
+    response = await asyncio.to_thread(model.generate_content, prompt)
+    text = response.text.strip()
+
+    result = _extract_json(text)
+    if result:
+        return {
+            "summary_points": result.get("summary_points", []),
+            "next_preview": result.get("next_preview", ""),
+        }
+
+    _logger.warning("Failed to generate recap for %s — raw: %s", title, text[:300])
+    return {"summary_points": [], "next_preview": ""}
+
+
 # ── Book Chapter Interactive Teaching ─────────────────────────────────
 
 async def chat_about_book_chapter(
@@ -677,6 +870,8 @@ NEUE NACHRICHT DES STUDENTEN:
 
 DEINE AUFGABE:
 - Recherchiere zuerst den TATSÄCHLICHEN Inhalt dieses Kapitels aus dem Buch und erkläre ihn dann
+- LEHRE IN KLEINEN HÄPPCHEN: Erkläre pro Nachricht immer nur EIN Teilkonzept. Halte deine Antworten kurz und dialogisch (in der Regel ein kurzer Absatz, kein langer Monolog). Wirf niemals das ganze Kapitel auf einmal raus — das überfordert und niemand liest lange Textwände.
+- Beende deine Nachrichten so, dass es weitergeht: mit einer kurzen Verständnisfrage oder der Einladung, zum nächsten Punkt überzugehen ("Sag Bescheid, dann schauen wir uns X an"). So entsteht ein Gespräch statt eines Vortrags.
 - Erkläre die Kernkonzepte des Kapitels klar und verständlich — wie ein guter Tutor
 - Verwende Beispiele und Analogien, um abstrakte Konzepte greifbar zu machen
 - Wenn der Student eine Frage stellt, beantworte sie ausführlich
@@ -684,8 +879,11 @@ DEINE AUFGABE:
 - Wenn der Student nach einer Notiz fragt oder sagt, er will eine Notiz erstellen, signalisiere das mit dem speziellen Marker [NOTIZ_ANFRAGE: Thema der gewünschten Notiz]
 - Wenn du den Eindruck hast, der Student versteht den Stoff, ermutige ihn und schlage vor, Notizen zu erstellen
 - SPEZIAL-NACHRICHTEN:
-  - "[START]": Der Student hat das Kapitel gerade geöffnet. Begrüße ihn kurz und beginne mit einer Einführung
-    in das Kapitelthema. Gib einen Überblick über die wichtigsten Konzepte, die in diesem Kapitel behandelt werden.
+  - "[START]": Der Student hat das Kapitel gerade geöffnet. WICHTIG für diesen ersten Einstieg:
+    * Verzichte auf Begrüßungsfloskeln wie "Hallo, schön dass du wieder da bist".
+    * Steige mit EINEM kurzen, neugierig machenden Satz ein (ein Aufhänger: worum geht es in diesem Kapitel und warum lohnt es sich?).
+    * Erkläre dann NUR das allererste Teilkonzept des Kapitels — kurz und konkret, maximal ein kleiner Absatz.
+    * Beende mit einer kleinen Interaktion: einer kurzen Rückfrage oder der Aufforderung weiterzumachen. KEIN Rundumschlag über das ganze Kapitel.
   - "[NOTIZEN_ERSTELLT]": Es wurden gerade Notizen erstellt und gespeichert. Frage den Studenten freundlich
     und kurz (2-3 Sätze), ob er noch Fragen zum aktuellen Kapitel hat oder ob er bereit ist, zum nächsten
     Kapitel überzugehen.

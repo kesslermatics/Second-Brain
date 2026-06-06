@@ -6,7 +6,7 @@ import {
     FiSend, FiZap, FiTrash2, FiArrowLeft, FiPlus, FiBookOpen,
     FiChevronDown, FiChevronUp,
 } from 'react-icons/fi';
-import { LuBrain, LuGraduationCap, LuSparkles } from 'react-icons/lu';
+import { LuBrain, LuGraduationCap, LuSparkles, LuListChecks } from 'react-icons/lu';
 import ReactMarkdown from 'react-markdown';
 import { markdownComponents, remarkPlugins, rehypePlugins } from '@/lib/markdownComponents';
 import { useStore } from '@/lib/store';
@@ -17,12 +17,17 @@ import {
     generateLessonNotes, generateTermNote,
     recordNotesGenerated,
     generateAdvancedFocus,
+    generateUnitQuiz, generateUnitRecap,
     ensureFolderPath, createNote,
 } from '@/lib/api';
 import type {
     CourseListItem, CourseDetail, CourseUnit, CourseMessage,
-    CourseNoteResult, AdvancedFocusSuggestion,
+    CourseNoteResult, AdvancedFocusSuggestion, QuizQuestion, LessonRecap,
 } from '@/lib/types';
+import {
+    LessonObjectivesCard, LearningPathButton, LearningPathOverlay,
+    LessonQuiz, LessonCompleteCelebration,
+} from './TeachingComponents';
 
 type View =
     | { kind: 'courses' }
@@ -30,6 +35,8 @@ type View =
     | { kind: 'confirm-curriculum'; course: CourseDetail }
     | { kind: 'lesson-chat'; course: CourseDetail; unit: CourseUnit }
     | { kind: 'note-review'; course: CourseDetail; unit: CourseUnit; notes: CourseNoteResult[]; currentIdx: number }
+    | { kind: 'quiz'; course: CourseDetail; unit: CourseUnit; questions: QuizQuestion[] }
+    | { kind: 'lesson-complete'; course: CourseDetail; unit: CourseUnit }
     | { kind: 'course-completed'; course: CourseDetail }
     | { kind: 'advanced-focus'; course: CourseDetail; suggestions: AdvancedFocusSuggestion[] };
 
@@ -60,6 +67,12 @@ export default function TeacherPanel() {
     // Term note
     const [termInput, setTermInput] = useState('');
     const [generatingTerm, setGeneratingTerm] = useState(false);
+
+    // Quiz / recap / learning path
+    const [generatingQuiz, setGeneratingQuiz] = useState(false);
+    const [recap, setRecap] = useState<LessonRecap | null>(null);
+    const [loadingRecap, setLoadingRecap] = useState(false);
+    const [showPath, setShowPath] = useState(false);
 
     // Prefetched caches: unitId -> data
     const prefetchedNotesRef = useRef<Map<string, CourseNoteResult[]>>(new Map());
@@ -469,7 +482,26 @@ export default function TeacherPanel() {
         }
     };
 
-    // ── Complete unit and advance ────────────────────────────────────
+    // ── Start quiz ───────────────────────────────────────────────────
+    const handleStartQuiz = async () => {
+        if (view.kind !== 'lesson-chat' || generatingQuiz) return;
+        setGeneratingQuiz(true);
+        setError(null);
+        try {
+            const questions = await generateUnitQuiz(view.course.id, view.unit.id);
+            if (questions.length > 0) {
+                setView({ kind: 'quiz', course: view.course, unit: view.unit, questions });
+            } else {
+                setError('Konnte kein Quiz generieren. Versuche es nach etwas mehr Konversation erneut.');
+            }
+        } catch {
+            setError('Fehler beim Generieren des Quiz.');
+        } finally {
+            setGeneratingQuiz(false);
+        }
+    };
+
+    // ── Complete unit → show celebration with recap ──────────────────
     const handleCompleteUnit = async () => {
         if (view.kind !== 'lesson-chat') return;
         setError(null);
@@ -477,15 +509,30 @@ export default function TeacherPanel() {
         const currentCourse = view.course;
         const currentUnit = view.unit;
 
-        // Find next unit locally — no need to refetch the whole course
+        // Mark complete in background — don't block the celebration
+        updateCourseUnit(currentCourse.id, currentUnit.id, { status: 'completed' }).catch(() => { });
+
+        // Show celebration immediately, load recap in background
+        setRecap(null);
+        setLoadingRecap(true);
+        setView({ kind: 'lesson-complete', course: currentCourse, unit: currentUnit });
+        generateUnitRecap(currentCourse.id, currentUnit.id)
+            .then((r) => setRecap(r))
+            .catch(() => setRecap(null))
+            .finally(() => setLoadingRecap(false));
+    };
+
+    // ── Advance to next unit after the celebration screen ────────────
+    const handleAdvanceAfterCelebration = async () => {
+        if (view.kind !== 'lesson-complete') return;
+        const currentCourse = view.course;
+        const currentUnit = view.unit;
+
         const sorted = [...currentCourse.units].sort((a, b) => a.order_index - b.order_index);
         const curIdx = sorted.findIndex(u => u.id === currentUnit.id);
         const nextUnit = sorted.slice(curIdx + 1).find(
             u => u.enabled && (u.status === 'pending' || u.status === 'active')
         );
-
-        // Fire completion in background — don't block navigation
-        updateCourseUnit(currentCourse.id, currentUnit.id, { status: 'completed' }).catch(() => { });
 
         if (nextUnit) {
             await openUnitChat(currentCourse, nextUnit);
@@ -579,6 +626,15 @@ export default function TeacherPanel() {
         const enabled = course.units.filter((u) => u.enabled);
         const currentIndex = enabled.findIndex((u) => u.id === currentUnit.id);
         return { current: currentIndex + 1, total: enabled.length };
+    };
+
+    // ── Is this the last enabled unit awaiting completion? ───────────
+    const isLastEnabledUnit = (course: CourseDetail, currentUnit: CourseUnit) => {
+        const sorted = [...course.units].sort((a, b) => a.order_index - b.order_index);
+        const curIdx = sorted.findIndex(u => u.id === currentUnit.id);
+        return !sorted.slice(curIdx + 1).some(
+            u => u.enabled && (u.status === 'pending' || u.status === 'active')
+        );
     };
 
     // ── Parse [NOTIZ_ANFRAGE: ...] markers from assistant messages ───
@@ -916,7 +972,7 @@ export default function TeacherPanel() {
         const progress = getUnitProgress(course, unit);
 
         return (
-            <div className="h-full flex flex-col">
+            <div className="h-full flex flex-col relative">
                 {/* Unit header */}
                 <div className="px-4 py-3 border-b border-dark-800 bg-dark-900/50">
                     <div className="flex items-center justify-between">
@@ -938,6 +994,7 @@ export default function TeacherPanel() {
                             </div>
                         </div>
                         <div className="flex items-center gap-1.5 flex-shrink-0">
+                            <LearningPathButton accent="teal" onClick={() => setShowPath(true)} />
                             <button
                                 onClick={handleSkipUnit}
                                 className="px-2.5 py-1.5 text-[10px] bg-dark-700 hover:bg-dark-600 text-dark-400 rounded-lg transition-colors"
@@ -955,8 +1012,22 @@ export default function TeacherPanel() {
                     </div>
                 </div>
 
+                {/* Learning path overlay */}
+                {showPath && (
+                    <LearningPathOverlay
+                        units={course.units}
+                        currentUnitId={unit.id}
+                        accent="teal"
+                        title={course.title}
+                        onClose={() => setShowPath(false)}
+                        onSelectUnit={(u) => { setShowPath(false); openUnitChat(course, u); }}
+                    />
+                )}
+
                 {/* Messages */}
                 <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                    {/* Lesson objectives — visible at a glance without reading prose */}
+                    <LessonObjectivesCard unit={unit} accent="teal" />
                     {messages.filter(m => m.role !== 'user' || (m.content !== '[START]' && m.content !== '[NOTIZEN_ERSTELLT]')).map((msg, idx, arr) => {
                         const isLastAssistant = msg.role === 'assistant' && idx === arr.length - 1;
                         return (
@@ -1090,6 +1161,19 @@ export default function TeacherPanel() {
                                 <FiZap className="w-3.5 h-3.5" />
                             )}
                             Direkt speichern
+                        </button>
+                        <button
+                            onClick={handleStartQuiz}
+                            disabled={generatingQuiz || sendingChat || messages.length < 2}
+                            title="Kurzes Quiz zur aktuellen Lektion"
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600/20 text-purple-300 hover:bg-purple-600/30 text-xs font-medium rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                            {generatingQuiz ? (
+                                <div className="w-3 h-3 border-2 border-purple-300 border-t-transparent rounded-full animate-spin" />
+                            ) : (
+                                <LuListChecks className="w-3.5 h-3.5" />
+                            )}
+                            Quiz
                         </button>
                         <button
                             onClick={handleCompleteUnit}
@@ -1341,6 +1425,24 @@ export default function TeacherPanel() {
                 {view.kind === 'confirm-curriculum' && renderConfirmCurriculum()}
                 {view.kind === 'lesson-chat' && renderLessonChat()}
                 {view.kind === 'note-review' && renderNoteReview()}
+                {view.kind === 'quiz' && (
+                    <LessonQuiz
+                        questions={view.questions}
+                        accent="teal"
+                        onClose={() => returnToChat(view.course, view.unit)}
+                    />
+                )}
+                {view.kind === 'lesson-complete' && (
+                    <LessonCompleteCelebration
+                        unitTitle={view.unit.title}
+                        recap={recap}
+                        accent="teal"
+                        isLastUnit={isLastEnabledUnit(view.course, view.unit)}
+                        nextLabel="Nächste Lektion"
+                        onContinue={handleAdvanceAfterCelebration}
+                        loadingRecap={loadingRecap}
+                    />
+                )}
                 {view.kind === 'course-completed' && renderCourseCompleted()}
                 {view.kind === 'advanced-focus' && renderAdvancedFocus()}
             </div>

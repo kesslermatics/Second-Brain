@@ -167,6 +167,18 @@ body {
   animation: fadeIn 0.3s ease-out;
 }
 
+/* Lesson celebration: pop-in + confetti */
+@keyframes popIn {
+  0% { opacity: 0; transform: scale(0.6); }
+  70% { transform: scale(1.08); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes confettiFall {
+  0% { transform: translateY(0) rotate(0deg); opacity: 1; }
+  100% { transform: translateY(115vh) rotate(720deg); opacity: 0; }
+}
+
 /* Loading dots */
 @keyframes dots {
   0%, 20% { content: '.'; }
