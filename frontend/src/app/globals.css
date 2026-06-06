@@ -62,15 +62,21 @@ body {
 .markdown-content li { margin: 0.25rem 0; line-height: 1.6; }
 
 /* Lesson prose — optimised for reading longer teaching text.
-   Larger font, more line-height and a slightly brighter body colour than the
-   default markdown so explanations are comfortable to read in chat bubbles. */
+   Bigger font and more line-height for comfortable reading, while keeping the
+   body colour darker than headings so the structure (headings vs. text) stays
+   clearly visible. */
 .lesson-prose p,
 .lesson-prose ul,
-.lesson-prose ol { font-size: 0.95rem; line-height: 1.8; color: #dde3ea; }
+.lesson-prose ol { font-size: 0.95rem; line-height: 1.8; color: #c9d1d9; }
 .lesson-prose li { line-height: 1.7; }
 .lesson-prose p { margin: 0.65rem 0; }
 .lesson-prose p:first-child { margin-top: 0; }
 .lesson-prose p:last-child { margin-bottom: 0; }
+/* Keep headings distinct from body so sections don't blend into a wall */
+.lesson-prose h2 { font-size: 1.2rem; margin: 1.4rem 0 0.6rem; }
+.lesson-prose h3 { font-size: 1.05rem; margin: 1.2rem 0 0.5rem; }
+.lesson-prose h2:first-child,
+.lesson-prose h3:first-child { margin-top: 0; }
 .markdown-content code { 
   background: #1c2333; 
   padding: 0.15rem 0.4rem; 
