@@ -37,8 +37,8 @@ async def create_session(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    if session.session_type not in ("notes", "qa"):
-        raise HTTPException(status_code=400, detail="session_type must be 'notes' or 'qa'")
+    if session.session_type not in ("notes", "qa", "agent"):
+        raise HTTPException(status_code=400, detail="session_type must be 'notes', 'qa', or 'agent'")
 
     new_session = ChatSession(
         title=session.title or "New Chat",

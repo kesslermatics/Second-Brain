@@ -544,10 +544,9 @@ export default api;
 
 // ── Agentic Workspace ────────────────────────────────────────────────
 
-export const runAgent = async (instruction: string, chatHistory: { role: string; content: string }[] = [], autoAccept: boolean = false) => {
-  const { data } = await api.post<AgentRunResult>('/agent/run', {
-    instruction,
-    chat_history: chatHistory,
+export const runAgent = async (sessionId: string, content: string, autoAccept: boolean = false) => {
+  const { data } = await api.post<AgentRunResult>(`/agent/sessions/${sessionId}/messages`, {
+    content,
     auto_accept: autoAccept,
   });
   return data;

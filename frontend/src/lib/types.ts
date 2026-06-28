@@ -399,10 +399,15 @@ export interface AgentProposal {
 }
 
 export interface AgentRunResult {
-  response: string;
+  message: {
+    id: string;
+    session_id: string;
+    role: string;
+    content: string;
+    created_at: string;
+  };
   steps: AgentStep[];
   proposals: AgentProposal[];
-  auto_accept: boolean;
   apply_result?: {
     applied: number;
     errors: string[];

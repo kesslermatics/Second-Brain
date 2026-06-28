@@ -25,12 +25,16 @@ interface AppState {
   // Chat
   notesSessions: ChatSession[];
   qaSessions: ChatSession[];
+  agentSessions: ChatSession[];
   activeNotesSession: ChatSessionDetail | null;
   activeQASession: ChatSessionDetail | null;
+  activeAgentSession: ChatSessionDetail | null;
   loadNotesSessions: () => Promise<void>;
   loadQASessions: () => Promise<void>;
+  loadAgentSessions: () => Promise<void>;
   setActiveNotesSession: (session: ChatSessionDetail | null) => void;
   setActiveQASession: (session: ChatSessionDetail | null) => void;
+  setActiveAgentSession: (session: ChatSessionDetail | null) => void;
 
   // UI
   activeView: 'chat' | 'notes' | 'dashboard' | 'graph' | 'learn' | 'search' | 'export' | 'summary' | 'images' | 'books' | 'teacher' | 'agent';
@@ -86,8 +90,10 @@ export const useStore = create<AppState>((set, get) => ({
   // Chat
   notesSessions: [],
   qaSessions: [],
+  agentSessions: [],
   activeNotesSession: null,
   activeQASession: null,
+  activeAgentSession: null,
   loadNotesSessions: async () => {
     try {
       const sessions = await api.getChatSessions('notes');
@@ -104,8 +110,17 @@ export const useStore = create<AppState>((set, get) => ({
       console.error('Failed to load QA sessions:', e);
     }
   },
+  loadAgentSessions: async () => {
+    try {
+      const sessions = await api.getChatSessions('agent');
+      set({ agentSessions: sessions });
+    } catch (e) {
+      console.error('Failed to load agent sessions:', e);
+    }
+  },
   setActiveNotesSession: (session) => set({ activeNotesSession: session }),
   setActiveQASession: (session) => set({ activeQASession: session }),
+  setActiveAgentSession: (session) => set({ activeAgentSession: session }),
 
   // UI
   activeView: 'chat',
