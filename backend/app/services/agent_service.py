@@ -547,15 +547,26 @@ async def run_agent_stream(
             tool_name = fc.name
             tool_args = dict(fc.args) if fc.args else {}
 
-            step_desc = f"🔧 {tool_name}"
+            # Build human-friendly step description
+            step_labels = {
+                "search_notes": "Suche",
+                "read_note": "Lese Notiz",
+                "list_folders": "Ordner laden",
+                "list_notes_in_folder": "Notizen laden",
+                "search_images": "Bilder suchen",
+                "create_note": "Erstelle Notiz",
+                "update_note": "Bearbeite Notiz",
+                "delete_note": "Lösche Notiz",
+            }
+            label = step_labels.get(tool_name, tool_name)
+            detail = ""
             if tool_args.get("query"):
-                step_desc += f': "{tool_args["query"]}"'
-            elif tool_args.get("folder_path"):
-                step_desc += f': "{tool_args["folder_path"]}"'
-            elif tool_args.get("note_id"):
-                step_desc += f': {tool_args["note_id"][:8]}...'
+                detail = f' „{tool_args["query"]}"'
             elif tool_args.get("title"):
-                step_desc += f': "{tool_args["title"]}"'
+                detail = f' „{tool_args["title"]}"'
+            elif tool_args.get("folder_path"):
+                detail = f' in {tool_args["folder_path"]}'
+            step_desc = f"{label}{detail}"
 
             yield {"type": "tool_call", "content": step_desc}
             steps.append({"type": "tool_call", "content": step_desc})
@@ -596,29 +607,33 @@ async def run_agent_stream(
 
 
 def _summarize_tool_result(tool_name: str, result: dict) -> str:
-    """Create a short human-readable summary of a tool result."""
+    """Create a short human-readable summary of a tool result for the streaming UI."""
     if "error" in result:
-        return f"❌ Fehler: {result['error']}"
+        return f"❌ {result['error'][:80]}"
 
     if tool_name == "search_notes":
         count = len(result.get("results", []))
-        return f"📋 {count} Ergebnisse gefunden"
+        return f"{count} Ergebnisse gefunden"
     elif tool_name == "read_note":
         title = result.get("title", "?")
-        return f'📖 Gelesen: "{title}"'
+        return f'"{title}" gelesen'
     elif tool_name == "list_folders":
         count = len(result.get("folders", []))
-        return f"📁 {count} Ordner"
+        return f"{count} Ordner geladen"
     elif tool_name == "list_notes_in_folder":
         count = len(result.get("notes", []))
-        return f"📋 {count} Notizen"
+        return f"{count} Notizen geladen"
     elif tool_name == "search_images":
         count = len(result.get("images", []))
-        return f"🖼️ {count} Bilder gefunden"
-    elif tool_name in ("create_note", "update_note", "delete_note"):
-        return f"✅ {result.get('message', 'Proposal erstellt')}"
+        return f"{count} Bilder gefunden"
+    elif tool_name == "create_note":
+        return "Vorschlag erstellt"
+    elif tool_name == "update_note":
+        return "Änderung vorgeschlagen"
+    elif tool_name == "delete_note":
+        return "Löschung vorgeschlagen"
     else:
-        return "✅ Erledigt"
+        return "Erledigt"
 
 
 # ── Non-streaming fallback (for backwards compat) ─────────────────────

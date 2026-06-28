@@ -1289,11 +1289,6 @@ export default function BookPanel() {
                     {sendingChat && (
                         <div className="flex justify-start">
                             <div className="bg-dark-800 border border-dark-700 rounded-2xl rounded-bl-md px-4 py-3 max-w-[85%]">
-                                {streamingThought && (
-                                    <div className="text-xs text-dark-500 italic border-l-2 border-dark-700 pl-2 py-1 mb-2">
-                                        <span className="text-dark-600 font-medium">💭</span> {streamingThought}
-                                    </div>
-                                )}
                                 {streamingContent ? (
                                     <div className="prose prose-invert prose-sm max-w-none text-sm">
                                         <ReactMarkdown components={markdownComponents} remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>
@@ -1301,10 +1296,13 @@ export default function BookPanel() {
                                         </ReactMarkdown>
                                     </div>
                                 ) : (
-                                    <div className="flex items-center gap-2 text-dark-400">
-                                        <div className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" />
-                                        <div className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" style={{ animationDelay: '0.2s' }} />
-                                        <div className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" style={{ animationDelay: '0.4s' }} />
+                                    <div className="flex items-center gap-2 text-xs text-dark-500">
+                                        <div className="flex gap-0.5">
+                                            <div className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
+                                            <div className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" style={{ animationDelay: '0.15s' }} />
+                                            <div className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" style={{ animationDelay: '0.3s' }} />
+                                        </div>
+                                        <span>Formuliert Erklärung...</span>
                                     </div>
                                 )}
                             </div>
