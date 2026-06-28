@@ -47,6 +47,12 @@ Du hast Zugriff auf alle Notizen und Bilder des Benutzers über Tools.
 
 3. **Notizen nur wenn sinnvoll**: Erstelle/bearbeite Notizen NUR wenn der Benutzer es explizit wünscht oder es klar Sinn macht. Beim ersten Kontakt zu einem Thema: brainstorme, frage, diskutiere — erstelle NICHT sofort Notizen.
 
+4. **WICHTIG — Keine Duplikate**: Bevor du eine neue Notiz erstellst, suche IMMER zuerst mit `search_notes` ob es schon eine Notiz zum gleichen Thema gibt. Wenn ja:
+   - Nutze `update_note` mit der existierenden `note_id` um sie zu AKTUALISIEREN
+   - Erstelle KEINE neue Notiz wenn eine zum gleichen Thema bereits existiert
+   - Ergänze/aktualisiere den bestehenden Inhalt statt einen neuen Eintrag zu machen
+   - Nur wenn es wirklich ein NEUES, eigenständiges Thema ist: `create_note`
+
 4. **Dateien proaktiv ablegen**: Wenn Dateien (PDFs, Bilder, Dokumente) hochgeladen werden:
    - Erstelle eine Notiz im passenden Ordner
    - Bette die Datei ein: `![Beschreibung](URL)` für Bilder, `[📄 Dateiname](URL)` für PDFs/Dokumente
@@ -400,32 +406,71 @@ async def _execute_tool(name: str, args: dict, user_id: str, db: AsyncSession) -
             try:
                 search_client = get_client()
                 search_response = await search_client.aio.models.generate_content(
-                    model="gemini-3-flash-preview",  # Use Flash for search (cheaper + faster)
-                    contents=f"Recherchiere: {query}\n\nGib eine präzise, faktenbasierte Zusammenfassung der wichtigsten Ergebnisse.",
+                    model="gemini-3-flash-preview",
+                    contents=f"Recherchiere: {query}\n\nGib eine präzise, faktenbasierte Zusammenfassung.",
                     config=types.GenerateContentConfig(
                         tools=[types.Tool(google_search=types.GoogleSearch())],
                     ),
                 )
-                # Extract grounding sources
+                # Extract grounding sources — try multiple attribute paths
                 sources = []
                 if search_response.candidates:
-                    gm = getattr(search_response.candidates[0], 'grounding_metadata', None)
-                    if gm:
-                        chunks = getattr(gm, 'grounding_chunks', None) or []
-                        for gc in chunks:
-                            web = getattr(gc, 'web', None)
-                            if web:
-                                sources.append({
-                                    "title": getattr(web, 'title', '') or '',
-                                    "url": getattr(web, 'uri', '') or '',
-                                })
+                    candidate = search_response.candidates[0]
+                    gm = getattr(candidate, 'grounding_metadata', None)
 
+                    if gm:
+                        # Try grounding_chunks (newer SDK)
+                        chunks = getattr(gm, 'grounding_chunks', None)
+                        if chunks:
+                            for gc in chunks:
+                                web = getattr(gc, 'web', None)
+                                if web:
+                                    title = getattr(web, 'title', '') or ''
+                                    url = getattr(web, 'uri', '') or getattr(web, 'url', '') or ''
+                                    if url:
+                                        sources.append({"title": title, "url": url})
+
+                        # Fallback: try grounding_supports → grounding_chunk_indices → retrieve from search_entry_point
+                        if not sources:
+                            supports = getattr(gm, 'grounding_supports', None)
+                            if supports:
+                                for sup in supports:
+                                    segment = getattr(sup, 'segment', None) or getattr(sup, 'web', None)
+                                    if segment:
+                                        url = getattr(segment, 'uri', '') or getattr(segment, 'url', '') or ''
+                                        title = getattr(segment, 'title', '') or ''
+                                        if url:
+                                            sources.append({"title": title, "url": url})
+
+                        # Fallback: search_entry_point may have rendered HTML with links
+                        if not sources:
+                            sep = getattr(gm, 'search_entry_point', None)
+                            if sep:
+                                rendered = getattr(sep, 'rendered_content', '') or ''
+                                # Extract URLs from rendered HTML
+                                import re as _re
+                                urls_found = _re.findall(r'href="(https?://[^"]+)"', rendered)
+                                for url in urls_found[:5]:
+                                    domain = url.split('/')[2] if '/' in url else url
+                                    sources.append({"title": domain, "url": url})
+
+                    # Deduplicate by URL
+                    seen_urls = set()
+                    unique_sources = []
+                    for s in sources:
+                        if s["url"] and s["url"] not in seen_urls:
+                            seen_urls.add(s["url"])
+                            unique_sources.append(s)
+                    sources = unique_sources[:8]  # Max 8 sources
+
+                logger.info(f"Web search '{query}': {len(sources)} sources found")
                 return {
                     "answer": search_response.text or "",
                     "sources": sources,
                 }
             except Exception as e:
-                return {"error": f"Web-Suche fehlgeschlagen: {str(e)[:100]}"}
+                logger.error(f"Web search failed: {e}")
+                return {"error": f"Web-Suche fehlgeschlagen: {str(e)[:150]}"}
 
         else:
             return {"error": f"Unbekanntes Tool: {name}"}
