@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, memo, useCallback } from 'react';
+import React, { useState, useRef, useEffect, memo, useCallback } from 'react';
 import {
     FiSend, FiCheck, FiX, FiCheckCircle, FiCpu,
     FiChevronDown, FiChevronRight, FiZap, FiLoader,
@@ -218,19 +218,20 @@ export default function AgentView() {
     }, []);
 
     const handleAcceptAll = useCallback(async (msgId: string, proposals: AgentProposal[]) => {
-        setAppliedProposals((currentApplied) => {
-            const pendingIndices = proposals.map((_, i) => i).filter(i => !currentApplied.has(`${msgId}-${i}`));
-            if (pendingIndices.length === 0) return currentApplied;
-            const pending = pendingIndices.map(i => proposals[i]);
-            applyAgentProposals(pending).then(() => {
-                markProposalsApplied(msgId, pendingIndices).catch(() => { });
-                loadFolderTree();
-            }).catch(console.error);
-            const n = new Set(currentApplied);
-            pendingIndices.forEach(i => n.add(`${msgId}-${i}`));
-            return n;
-        });
-    }, [loadFolderTree]);
+        const pendingIndices = proposals.map((_, i) => i).filter(i => !appliedProposals.has(`${msgId}-${i}`));
+        if (pendingIndices.length === 0) return;
+        const pending = pendingIndices.map(i => proposals[i]);
+        try {
+            await applyAgentProposals(pending);
+            setAppliedProposals((prev) => {
+                const n = new Set(prev);
+                pendingIndices.forEach(i => n.add(`${msgId}-${i}`));
+                return n;
+            });
+            markProposalsApplied(msgId, pendingIndices).catch(() => { });
+            loadFolderTree();
+        } catch (e) { console.error(e); }
+    }, [appliedProposals, loadFolderTree]);
 
     // ── Left panel actions ───────────────────────────────────────
 
@@ -450,16 +451,20 @@ function ThinkingIndicator() {
     );
 }
 
-const MessageBubble = memo(function MessageBubble({ msg, expandedSteps, setExpandedSteps, appliedProposals, rejectedProposals, onAcceptProposal, onRejectProposal, onAcceptAll, onOpenDiff, onOpenNote }: {
+interface MessageBubbleProps {
     msg: ParsedAgentMessage;
-    expandedSteps: Set<string>; setExpandedSteps: React.Dispatch<React.SetStateAction<Set<string>>>;
-    appliedProposals: Set<string>; rejectedProposals: Set<string>;
+    expandedSteps: Set<string>;
+    setExpandedSteps: React.Dispatch<React.SetStateAction<Set<string>>>;
+    appliedProposals: Set<string>;
+    rejectedProposals: Set<string>;
     onAcceptProposal: (msgId: string, idx: number, p: AgentProposal) => void;
     onRejectProposal: (msgId: string, idx: number) => void;
     onAcceptAll: (msgId: string, proposals: AgentProposal[]) => void;
     onOpenDiff: (p: AgentProposal, msgId: string, idx: number) => void;
     onOpenNote: (noteId: string) => void;
-}) {
+}
+
+const MessageBubble = memo(function MessageBubble({ msg, expandedSteps, setExpandedSteps, appliedProposals, rejectedProposals, onAcceptProposal, onRejectProposal, onAcceptAll, onOpenDiff, onOpenNote }: MessageBubbleProps) {
     if (msg.role === 'user') {
         return (<div className="flex justify-end"><div className="max-w-[80%] bg-rose-900/30 border border-rose-800/30 rounded-2xl px-3 py-2"><p className="text-sm text-white whitespace-pre-wrap">{msg.content}</p></div></div>);
     }
