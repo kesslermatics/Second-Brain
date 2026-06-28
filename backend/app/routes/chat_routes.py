@@ -1,4 +1,3 @@
-import json
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -6,13 +5,11 @@ from typing import List
 from uuid import UUID
 from app.database import get_db
 from app.auth import get_current_user
-from app.models import User, ChatSession, ChatMessage, Note, Folder, UserSettings, Image, Tag
+from app.models import User, ChatSession, ChatMessage
 from app.schemas import (
     ChatSessionCreate, ChatSessionResponse, ChatSessionDetailResponse,
-    ChatMessageCreate, ChatMessageResponse,
+    ChatMessageResponse,
 )
-from app.services.ai_service import process_note_input, answer_with_rag, generate_chat_title
-from app.services.vector_service import hybrid_search
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 

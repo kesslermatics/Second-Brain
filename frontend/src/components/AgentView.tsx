@@ -57,7 +57,7 @@ function parseAgentMessage(msg: ChatMessage): ParsedAgentMessage {
 export default function AgentView() {
     const { loadFolderTree, loadAgentSessions, activeAgentSession, setActiveAgentSession, agentViewingNote, setAgentViewingNote } = useStore();
     const [loading, setLoading] = useState(false);
-    const [autoAccept, setAutoAccept] = useState(false);
+    const [autoAccept, setAutoAccept] = useState(true);
     const [parsedMessages, setParsedMessages] = useState<ParsedAgentMessage[]>([]);
     const [streamingThought, setStreamingThought] = useState('');
     const [streamingContent, setStreamingContent] = useState('');
@@ -116,7 +116,20 @@ export default function AgentView() {
         if (imgs.length > 0) { e.preventDefault(); setPendingFiles((p) => [...p, ...imgs]); }
     };
 
-    const handleDrop = (e: RDragEvent) => { e.preventDefault(); const files = Array.from(e.dataTransfer.files); if (files.length > 0) setPendingFiles((p) => [...p, ...files]); };
+    // Fullscreen drag & drop
+    const [isDragging, setIsDragging] = useState(false);
+    const dragCounter = useRef(0);
+
+    const handleDragEnter = (e: RDragEvent) => { e.preventDefault(); dragCounter.current++; setIsDragging(true); };
+    const handleDragLeave = (e: RDragEvent) => { e.preventDefault(); dragCounter.current--; if (dragCounter.current === 0) setIsDragging(false); };
+    const handleDragOver = (e: RDragEvent) => { e.preventDefault(); };
+    const handleDrop = (e: RDragEvent) => {
+        e.preventDefault();
+        setIsDragging(false);
+        dragCounter.current = 0;
+        const files = Array.from(e.dataTransfer.files);
+        if (files.length > 0) setPendingFiles((p) => [...p, ...files]);
+    };
 
     // ── Send message ─────────────────────────────────────────────
 
@@ -256,7 +269,20 @@ export default function AgentView() {
     // ── Render ───────────────────────────────────────────────────
 
     return (
-        <div className="h-full flex flex-col">
+        <div className="h-full flex flex-col relative"
+            onDragEnter={handleDragEnter} onDragLeave={handleDragLeave} onDragOver={handleDragOver} onDrop={handleDrop}>
+
+            {/* Fullscreen drag overlay */}
+            {isDragging && (
+                <div className="absolute inset-0 z-50 bg-dark-900/90 backdrop-blur-sm flex items-center justify-center border-2 border-dashed border-rose-500 rounded-xl m-2 pointer-events-none">
+                    <div className="text-center">
+                        <div className="text-4xl mb-3">📎</div>
+                        <p className="text-lg font-medium text-white">Dateien hier ablegen</p>
+                        <p className="text-sm text-dark-400 mt-1">Bilder, PDFs, Dokumente</p>
+                    </div>
+                </div>
+            )}
+
             {/* Header */}
             <div className="flex items-center justify-between px-4 py-3 border-b border-dark-800 bg-dark-900/50 flex-shrink-0">
                 <div className="flex items-center gap-3">
@@ -265,8 +291,10 @@ export default function AgentView() {
                 </div>
                 <div className="flex items-center gap-2">
                     <button onClick={() => setAutoAccept(!autoAccept)}
-                        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${autoAccept ? 'bg-green-600/20 text-green-400 border border-green-600/30' : 'bg-dark-800 text-dark-400 border border-dark-700 hover:text-white'}`}>
-                        {autoAccept ? <FiToggleRight className="w-3.5 h-3.5" /> : <FiToggleLeft className="w-3.5 h-3.5" />} Auto
+                        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${autoAccept ? 'bg-green-600/20 text-green-400 border border-green-600/30' : 'bg-dark-800 text-dark-400 border border-dark-700 hover:text-white'}`}
+                        title={autoAccept ? 'Änderungen werden automatisch angewendet' : 'Änderungen müssen manuell bestätigt werden'}>
+                        {autoAccept ? <FiToggleRight className="w-3.5 h-3.5" /> : <FiToggleLeft className="w-3.5 h-3.5" />}
+                        {autoAccept ? 'Auto-Apply' : 'Manuell'}
                     </button>
                 </div>
             </div>
@@ -404,7 +432,7 @@ export default function AgentView() {
                                 ))}
                             </div>
                         )}
-                        <div className="flex items-end gap-2" onDrop={handleDrop} onDragOver={(e) => e.preventDefault()}>
+                        <div className="flex items-end gap-2">
                             <textarea ref={textareaRef}
                                 onChange={() => { adjustTextarea(); }}
                                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
@@ -547,18 +575,20 @@ function ProposalCard({ proposal, msgId, index, isApplied, isRejected, onAccept,
     const Icon = cfg.icon;
 
     return (
-        <div className={`border rounded-lg overflow-hidden ${isApplied ? 'border-green-600/30 bg-green-900/10' : isRejected ? 'border-dark-700 opacity-40' : cfg.bg}`}>
+        <div
+            onClick={onOpenDiff}
+            className={`border rounded-lg overflow-hidden cursor-pointer transition-colors hover:border-amber-500/40 ${isApplied ? 'border-green-600/30 bg-green-900/10' : isRejected ? 'border-dark-700 opacity-40' : cfg.bg}`}
+        >
             <div className="flex items-center gap-2 px-2.5 py-1.5">
                 <Icon className={`w-3.5 h-3.5 flex-shrink-0 ${cfg.color}`} />
                 <div className="flex-1 min-w-0">
                     <span className="text-xs font-medium text-white truncate block">{proposal.title || proposal.new_title || ''}</span>
                     {proposal.folder_path && <span className="text-[10px] text-dark-500">📁 {proposal.folder_path}</span>}
                 </div>
-                <div className="flex items-center gap-1 flex-shrink-0">
-                    <button onClick={onOpenDiff} className="p-1 hover:bg-dark-700 rounded text-dark-400 hover:text-amber-400" title="Diff öffnen"><FiColumns className="w-3 h-3" /></button>
+                <div className="flex items-center gap-1 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
                     {onOpenNote && <button onClick={onOpenNote} className="p-1 hover:bg-dark-700 rounded text-dark-400 hover:text-brain-400" title="Notiz anzeigen"><FiEye className="w-3 h-3" /></button>}
-                    {isApplied ? <span className="text-[10px] text-green-400">✓</span> : isRejected ? <span className="text-[10px] text-dark-500">—</span> : (
-                        <><button onClick={onAccept} className="p-1 bg-green-600 hover:bg-green-500 text-white rounded"><FiCheck className="w-3 h-3" /></button><button onClick={onReject} className="p-1 bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded"><FiX className="w-3 h-3" /></button></>
+                    {isApplied ? <span className="text-[10px] text-green-400 font-medium">✓ Angewendet</span> : isRejected ? <span className="text-[10px] text-dark-500">—</span> : (
+                        <><button onClick={onAccept} className="p-1 bg-green-600 hover:bg-green-500 text-white rounded" title="Annehmen"><FiCheck className="w-3 h-3" /></button><button onClick={onReject} className="p-1 bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded" title="Ablehnen"><FiX className="w-3 h-3" /></button></>
                     )}
                 </div>
             </div>

@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation';
 import { useStore } from '@/lib/store';
 import { getMe } from '@/lib/api';
 import Sidebar from '@/components/Sidebar';
-import ChatView from '@/components/ChatView';
 import NotesView from '@/components/NotesView';
 import SearchView from '@/components/SearchView';
 import DashboardView from '@/components/DashboardView';
@@ -53,7 +52,6 @@ export default function DashboardPage() {
 
     const renderView = () => {
         switch (activeView) {
-            case 'chat': return <ChatView />;
             case 'notes': return <NotesView />;
             case 'search': return <SearchView />;
             case 'dashboard': return <DashboardView />;
@@ -65,7 +63,7 @@ export default function DashboardPage() {
             case 'books': return <BookPanel />;
             case 'teacher': return <TeacherPanel />;
             case 'agent': return <AgentView />;
-            default: return <ChatView />;
+            default: return <AgentView />;
         }
     };
 

@@ -7,27 +7,27 @@ import {
     FiMessageSquare, FiBookOpen, FiPlus, FiTrash2,
     FiChevronRight, FiChevronDown, FiLogOut, FiMenu, FiFile, FiSettings,
     FiSearch, FiGrid, FiShare2, FiRepeat, FiDownload, FiFileText, FiImage, FiEdit2, FiBook,
-    FiCpu,
+    FiCpu, FiHardDrive,
 } from 'react-icons/fi';
 import { LuGraduationCap } from 'react-icons/lu';
 import { createChatSession, getChatSession, deleteChatSession, updateChatSession } from '@/lib/api';
 import FolderTreeComponent from './FolderTree';
 import SettingsModal from './SettingsModal';
+import BackupModal from './BackupModal';
 import type { ChatSession } from '@/lib/types';
 
 export default function Sidebar() {
     const {
         activeView, setActiveView, sidebarOpen, setSidebarOpen,
-        notesSessions, qaSessions, agentSessions, loadNotesSessions, loadQASessions, loadAgentSessions,
-        setActiveNotesSession, setActiveQASession, setActiveAgentSession, activeAgentSession,
+        agentSessions, loadAgentSessions,
+        setActiveAgentSession, activeAgentSession,
         loadFolderTree, folderTree, logout,
     } = useStore();
 
-    const [notesExpanded, setNotesExpanded] = useState(true);
-    const [qaExpanded, setQAExpanded] = useState(true);
     const [agentExpanded, setAgentExpanded] = useState(true);
     const [foldersExpanded, setFoldersExpanded] = useState(true);
     const [settingsOpen, setSettingsOpen] = useState(false);
+    const [backupOpen, setBackupOpen] = useState(false);
     const [sidebarWidth, setSidebarWidth] = useState(288);
     const [isDesktop, setIsDesktop] = useState(true);
     const [renamingSession, setRenamingSession] = useState<string | null>(null);
@@ -57,8 +57,6 @@ export default function Sidebar() {
     }, []);
 
     useEffect(() => {
-        loadNotesSessions();
-        loadQASessions();
         loadAgentSessions();
         loadFolderTree();
 
@@ -71,31 +69,7 @@ export default function Sidebar() {
         };
         mq.addEventListener('change', handler);
         return () => mq.removeEventListener('change', handler);
-    }, [loadNotesSessions, loadQASessions, loadAgentSessions, loadFolderTree, setSidebarOpen]);
-
-    const handleNewNotesSession = async () => {
-        try {
-            const session = await createChatSession('notes', 'Neue Notiz');
-            const detail = await getChatSession(session.id);
-            setActiveNotesSession(detail);
-            setActiveView('chat');
-            await loadNotesSessions();
-        } catch (e) {
-            console.error(e);
-        }
-    };
-
-    const handleNewQASession = async () => {
-        try {
-            const session = await createChatSession('qa', 'Neue Frage');
-            const detail = await getChatSession(session.id);
-            setActiveQASession(detail);
-            setActiveView('chat');
-            await loadQASessions();
-        } catch (e) {
-            console.error(e);
-        }
-    };
+    }, [loadAgentSessions, loadFolderTree, setSidebarOpen]);
 
     const handleNewAgentSession = async () => {
         try {
@@ -113,53 +87,35 @@ export default function Sidebar() {
         if (window.innerWidth < 1024) setSidebarOpen(false);
     };
 
-    const handleSelectSession = async (session: ChatSession, type: 'notes' | 'qa' | 'agent') => {
+    const handleSelectSession = async (session: ChatSession, type: 'agent') => {
         try {
             const detail = await getChatSession(session.id);
-            if (type === 'notes') {
-                setActiveNotesSession(detail);
-                setActiveView('chat');
-            } else if (type === 'qa') {
-                setActiveQASession(detail);
-                setActiveView('chat');
-            } else {
-                setActiveAgentSession(detail);
-                setActiveView('agent');
-            }
+            setActiveAgentSession(detail);
+            setActiveView('agent');
             closeSidebarOnMobile();
         } catch (e) {
             console.error(e);
         }
     };
 
-    const handleDeleteSession = async (e: React.MouseEvent, sessionId: string, type: 'notes' | 'qa' | 'agent') => {
+    const handleDeleteSession = async (e: React.MouseEvent, sessionId: string, type: 'agent') => {
         e.stopPropagation();
         try {
             await deleteChatSession(sessionId);
-            if (type === 'notes') {
-                await loadNotesSessions();
-                setActiveNotesSession(null);
-            } else if (type === 'qa') {
-                await loadQASessions();
-                setActiveQASession(null);
-            } else {
-                await loadAgentSessions();
-                setActiveAgentSession(null);
-            }
+            await loadAgentSessions();
+            setActiveAgentSession(null);
         } catch (e) {
             console.error(e);
         }
     };
 
-    const handleRenameSession = async (sessionId: string, type: 'notes' | 'qa' | 'agent') => {
+    const handleRenameSession = async (sessionId: string, type: 'agent') => {
         if (!renameValue.trim()) { setRenamingSession(null); return; }
         try {
             await updateChatSession(sessionId, renameValue.trim());
             setRenamingSession(null);
             setRenameValue('');
-            if (type === 'notes') await loadNotesSessions();
-            else if (type === 'qa') await loadQASessions();
-            else await loadAgentSessions();
+            await loadAgentSessions();
         } catch (e) {
             console.error(e);
         }
@@ -207,14 +163,14 @@ export default function Sidebar() {
                 {/* Navigation */}
                 <div className="flex border-b border-dark-800">
                     <button
-                        onClick={() => { setActiveView('chat'); closeSidebarOnMobile(); }}
-                        className={`flex-1 flex items-center justify-center gap-2 py-3 text-sm font-medium transition-colors ${activeView === 'chat'
-                            ? 'text-brain-400 border-b-2 border-brain-400'
+                        onClick={() => { setActiveView('agent'); closeSidebarOnMobile(); }}
+                        className={`flex-1 flex items-center justify-center gap-2 py-3 text-sm font-medium transition-colors ${activeView === 'agent'
+                            ? 'text-rose-400 border-b-2 border-rose-400'
                             : 'text-dark-500 hover:text-dark-300'
                             }`}
                     >
-                        <FiMessageSquare className="w-4 h-4" />
-                        Chat
+                        <FiCpu className="w-4 h-4" />
+                        Agent
                     </button>
                     <button
                         onClick={() => { setActiveView('notes'); closeSidebarOnMobile(); }}
@@ -314,130 +270,6 @@ export default function Sidebar() {
 
                 {/* Content */}
                 <div className="flex-1 overflow-y-auto p-3 space-y-1">
-                    {/* Notes Chat Sessions */}
-                    <div className="mb-2">
-                        <button
-                            onClick={() => setNotesExpanded(!notesExpanded)}
-                            className="flex items-center gap-2 w-full text-left text-xs font-semibold text-dark-500 uppercase tracking-wider px-2 py-1.5 hover:text-dark-300"
-                        >
-                            {notesExpanded ? <FiChevronDown className="w-3.5 h-3.5" /> : <FiChevronRight className="w-3.5 h-3.5" />}
-                            Notizen-Chat
-                            <button
-                                onClick={(e) => { e.stopPropagation(); handleNewNotesSession(); }}
-                                className="ml-auto p-1 hover:bg-dark-800 rounded"
-                                title="Neuer Notizen-Chat"
-                            >
-                                <FiPlus className="w-3.5 h-3.5" />
-                            </button>
-                        </button>
-                        {notesExpanded && (
-                            <div className="space-y-0.5 mt-1">
-                                {notesSessions.map((session) => (
-                                    <div
-                                        key={session.id}
-                                        onClick={() => handleSelectSession(session, 'notes')}
-                                        className="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-dark-400 hover:text-white hover:bg-dark-800 cursor-pointer transition-colors"
-                                    >
-                                        <FiFile className="w-3.5 h-3.5 flex-shrink-0 text-brain-400" />
-                                        {renamingSession === session.id ? (
-                                            <input
-                                                type="text"
-                                                value={renameValue}
-                                                onChange={(e) => setRenameValue(e.target.value)}
-                                                onKeyDown={(e) => {
-                                                    if (e.key === 'Enter') handleRenameSession(session.id, 'notes');
-                                                    if (e.key === 'Escape') { setRenamingSession(null); setRenameValue(''); }
-                                                }}
-                                                onBlur={() => handleRenameSession(session.id, 'notes')}
-                                                onClick={(e) => e.stopPropagation()}
-                                                className="flex-1 px-1 py-0 text-sm bg-dark-950 border border-brain-500 rounded text-white focus:outline-none min-w-0"
-                                                autoFocus
-                                            />
-                                        ) : (
-                                            <span className="truncate flex-1">{session.title}</span>
-                                        )}
-                                        <div className="opacity-0 group-hover:opacity-100 flex gap-0.5">
-                                            <button
-                                                onClick={(e) => startRenameSession(e, session.id, session.title)}
-                                                className="p-1 hover:bg-dark-700 rounded transition-opacity"
-                                            >
-                                                <FiEdit2 className="w-3 h-3 text-dark-500 hover:text-blue-400" />
-                                            </button>
-                                            <button
-                                                onClick={(e) => handleDeleteSession(e, session.id, 'notes')}
-                                                className="p-1 hover:bg-dark-700 rounded transition-opacity"
-                                            >
-                                                <FiTrash2 className="w-3 h-3 text-dark-500 hover:text-red-400" />
-                                            </button>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-
-                    {/* QA Chat Sessions */}
-                    <div className="mb-2">
-                        <button
-                            onClick={() => setQAExpanded(!qaExpanded)}
-                            className="flex items-center gap-2 w-full text-left text-xs font-semibold text-dark-500 uppercase tracking-wider px-2 py-1.5 hover:text-dark-300"
-                        >
-                            {qaExpanded ? <FiChevronDown className="w-3.5 h-3.5" /> : <FiChevronRight className="w-3.5 h-3.5" />}
-                            Fragen & Antworten
-                            <button
-                                onClick={(e) => { e.stopPropagation(); handleNewQASession(); }}
-                                className="ml-auto p-1 hover:bg-dark-800 rounded"
-                                title="Neue Frage"
-                            >
-                                <FiPlus className="w-3.5 h-3.5" />
-                            </button>
-                        </button>
-                        {qaExpanded && (
-                            <div className="space-y-0.5 mt-1">
-                                {qaSessions.map((session) => (
-                                    <div
-                                        key={session.id}
-                                        onClick={() => handleSelectSession(session, 'qa')}
-                                        className="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-dark-400 hover:text-white hover:bg-dark-800 cursor-pointer transition-colors"
-                                    >
-                                        <FiMessageSquare className="w-3.5 h-3.5 flex-shrink-0 text-green-400" />
-                                        {renamingSession === session.id ? (
-                                            <input
-                                                type="text"
-                                                value={renameValue}
-                                                onChange={(e) => setRenameValue(e.target.value)}
-                                                onKeyDown={(e) => {
-                                                    if (e.key === 'Enter') handleRenameSession(session.id, 'qa');
-                                                    if (e.key === 'Escape') { setRenamingSession(null); setRenameValue(''); }
-                                                }}
-                                                onBlur={() => handleRenameSession(session.id, 'qa')}
-                                                onClick={(e) => e.stopPropagation()}
-                                                className="flex-1 px-1 py-0 text-sm bg-dark-950 border border-brain-500 rounded text-white focus:outline-none min-w-0"
-                                                autoFocus
-                                            />
-                                        ) : (
-                                            <span className="truncate flex-1">{session.title}</span>
-                                        )}
-                                        <div className="opacity-0 group-hover:opacity-100 flex gap-0.5">
-                                            <button
-                                                onClick={(e) => startRenameSession(e, session.id, session.title)}
-                                                className="p-1 hover:bg-dark-700 rounded transition-opacity"
-                                            >
-                                                <FiEdit2 className="w-3 h-3 text-dark-500 hover:text-blue-400" />
-                                            </button>
-                                            <button
-                                                onClick={(e) => handleDeleteSession(e, session.id, 'qa')}
-                                                className="p-1 hover:bg-dark-700 rounded transition-opacity"
-                                            >
-                                                <FiTrash2 className="w-3 h-3 text-dark-500 hover:text-red-400" />
-                                            </button>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-
                     {/* Agent Sessions */}
                     <div>
                         <button
@@ -521,6 +353,13 @@ export default function Sidebar() {
                 {/* Footer */}
                 <div className="p-3 border-t border-dark-800 space-y-1">
                     <button
+                        onClick={() => setBackupOpen(true)}
+                        className="flex items-center gap-2 w-full px-3 py-2 text-sm text-dark-500 hover:text-white hover:bg-dark-800 rounded-lg transition-colors"
+                    >
+                        <FiHardDrive className="w-4 h-4" />
+                        Backups
+                    </button>
+                    <button
                         onClick={() => setSettingsOpen(true)}
                         className="flex items-center gap-2 w-full px-3 py-2 text-sm text-dark-500 hover:text-white hover:bg-dark-800 rounded-lg transition-colors"
                     >
@@ -544,6 +383,7 @@ export default function Sidebar() {
             />
 
             <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
+            <BackupModal open={backupOpen} onClose={() => setBackupOpen(false)} />
         </>
     );
 }

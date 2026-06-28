@@ -713,3 +713,34 @@ export const applyAgentProposals = async (proposals: unknown[]) => {
 export const markProposalsApplied = async (messageId: string, appliedIndices: number[]) => {
   await api.post('/agent/mark-applied', { message_id: messageId, applied_indices: appliedIndices });
 };
+
+// ── Backups ──────────────────────────────────────────────────────────
+
+export interface BackupItem {
+  id: string;
+  filename: string;
+  created_at: string;
+  label: string;
+  notes_count: number;
+  folders_count: number;
+  size_bytes: number;
+}
+
+export const listBackups = async (): Promise<BackupItem[]> => {
+  const { data } = await api.get<{ backups: BackupItem[] }>('/backups');
+  return data.backups;
+};
+
+export const createBackup = async (label?: string): Promise<BackupItem> => {
+  const { data } = await api.post<BackupItem>('/backups', { label: label || 'Manuelles Backup' });
+  return data;
+};
+
+export const restoreBackup = async (backupId: string) => {
+  const { data } = await api.post<{ status: string; notes_count: number; folders_count: number }>(`/backups/${backupId}/restore`);
+  return data;
+};
+
+export const deleteBackup = async (backupId: string) => {
+  await api.delete(`/backups/${backupId}`);
+};
