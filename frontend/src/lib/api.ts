@@ -709,3 +709,7 @@ export const applyAgentProposals = async (proposals: unknown[]) => {
   }>('/agent/apply', { proposals });
   return data;
 };
+
+export const markProposalsApplied = async (messageId: string, appliedIndices: number[]) => {
+  await api.post('/agent/mark-applied', { message_id: messageId, applied_indices: appliedIndices });
+};

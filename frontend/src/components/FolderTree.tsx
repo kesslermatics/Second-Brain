@@ -19,7 +19,7 @@ export default function FolderTreeComponent({ folders, level }: Props) {
     const [renamingFolder, setRenamingFolder] = useState<string | null>(null);
     const [renamingNote, setRenamingNote] = useState<string | null>(null);
     const [renameValue, setRenameValue] = useState('');
-    const { loadFolderTree, setSelectedNote, setActiveView, setPendingEdit, selectedNote } = useStore();
+    const { loadFolderTree, setSelectedNote, setActiveView, setPendingEdit, selectedNote, activeView, setAgentViewingNote } = useStore();
     const dragItem = useRef<{ type: 'note' | 'folder'; id: string } | null>(null);
 
     const toggleFolder = (folderId: string) => {
@@ -58,8 +58,13 @@ export default function FolderTreeComponent({ folders, level }: Props) {
     const handleSelectNote = async (noteId: string) => {
         try {
             const note = await getNote(noteId);
-            setSelectedNote(note);
-            setActiveView('notes');
+            if (activeView === 'agent') {
+                // When agent view is active, open note in the agent's left panel
+                setAgentViewingNote(note);
+            } else {
+                setSelectedNote(note);
+                setActiveView('notes');
+            }
         } catch (e) {
             console.error(e);
         }

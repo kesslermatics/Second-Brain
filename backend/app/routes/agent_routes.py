@@ -5,6 +5,7 @@ Uses the existing ChatSession/ChatMessage models with session_type='agent'.
 
 import json
 import os
+import re
 import uuid as _uuid
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Form
@@ -449,6 +450,47 @@ async def agent_apply_proposals(
         background_tasks=background_tasks,
     )
     return result
+
+
+class MarkAppliedRequest(BaseModel):
+    message_id: str
+    applied_indices: list[int]
+
+
+@router.post("/mark-applied")
+async def mark_proposals_applied(
+    request: MarkAppliedRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Mark specific proposal indices as applied in the message metadata.
+    This prevents re-applying proposals when the view is revisited."""
+    msg = await db.get(ChatMessage, UUID(request.message_id))
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    # Verify ownership through session
+    session = await db.get(ChatSession, msg.session_id)
+    if not session or session.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    # Update the AGENT_META to include applied_indices
+    content = msg.content
+    meta_match = re.search(r'<!-- AGENT_META\n([\s\S]*?)\nAGENT_META -->', content)
+    if meta_match:
+        try:
+            meta = json.loads(meta_match.group(1))
+            existing = set(meta.get("applied_indices", []))
+            existing.update(request.applied_indices)
+            meta["applied_indices"] = sorted(existing)
+            new_meta_str = json.dumps(meta, ensure_ascii=False)
+            content = content[:meta_match.start()] + f"<!-- AGENT_META\n{new_meta_str}\nAGENT_META -->" + content[meta_match.end():]
+            msg.content = content
+            await db.commit()
+        except (json.JSONDecodeError, Exception):
+            pass
+
+    return {"status": "ok"}
 
 
 # ── Proposal application logic ────────────────────────────────────────

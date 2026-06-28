@@ -6,14 +6,13 @@ import {
     FiChevronDown, FiChevronRight, FiZap, FiLoader,
     FiFilePlus, FiEdit3, FiTrash2, FiToggleLeft, FiToggleRight,
     FiPlus, FiMessageSquare, FiEdit2, FiImage, FiEye, FiColumns,
-    FiFolder, FiFile,
+    FiFile,
 } from 'react-icons/fi';
 import ReactMarkdown from 'react-markdown';
 import { markdownComponents, remarkPlugins, rehypePlugins } from '@/lib/markdownComponents';
-import { runAgentStream, applyAgentProposals, createChatSession, getChatSession, deleteChatSession, updateChatSession, getNote } from '@/lib/api';
+import { runAgentStream, applyAgentProposals, markProposalsApplied, createChatSession, getChatSession, deleteChatSession, updateChatSession, getNote } from '@/lib/api';
 import type { AgentStreamEvent } from '@/lib/api';
 import { useStore } from '@/lib/store';
-import FolderTreeComponent from './FolderTree';
 import type { AgentStep, AgentProposal, ChatMessage, ChatSessionDetail, Note } from '@/lib/types';
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -24,6 +23,7 @@ interface ParsedAgentMessage {
     content: string;
     steps?: AgentStep[];
     proposals?: AgentProposal[];
+    appliedIndices?: number[];
     created_at: string;
 }
 
@@ -37,18 +37,24 @@ function parseAgentMessage(msg: ChatMessage): ParsedAgentMessage {
     let content = msg.content;
     let steps: AgentStep[] | undefined;
     let proposals: AgentProposal[] | undefined;
+    let appliedIndices: number[] | undefined;
     const metaMatch = content.match(/<!-- AGENT_META\n([\s\S]*?)\nAGENT_META -->/);
     if (metaMatch) {
         content = content.replace(metaMatch[0], '').trim();
-        try { const meta = JSON.parse(metaMatch[1]); steps = meta.steps; proposals = meta.proposals; } catch { }
+        try {
+            const meta = JSON.parse(metaMatch[1]);
+            steps = meta.steps;
+            proposals = meta.proposals;
+            appliedIndices = meta.applied_indices;
+        } catch { }
     }
-    return { id: msg.id, role: msg.role, content, steps, proposals, created_at: msg.created_at };
+    return { id: msg.id, role: msg.role, content, steps, proposals, appliedIndices, created_at: msg.created_at };
 }
 
 // ── Main Component ───────────────────────────────────────────────────
 
 export default function AgentView() {
-    const { loadFolderTree, folderTree, agentSessions, loadAgentSessions, activeAgentSession, setActiveAgentSession } = useStore();
+    const { loadFolderTree, agentSessions, loadAgentSessions, activeAgentSession, setActiveAgentSession, agentViewingNote, setAgentViewingNote } = useStore();
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
     const [autoAccept, setAutoAccept] = useState(false);
@@ -64,9 +70,8 @@ export default function AgentView() {
     const [pendingImages, setPendingImages] = useState<File[]>([]);
 
     // Left panel: note viewer
-    const [viewingNote, setViewingNote] = useState<Note | null>(null);
     const [diffData, setDiffData] = useState<DiffViewData | null>(null);
-    const [leftMode, setLeftMode] = useState<'tree' | 'note' | 'diff'>('tree');
+    const [leftMode, setLeftMode] = useState<'note' | 'diff'>('note');
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -74,10 +79,31 @@ export default function AgentView() {
 
     useEffect(() => { loadAgentSessions(); loadFolderTree(); }, [loadAgentSessions, loadFolderTree]);
 
+    // When a note is opened from the sidebar explorer, switch to note view
     useEffect(() => {
-        if (activeAgentSession) setParsedMessages(activeAgentSession.messages.map(parseAgentMessage));
-        else setParsedMessages([]);
-        setAppliedProposals(new Set());
+        if (agentViewingNote) {
+            setLeftMode('note');
+        }
+    }, [agentViewingNote]);
+
+    useEffect(() => {
+        if (activeAgentSession) {
+            const parsed = activeAgentSession.messages.map(parseAgentMessage);
+            setParsedMessages(parsed);
+            // Restore applied state from persisted metadata
+            const restored = new Set<string>();
+            for (const msg of parsed) {
+                if (msg.appliedIndices) {
+                    for (const idx of msg.appliedIndices) {
+                        restored.add(`${msg.id}-${idx}`);
+                    }
+                }
+            }
+            setAppliedProposals(restored);
+        } else {
+            setParsedMessages([]);
+            setAppliedProposals(new Set());
+        }
         setRejectedProposals(new Set());
     }, [activeAgentSession]);
 
@@ -187,23 +213,37 @@ export default function AgentView() {
     // ── Proposal actions ─────────────────────────────────────────
 
     const handleAcceptProposal = async (msgId: string, idx: number, proposal: AgentProposal) => {
-        try { await applyAgentProposals([proposal]); setAppliedProposals((p) => { const n = new Set(p); n.add(`${msgId}-${idx}`); return n; }); loadFolderTree(); } catch (e) { console.error(e); }
+        try {
+            await applyAgentProposals([proposal]);
+            setAppliedProposals((p) => { const n = new Set(p); n.add(`${msgId}-${idx}`); return n; });
+            // Persist applied status to backend
+            markProposalsApplied(msgId, [idx]).catch(() => { });
+            loadFolderTree();
+        } catch (e) { console.error(e); }
     };
     const handleRejectProposal = (msgId: string, idx: number) => { setRejectedProposals((p) => { const n = new Set(p); n.add(`${msgId}-${idx}`); return n; }); };
     const handleAcceptAll = async (msgId: string, proposals: AgentProposal[]) => {
-        const pending = proposals.filter((_, i) => !appliedProposals.has(`${msgId}-${i}`) && !rejectedProposals.has(`${msgId}-${i}`));
+        const pendingIndices = proposals.map((_, i) => i).filter(i => !appliedProposals.has(`${msgId}-${i}`) && !rejectedProposals.has(`${msgId}-${i}`));
+        const pending = pendingIndices.map(i => proposals[i]);
         if (!pending.length) return;
-        try { await applyAgentProposals(pending); const keys = proposals.map((_, i) => `${msgId}-${i}`).filter(k => !appliedProposals.has(k) && !rejectedProposals.has(k)); setAppliedProposals((p) => { const n = new Set(p); keys.forEach(k => n.add(k)); return n; }); loadFolderTree(); } catch (e) { console.error(e); }
+        try {
+            await applyAgentProposals(pending);
+            const keys = pendingIndices.map(i => `${msgId}-${i}`);
+            setAppliedProposals((p) => { const n = new Set(p); keys.forEach(k => n.add(k)); return n; });
+            // Persist applied status to backend
+            markProposalsApplied(msgId, pendingIndices).catch(() => { });
+            loadFolderTree();
+        } catch (e) { console.error(e); }
     };
 
     // ── Left panel actions ───────────────────────────────────────
 
     const openNoteInLeft = async (noteId: string) => {
-        try { const note = await getNote(noteId); setViewingNote(note); setLeftMode('note'); setDiffData(null); } catch (e) { console.error(e); }
+        try { const note = await getNote(noteId); setAgentViewingNote(note); setLeftMode('note'); setDiffData(null); } catch (e) { console.error(e); }
     };
 
     const openDiffInLeft = (proposal: AgentProposal, msgId: string, idx: number) => {
-        setDiffData({ proposal, msgId, proposalIndex: idx }); setLeftMode('diff'); setViewingNote(null);
+        setDiffData({ proposal, msgId, proposalIndex: idx }); setLeftMode('diff');
     };
 
     // ── Render ───────────────────────────────────────────────────
@@ -227,47 +267,49 @@ export default function AgentView() {
                 </div>
             </div>
 
-            {/* Split layout: LEFT (Explorer/Note/Diff) | RIGHT (Chat) */}
+            {/* Split layout: LEFT (Note/Diff) | RIGHT (Chat) */}
             <div className="flex-1 flex overflow-hidden">
 
-                {/* LEFT PANEL: Folder Tree / Note Viewer / Diff */}
+                {/* LEFT PANEL: Note Viewer / Diff — connected to sidebar explorer */}
                 <div className="w-[45%] border-r border-dark-800 flex flex-col overflow-hidden">
                     {/* Left panel tabs */}
                     <div className="flex items-center border-b border-dark-800 px-2 py-1.5 gap-1 flex-shrink-0">
-                        <button onClick={() => { setLeftMode('tree'); }} className={`px-2.5 py-1 text-xs rounded-md transition-colors ${leftMode === 'tree' ? 'bg-dark-700 text-white' : 'text-dark-500 hover:text-white'}`}>
-                            <FiFolder className="w-3 h-3 inline mr-1" />Explorer
-                        </button>
-                        {viewingNote && (
-                            <button onClick={() => setLeftMode('note')} className={`px-2.5 py-1 text-xs rounded-md transition-colors flex items-center gap-1 max-w-[150px] ${leftMode === 'note' ? 'bg-dark-700 text-white' : 'text-dark-500 hover:text-white'}`}>
-                                <FiFile className="w-3 h-3 flex-shrink-0" /><span className="truncate">{viewingNote.title}</span>
-                                <button onClick={(e) => { e.stopPropagation(); setViewingNote(null); if (leftMode === 'note') setLeftMode('tree'); }} className="ml-1 hover:text-red-400"><FiX className="w-2.5 h-2.5" /></button>
+                        {agentViewingNote && (
+                            <button onClick={() => setLeftMode('note')} className={`px-2.5 py-1 text-xs rounded-md transition-colors flex items-center gap-1 max-w-[200px] ${leftMode === 'note' ? 'bg-dark-700 text-white' : 'text-dark-500 hover:text-white'}`}>
+                                <FiFile className="w-3 h-3 flex-shrink-0" /><span className="truncate">{agentViewingNote.title}</span>
+                                <button onClick={(e) => { e.stopPropagation(); setAgentViewingNote(null); }} className="ml-1 hover:text-red-400"><FiX className="w-2.5 h-2.5" /></button>
                             </button>
                         )}
                         {diffData && (
                             <button onClick={() => setLeftMode('diff')} className={`px-2.5 py-1 text-xs rounded-md transition-colors flex items-center gap-1 ${leftMode === 'diff' ? 'bg-amber-600/20 text-amber-400' : 'text-dark-500 hover:text-white'}`}>
                                 <FiColumns className="w-3 h-3" />Diff
-                                <button onClick={(e) => { e.stopPropagation(); setDiffData(null); if (leftMode === 'diff') setLeftMode('tree'); }} className="ml-1 hover:text-red-400"><FiX className="w-2.5 h-2.5" /></button>
+                                <button onClick={(e) => { e.stopPropagation(); setDiffData(null); if (leftMode === 'diff') setLeftMode('note'); }} className="ml-1 hover:text-red-400"><FiX className="w-2.5 h-2.5" /></button>
                             </button>
+                        )}
+                        {!agentViewingNote && !diffData && (
+                            <span className="text-xs text-dark-600 px-2">← Notiz im Explorer öffnen</span>
                         )}
                     </div>
 
                     {/* Left panel content */}
                     <div className="flex-1 overflow-y-auto">
-                        {leftMode === 'tree' && (
-                            <div className="p-2">
-                                <AgentFolderTree folders={folderTree} onOpenNote={openNoteInLeft} />
-                            </div>
-                        )}
-                        {leftMode === 'note' && viewingNote && (
+                        {leftMode === 'note' && agentViewingNote && (
                             <div className="p-4">
-                                <h2 className="text-base font-semibold text-white mb-1">{viewingNote.title}</h2>
+                                <h2 className="text-base font-semibold text-white mb-1">{agentViewingNote.title}</h2>
                                 <div className="text-xs text-dark-500 mb-3 flex items-center gap-2">
-                                    {viewingNote.folder_path && <span>📁 {viewingNote.folder_path}</span>}
-                                    {viewingNote.tags?.length > 0 && <span>· {viewingNote.tags.map(t => t.name).join(', ')}</span>}
+                                    {agentViewingNote.folder_path && <span>📁 {agentViewingNote.folder_path}</span>}
+                                    {agentViewingNote.tags?.length > 0 && <span>· {agentViewingNote.tags.map((t: any) => t.name).join(', ')}</span>}
                                 </div>
                                 <div className="markdown-content text-sm">
-                                    <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>{viewingNote.content}</ReactMarkdown>
+                                    <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>{agentViewingNote.content}</ReactMarkdown>
                                 </div>
+                            </div>
+                        )}
+                        {leftMode === 'note' && !agentViewingNote && (
+                            <div className="flex flex-col items-center justify-center h-full text-dark-600 px-6 text-center">
+                                <FiFile className="w-8 h-8 mb-3 opacity-30" />
+                                <p className="text-sm">Klicke eine Notiz im Explorer an, um sie hier zu sehen.</p>
+                                <p className="text-xs mt-1 text-dark-700">Du kannst dann mit dem Agent darüber sprechen.</p>
                             </div>
                         )}
                         {leftMode === 'diff' && diffData && (
@@ -371,46 +413,6 @@ export default function AgentView() {
                     </div>
                 </div>
             </div>
-        </div>
-    );
-}
-
-// ── Folder Tree for Agent (opens notes in left panel instead of switching view) ──
-
-function AgentFolderTree({ folders, onOpenNote, level = 0 }: { folders: any[]; onOpenNote: (id: string) => void; level?: number }) {
-    const [expanded, setExpanded] = useState<Set<string>>(new Set());
-    const toggle = (id: string) => setExpanded((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
-
-    if (!folders.length && level === 0) return <p className="text-xs text-dark-600 px-2 py-4 text-center">Keine Ordner</p>;
-
-    return (
-        <div>
-            {folders.map((folder: any) => {
-                const isExp = expanded.has(folder.id);
-                const hasContent = folder.children?.length > 0 || folder.notes?.length > 0;
-                return (
-                    <div key={folder.id}>
-                        <div className="group flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm text-dark-400 hover:text-white hover:bg-dark-800 cursor-pointer" style={{ paddingLeft: `${level * 16 + 8}px` }} onClick={() => toggle(folder.id)}>
-                            {hasContent ? (isExp ? <FiChevronDown className="w-3 h-3" /> : <FiChevronRight className="w-3 h-3" />) : <span className="w-3" />}
-                            <FiFolder className="w-3.5 h-3.5 text-yellow-500" />
-                            <span className="truncate">{folder.name}</span>
-                        </div>
-                        {isExp && (
-                            <>
-                                {folder.notes?.map((note: any) => (
-                                    <div key={note.id} onClick={() => onOpenNote(note.id)}
-                                        className="flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm text-dark-400 hover:text-white hover:bg-dark-800 cursor-pointer"
-                                        style={{ paddingLeft: `${(level + 1) * 16 + 24}px` }}>
-                                        <FiFile className="w-3.5 h-3.5 text-brain-400" />
-                                        <span className="truncate">{note.title}</span>
-                                    </div>
-                                ))}
-                                <AgentFolderTree folders={folder.children || []} onOpenNote={onOpenNote} level={level + 1} />
-                            </>
-                        )}
-                    </div>
-                );
-            })}
         </div>
     );
 }

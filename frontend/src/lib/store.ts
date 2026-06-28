@@ -22,6 +22,10 @@ interface AppState {
   pendingEdit: boolean;
   setPendingEdit: (pending: boolean) => void;
 
+  // Agent left panel
+  agentViewingNote: Note | null;
+  setAgentViewingNote: (note: Note | null) => void;
+
   // Chat
   notesSessions: ChatSession[];
   qaSessions: ChatSession[];
@@ -86,6 +90,10 @@ export const useStore = create<AppState>((set, get) => ({
   },
   pendingEdit: false,
   setPendingEdit: (pending) => set({ pendingEdit: pending }),
+
+  // Agent left panel
+  agentViewingNote: null,
+  setAgentViewingNote: (note) => set({ agentViewingNote: note }),
 
   // Chat
   notesSessions: [],
