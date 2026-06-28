@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, memo, useCallback } from 'react';
 import {
     FiSend, FiCheck, FiX, FiCheckCircle, FiCpu,
     FiChevronDown, FiChevronRight, FiZap, FiLoader,
@@ -210,41 +210,45 @@ export default function AgentView() {
         } finally { setLoading(false); }
     };
 
-    // ── Proposal actions ─────────────────────────────────────────
+    // ── Proposal actions (memoized to prevent re-renders) ──────
 
-    const handleAcceptProposal = async (msgId: string, idx: number, proposal: AgentProposal) => {
+    const handleAcceptProposal = useCallback(async (msgId: string, idx: number, proposal: AgentProposal) => {
         try {
             await applyAgentProposals([proposal]);
             setAppliedProposals((p) => { const n = new Set(p); n.add(`${msgId}-${idx}`); return n; });
-            // Persist applied status to backend
             markProposalsApplied(msgId, [idx]).catch(() => { });
             loadFolderTree();
         } catch (e) { console.error(e); }
-    };
-    const handleRejectProposal = (msgId: string, idx: number) => { setRejectedProposals((p) => { const n = new Set(p); n.add(`${msgId}-${idx}`); return n; }); };
-    const handleAcceptAll = async (msgId: string, proposals: AgentProposal[]) => {
-        const pendingIndices = proposals.map((_, i) => i).filter(i => !appliedProposals.has(`${msgId}-${i}`) && !rejectedProposals.has(`${msgId}-${i}`));
-        const pending = pendingIndices.map(i => proposals[i]);
-        if (!pending.length) return;
-        try {
-            await applyAgentProposals(pending);
-            const keys = pendingIndices.map(i => `${msgId}-${i}`);
-            setAppliedProposals((p) => { const n = new Set(p); keys.forEach(k => n.add(k)); return n; });
-            // Persist applied status to backend
-            markProposalsApplied(msgId, pendingIndices).catch(() => { });
-            loadFolderTree();
-        } catch (e) { console.error(e); }
-    };
+    }, [loadFolderTree]);
+
+    const handleRejectProposal = useCallback((msgId: string, idx: number) => {
+        setRejectedProposals((p) => { const n = new Set(p); n.add(`${msgId}-${idx}`); return n; });
+    }, []);
+
+    const handleAcceptAll = useCallback(async (msgId: string, proposals: AgentProposal[]) => {
+        setAppliedProposals((currentApplied) => {
+            const pendingIndices = proposals.map((_, i) => i).filter(i => !currentApplied.has(`${msgId}-${i}`));
+            if (pendingIndices.length === 0) return currentApplied;
+            const pending = pendingIndices.map(i => proposals[i]);
+            applyAgentProposals(pending).then(() => {
+                markProposalsApplied(msgId, pendingIndices).catch(() => { });
+                loadFolderTree();
+            }).catch(console.error);
+            const n = new Set(currentApplied);
+            pendingIndices.forEach(i => n.add(`${msgId}-${i}`));
+            return n;
+        });
+    }, [loadFolderTree]);
 
     // ── Left panel actions ───────────────────────────────────────
 
-    const openNoteInLeft = async (noteId: string) => {
+    const openNoteInLeft = useCallback(async (noteId: string) => {
         try { const note = await getNote(noteId); setAgentViewingNote(note); setLeftMode('note'); setDiffData(null); } catch (e) { console.error(e); }
-    };
+    }, [setAgentViewingNote]);
 
-    const openDiffInLeft = (proposal: AgentProposal, msgId: string, idx: number) => {
+    const openDiffInLeft = useCallback((proposal: AgentProposal, msgId: string, idx: number) => {
         setDiffData({ proposal, msgId, proposalIndex: idx }); setLeftMode('diff');
-    };
+    }, []);
 
     // ── Render ───────────────────────────────────────────────────
 
@@ -451,7 +455,7 @@ function ThinkingIndicator() {
     );
 }
 
-function MessageBubble({ msg, expandedSteps, setExpandedSteps, appliedProposals, rejectedProposals, onAcceptProposal, onRejectProposal, onAcceptAll, onOpenDiff, onOpenNote }: {
+const MessageBubble = memo(function MessageBubble({ msg, expandedSteps, setExpandedSteps, appliedProposals, rejectedProposals, onAcceptProposal, onRejectProposal, onAcceptAll, onOpenDiff, onOpenNote }: {
     msg: ParsedAgentMessage;
     expandedSteps: Set<string>; setExpandedSteps: React.Dispatch<React.SetStateAction<Set<string>>>;
     appliedProposals: Set<string>; rejectedProposals: Set<string>;
@@ -502,7 +506,7 @@ function MessageBubble({ msg, expandedSteps, setExpandedSteps, appliedProposals,
             </div>
         </div>
     );
-}
+});
 
 function ProposalCard({ proposal, msgId, index, isApplied, isRejected, onAccept, onReject, onOpenDiff, onOpenNote }: {
     proposal: AgentProposal; msgId: string; index: number; isApplied: boolean; isRejected: boolean;
