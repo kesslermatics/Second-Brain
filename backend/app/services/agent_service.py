@@ -457,38 +457,72 @@ async def run_agent_stream(
     max_tool_rounds = 5  # prevent infinite loops
 
     for round_num in range(max_tool_rounds + 1):
-        # Stream the response — collect ALL parts for thought signature preservation
+        # For tool rounds (not the last), use non-streaming to avoid thought_signature issues
+        # For the final response (no function calls), stream it
         full_text_parts = []
         function_calls = []
-        all_response_parts = []  # Preserve complete parts including thought signatures
 
-        async for chunk in await client.aio.models.generate_content_stream(
-            model=AGENT_MODEL,
-            contents=contents,
-            config=config,
-        ):
-            # Collect all parts from candidates for faithful multi-turn replay
-            if chunk.candidates:
-                for candidate in chunk.candidates:
-                    if candidate.content and candidate.content.parts:
-                        for part in candidate.content.parts:
-                            all_response_parts.append(part)
+        if round_num > 0:
+            # After first round, we know we're in tool-calling mode
+            # Use non-streaming to get complete response with all signatures intact
+            response = await client.aio.models.generate_content(
+                model=AGENT_MODEL,
+                contents=contents,
+                config=config,
+            )
 
-            # Use the chunk-level accessors for streaming UI
-            fc_list = chunk.function_calls
-            if fc_list:
-                function_calls.extend(fc_list)
-            else:
-                # Only try to get text when there are no function calls in this chunk
-                try:
-                    text = chunk.text
-                    if text:
-                        full_text_parts.append(text)
-                        yield {"type": "chunk", "content": text}
-                except Exception:
-                    pass
+            # Extract function calls and text from complete response
+            if response.candidates and response.candidates[0].content:
+                candidate_content = response.candidates[0].content
+                # Add complete model response to history (preserves signatures)
+                contents.append(candidate_content)
 
-        # If no function calls, we're done
+                for part in candidate_content.parts:
+                    if hasattr(part, 'function_call') and part.function_call:
+                        function_calls.append(part.function_call)
+                    elif hasattr(part, 'text') and part.text:
+                        if not (hasattr(part, 'thought') and part.thought):
+                            full_text_parts.append(part.text)
+
+            # Stream text that was generated
+            full_text = "".join(full_text_parts)
+            if full_text:
+                yield {"type": "chunk", "content": full_text}
+
+        else:
+            # First round: stream the response for immediate UX feedback
+            all_response_parts = []
+
+            async for chunk in await client.aio.models.generate_content_stream(
+                model=AGENT_MODEL,
+                contents=contents,
+                config=config,
+            ):
+                # Collect all parts for replay
+                if chunk.candidates:
+                    for candidate in chunk.candidates:
+                        if candidate.content and candidate.content.parts:
+                            for part in candidate.content.parts:
+                                all_response_parts.append(part)
+
+                # Stream text to UI
+                fc_list = chunk.function_calls
+                if fc_list:
+                    function_calls.extend(fc_list)
+                else:
+                    try:
+                        text = chunk.text
+                        if text:
+                            full_text_parts.append(text)
+                            yield {"type": "chunk", "content": text}
+                    except Exception:
+                        pass
+
+            # Add model response to contents (with all signatures)
+            if all_response_parts:
+                contents.append(types.Content(role="model", parts=all_response_parts))
+
+        # If no function calls, we're done — response already streamed
         if not function_calls:
             break
 
@@ -496,18 +530,8 @@ async def run_agent_stream(
         if round_num >= max_tool_rounds:
             break
 
-        # Add the model's COMPLETE response to contents (preserves thought signatures)
-        if all_response_parts:
-            contents.append(types.Content(role="model", parts=all_response_parts))
-        else:
-            # Fallback: manually build parts if streaming didn't yield them properly
-            model_parts = []
-            full_response_text = "".join(full_text_parts)
-            if full_response_text:
-                model_parts.append(types.Part.from_text(text=full_response_text))
-            for fc in function_calls:
-                model_parts.append(types.Part(function_call=fc))
-            contents.append(types.Content(role="model", parts=model_parts))
+        # For round 0, model response already added to contents above
+        # For round > 0, model response already added via candidate_content
 
         # Execute each function call and build function responses
         function_response_parts = []
@@ -536,7 +560,6 @@ async def run_agent_stream(
                 proposal = result["proposal"]
                 proposals.append(proposal)
                 yield {"type": "proposal", "proposal": proposal}
-                # Tell the model the proposal was created
                 result = {"status": "success", "message": f"Proposal erstellt: {proposal['type']} — wird dem Benutzer zur Bestätigung angezeigt."}
 
             # Summarize result for streaming UI
