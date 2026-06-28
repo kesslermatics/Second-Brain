@@ -5,11 +5,11 @@ import {
     FiSend, FiCheck, FiX, FiCheckCircle, FiCpu,
     FiChevronDown, FiChevronRight, FiZap, FiLoader,
     FiFilePlus, FiEdit3, FiTrash2, FiToggleLeft, FiToggleRight,
-    FiPlus, FiMessageSquare,
+    FiPlus, FiMessageSquare, FiEdit2,
 } from 'react-icons/fi';
 import ReactMarkdown from 'react-markdown';
 import { markdownComponents, remarkPlugins, rehypePlugins } from '@/lib/markdownComponents';
-import { runAgent, applyAgentProposals, createChatSession, getChatSession, deleteChatSession } from '@/lib/api';
+import { runAgent, applyAgentProposals, createChatSession, getChatSession, deleteChatSession, updateChatSession } from '@/lib/api';
 import { useStore } from '@/lib/store';
 import type { AgentStep, AgentProposal, ChatMessage, ChatSessionDetail } from '@/lib/types';
 
@@ -50,6 +50,8 @@ export default function AgentView() {
     const [appliedProposals, setAppliedProposals] = useState<Set<string>>(new Set());
     const [rejectedProposals, setRejectedProposals] = useState<Set<string>>(new Set());
     const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
+    const [renamingSession, setRenamingSession] = useState<string | null>(null);
+    const [renameValue, setRenameValue] = useState('');
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -106,6 +108,18 @@ export default function AgentView() {
             if (activeAgentSession?.id === sessionId) {
                 setActiveAgentSession(null);
             }
+            await loadAgentSessions();
+        } catch (e) {
+            console.error(e);
+        }
+    };
+
+    const handleRenameSession = async (sessionId: string) => {
+        if (!renameValue.trim()) { setRenamingSession(null); return; }
+        try {
+            await updateChatSession(sessionId, renameValue.trim());
+            setRenamingSession(null);
+            setRenameValue('');
             await loadAgentSessions();
         } catch (e) {
             console.error(e);
@@ -270,13 +284,37 @@ export default function AgentView() {
                                     }`}
                             >
                                 <FiMessageSquare className="w-3.5 h-3.5 flex-shrink-0" />
-                                <span className="truncate flex-1">{s.title}</span>
-                                <button
-                                    onClick={(e) => handleDeleteSession(e, s.id)}
-                                    className="opacity-0 group-hover:opacity-100 p-1 hover:bg-dark-700 rounded"
-                                >
-                                    <FiTrash2 className="w-3 h-3 text-dark-500 hover:text-red-400" />
-                                </button>
+                                {renamingSession === s.id ? (
+                                    <input
+                                        type="text"
+                                        value={renameValue}
+                                        onChange={(e) => setRenameValue(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') handleRenameSession(s.id);
+                                            if (e.key === 'Escape') { setRenamingSession(null); setRenameValue(''); }
+                                        }}
+                                        onBlur={() => handleRenameSession(s.id)}
+                                        onClick={(e) => e.stopPropagation()}
+                                        className="flex-1 px-1 py-0 text-sm bg-dark-950 border border-rose-500 rounded text-white focus:outline-none min-w-0"
+                                        autoFocus
+                                    />
+                                ) : (
+                                    <span className="truncate flex-1">{s.title}</span>
+                                )}
+                                <div className="opacity-0 group-hover:opacity-100 flex gap-0.5">
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); setRenamingSession(s.id); setRenameValue(s.title); }}
+                                        className="p-1 hover:bg-dark-700 rounded"
+                                    >
+                                        <FiEdit2 className="w-3 h-3 text-dark-500 hover:text-blue-400" />
+                                    </button>
+                                    <button
+                                        onClick={(e) => handleDeleteSession(e, s.id)}
+                                        className="p-1 hover:bg-dark-700 rounded"
+                                    >
+                                        <FiTrash2 className="w-3 h-3 text-dark-500 hover:text-red-400" />
+                                    </button>
+                                </div>
                             </div>
                         ))}
                         {agentSessions.length === 0 && (
