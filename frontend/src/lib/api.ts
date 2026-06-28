@@ -638,6 +638,7 @@ export type AgentStreamEvent =
   | { type: 'tool_call'; content: string }
   | { type: 'tool_result'; content: string }
   | { type: 'proposal'; proposal: AgentProposal }
+  | { type: 'sources'; sources: { title: string; url: string }[] }
   | { type: 'done'; proposals: AgentProposal[]; steps: AgentStep[]; apply_result?: unknown; image_urls?: string[] };
 
 export const runAgentStream = async (

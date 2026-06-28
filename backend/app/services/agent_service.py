@@ -56,6 +56,8 @@ Du hast Zugriff auf alle Notizen und Bilder des Benutzers über Tools.
 
 5. **Immer informiert**: Nutze die Suchtools proaktiv um relevante bestehende Notizen zu finden. Halte dich thematisch STRIKT an das was gefragt wird.
 
+6. **Web-Recherche**: Du hast Zugriff auf Google Search. Nutze es wenn der Benutzer nach aktuellen Informationen fragt, etwas recherchiert haben will, oder du Fakten verifizieren möchtest. Die Quellen werden dem Benutzer automatisch angezeigt.
+
 6. **Ordnerstruktur-Intelligenz**: Analysiere die bestehende Struktur genau. Erstelle sinnvolle Unterordner. Nutze bestehende Ordner wenn sie passen.
 
 ## Antwortformat:
@@ -223,16 +225,19 @@ def _get_agent_tools() -> list:
         },
     )
 
-    return [types.Tool(function_declarations=[
-        search_notes,
-        read_note,
-        list_folders,
-        list_notes_in_folder,
-        search_images,
-        create_note,
-        update_note,
-        delete_note,
-    ])]
+    return [
+        types.Tool(function_declarations=[
+            search_notes,
+            read_note,
+            list_folders,
+            list_notes_in_folder,
+            search_images,
+            create_note,
+            update_note,
+            delete_note,
+        ]),
+        types.Tool(google_search=types.GoogleSearch()),
+    ]
 
 
 # ── Tool execution ────────────────────────────────────────────────────
@@ -516,6 +521,7 @@ async def run_agent_stream(
         else:
             # First round: stream the response for immediate UX feedback
             all_response_parts = []
+            last_candidate = None  # Track last candidate for grounding metadata
 
             async for chunk in await client.aio.models.generate_content_stream(
                 model=AGENT_MODEL,
@@ -525,6 +531,7 @@ async def run_agent_stream(
                 # Collect all parts for replay
                 if chunk.candidates:
                     for candidate in chunk.candidates:
+                        last_candidate = candidate  # Keep reference to last candidate
                         if candidate.content and candidate.content.parts:
                             for part in candidate.content.parts:
                                 all_response_parts.append(part)
@@ -548,6 +555,32 @@ async def run_agent_stream(
 
         # If no function calls, we're done — response already streamed
         if not function_calls:
+            # Extract grounding metadata (Google Search sources) if available
+            grounding_sources = []
+            try:
+                # Get the candidate to check for grounding
+                check_candidate = None
+                if round_num > 0 and response.candidates:
+                    check_candidate = response.candidates[0]
+                elif round_num == 0 and last_candidate:
+                    check_candidate = last_candidate
+
+                if check_candidate:
+                    gm = getattr(check_candidate, 'grounding_metadata', None)
+                    if gm:
+                        chunks = getattr(gm, 'grounding_chunks', None) or []
+                        for gc in chunks:
+                            web = getattr(gc, 'web', None)
+                            if web:
+                                grounding_sources.append({
+                                    "title": getattr(web, 'title', '') or '',
+                                    "url": getattr(web, 'uri', '') or '',
+                                })
+            except Exception:
+                pass
+
+            if grounding_sources:
+                yield {"type": "sources", "sources": grounding_sources}
             break
 
         # If we've exhausted rounds, break

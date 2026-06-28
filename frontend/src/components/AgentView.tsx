@@ -25,6 +25,7 @@ interface ParsedAgentMessage {
     proposals?: AgentProposal[];
     appliedIndices?: number[];
     attachments?: { name: string; type: string; url?: string }[];
+    sources?: { title: string; url: string }[];
     created_at: string;
 }
 
@@ -163,6 +164,7 @@ export default function AgentView() {
             let fullThought = '';
             const allSteps: AgentStep[] = [];
             const allProposals: AgentProposal[] = [];
+            let allSources: { title: string; url: string }[] = [];
 
             await runAgentStream(
                 session.id,
@@ -190,8 +192,10 @@ export default function AgentView() {
                         case 'proposal':
                             allProposals.push(event.proposal);
                             break;
+                        case 'sources':
+                            allSources = event.sources;
+                            break;
                         case 'done':
-                            // Final event — finalize the message
                             break;
                     }
                 },
@@ -208,6 +212,7 @@ export default function AgentView() {
                 content: fullContent,
                 steps: allSteps.length > 0 ? allSteps : undefined,
                 proposals: allProposals.length > 0 ? allProposals : undefined,
+                sources: allSources.length > 0 ? allSources : undefined,
                 created_at: new Date().toISOString(),
             }]);
 
@@ -545,6 +550,17 @@ const MessageBubble = memo(function MessageBubble({ msg, expandedSteps, setExpan
                 {msg.content && (
                     <div className="bg-dark-800/50 border border-dark-700 rounded-2xl px-3 py-2.5">
                         <div className="markdown-content text-sm text-dark-200"><ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>{msg.content}</ReactMarkdown></div>
+                    </div>
+                )}
+
+                {msg.sources && msg.sources.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 px-1">
+                        {msg.sources.map((src, i) => (
+                            <a key={i} href={src.url} target="_blank" rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-600/10 border border-blue-600/20 rounded-full text-[11px] text-blue-400 hover:bg-blue-600/20 hover:text-blue-300 transition-colors">
+                                🌐 {src.title || new URL(src.url).hostname}
+                            </a>
+                        ))}
                     </div>
                 )}
 
