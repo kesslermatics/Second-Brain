@@ -22,7 +22,6 @@ from app.models import User, Note, Folder, Tag, NoteVersion, note_tags, ChatSess
 from app.schemas import ChatMessageResponse
 from app.services.agent_service import run_agent, run_agent_stream
 from app.services.ai_service import generate_chat_title
-from app.services.vision_service import describe_image, describe_image_from_bytes
 from app.services.vector_service import upsert_note_embedding, delete_note_embedding
 from app.config import get_settings
 
@@ -30,6 +29,10 @@ router = APIRouter(prefix="/agent", tags=["agent"])
 
 UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "uploads"))
 ALLOWED_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+ALLOWED_DOCUMENT_TYPES = {"application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                          "application/msword", "text/plain", "text/markdown", "text/csv",
+                          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+ALLOWED_FILE_TYPES = ALLOWED_IMAGE_TYPES | ALLOWED_DOCUMENT_TYPES
 
 
 class AgentMessageRequest(BaseModel):
@@ -47,6 +50,85 @@ def _build_url(user_id: str, filename: str) -> str:
     return f"{backend_url}/uploads/{user_id}/{filename}"
 
 
+async def _process_uploaded_files(
+    files: List[UploadFile],
+    current_user: User,
+    db: AsyncSession,
+) -> tuple[list[dict], list[str]]:
+    """Process uploaded files (images + documents). Returns (file_descriptions, file_urls)."""
+    from app.services.vision_service import describe_image_from_bytes, analyze_document
+
+    file_descriptions = []
+    file_urls = []
+
+    if not files:
+        return file_descriptions, file_urls
+
+    for uploaded_file in files:
+        if not uploaded_file.content_type or uploaded_file.content_type not in ALLOWED_FILE_TYPES:
+            continue
+        file_bytes = await uploaded_file.read()
+        if len(file_bytes) == 0:
+            continue
+
+        # Save to disk
+        user_dir = UPLOAD_DIR / str(current_user.id)
+        user_dir.mkdir(parents=True, exist_ok=True)
+
+        ext_map = {
+            "image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp",
+            "application/pdf": ".pdf", "text/plain": ".txt", "text/markdown": ".md", "text/csv": ".csv",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+            "application/msword": ".doc",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+        }
+        ext = ext_map.get(uploaded_file.content_type, ".bin")
+        unique_name = f"{_uuid.uuid4().hex}{ext}"
+        file_path = user_dir / unique_name
+        with open(file_path, "wb") as f:
+            f.write(file_bytes)
+
+        file_url = _build_url(str(current_user.id), unique_name)
+        file_urls.append(file_url)
+
+        # Save to DB (using Image model for all file types)
+        file_record = Image(
+            original_filename=uploaded_file.filename or f"file{ext}",
+            stored_filename=unique_name,
+            content_type=uploaded_file.content_type,
+            file_size=len(file_bytes),
+            file_path=str(file_path),
+            user_id=current_user.id,
+        )
+        db.add(file_record)
+        await db.flush()
+        await db.refresh(file_record)
+
+        # Analyze content based on file type
+        is_image = uploaded_file.content_type in ALLOWED_IMAGE_TYPES
+        try:
+            if is_image:
+                description = await describe_image_from_bytes(file_bytes, uploaded_file.content_type)
+            else:
+                description = await analyze_document(file_bytes, uploaded_file.content_type, uploaded_file.filename or unique_name)
+            file_record.description = description
+            file_record.embedded = True
+        except Exception as e:
+            description = f"(Datei konnte nicht analysiert werden: {str(e)[:100]})"
+
+        file_descriptions.append({
+            "filename": uploaded_file.filename or unique_name,
+            "url": file_url,
+            "description": description,
+            "file_id": str(file_record.id),
+            "type": "image" if is_image else "document",
+            "content_type": uploaded_file.content_type,
+            "size": len(file_bytes),
+        })
+
+    return file_descriptions, file_urls
+
+
 @router.post("/sessions/{session_id}/messages")
 async def agent_send_message(
     session_id: UUID,
@@ -54,13 +136,14 @@ async def agent_send_message(
     content: str = Form(...),
     auto_accept: bool = Form(False),
     images: List[UploadFile] = File(None),
+    files: List[UploadFile] = File(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
     Send a message to the agent within a session.
-    Supports multipart form data with optional image uploads.
-    Images are analyzed with Vision AI and their descriptions are added to context.
+    Supports multipart form data with optional file uploads (images, PDFs, documents).
+    Files are analyzed with AI and their descriptions are added to context.
     """
     # Verify session
     session = await db.get(ChatSession, session_id)
@@ -69,71 +152,26 @@ async def agent_send_message(
     if session.session_type != "agent":
         raise HTTPException(status_code=400, detail="Not an agent session")
 
-    # Process images if uploaded
-    image_descriptions = []
-    image_urls = []
+    # Merge images and files fields (backwards compat + new field)
+    all_files = []
     if images:
-        for img_file in images:
-            if not img_file.content_type or img_file.content_type not in ALLOWED_IMAGE_TYPES:
-                continue
-            img_bytes = await img_file.read()
-            if len(img_bytes) == 0:
-                continue
+        all_files.extend(images)
+    if files:
+        all_files.extend(files)
 
-            # Save to disk
-            user_dir = UPLOAD_DIR / str(current_user.id)
-            user_dir.mkdir(parents=True, exist_ok=True)
-            ext_map = {"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp"}
-            ext = ext_map.get(img_file.content_type, ".png")
-            unique_name = f"{_uuid.uuid4().hex}{ext}"
-            file_path = user_dir / unique_name
-            with open(file_path, "wb") as f:
-                f.write(img_bytes)
+    # Process all uploaded files
+    file_descriptions, file_urls = await _process_uploaded_files(all_files, current_user, db)
 
-            file_url = _build_url(str(current_user.id), unique_name)
-            image_urls.append(file_url)
-
-            # Save to DB
-            img_record = Image(
-                original_filename=img_file.filename or f"pasted{ext}",
-                stored_filename=unique_name,
-                content_type=img_file.content_type,
-                file_size=len(img_bytes),
-                file_path=str(file_path),
-                user_id=current_user.id,
-            )
-            db.add(img_record)
-            await db.flush()
-            await db.refresh(img_record)
-
-            # Analyze with Vision
-            try:
-                description = await describe_image_from_bytes(img_bytes, img_file.content_type)
-                img_record.description = description
-                img_record.embedded = True
-                image_descriptions.append({
-                    "filename": img_file.filename or unique_name,
-                    "url": file_url,
-                    "description": description,
-                    "image_id": str(img_record.id),
-                })
-            except Exception as e:
-                image_descriptions.append({
-                    "filename": img_file.filename or unique_name,
-                    "url": file_url,
-                    "description": f"(Bild konnte nicht analysiert werden: {str(e)[:100]})",
-                    "image_id": str(img_record.id),
-                })
-
-    # Build the user message content (include image info if present)
+    # Build the user message content (include file info if present)
     user_content = content
-    if image_descriptions:
-        img_context = "\n\n---\n**Angehängte Bilder:**\n"
-        for desc in image_descriptions:
-            img_context += f"\n📷 **{desc['filename']}**\n"
-            img_context += f"Beschreibung: {desc['description']}\n"
-            img_context += f"URL: {desc['url']}\n"
-        user_content += img_context
+    if file_descriptions:
+        file_context = "\n\n---\n**Angehängte Dateien:**\n"
+        for desc in file_descriptions:
+            icon = "📷" if desc["type"] == "image" else "📄"
+            file_context += f"\n{icon} **{desc['filename']}**\n"
+            file_context += f"Beschreibung: {desc['description']}\n"
+            file_context += f"URL: {desc['url']}\n"
+        user_content += file_context
 
     # Save user message
     user_msg = ChatMessage(
@@ -160,7 +198,7 @@ async def agent_send_message(
         db=db,
         chat_history=chat_history[:-1],
         auto_accept=auto_accept,
-        image_context=image_descriptions if image_descriptions else None,
+        image_context=file_descriptions if file_descriptions else None,
     )
 
     # Build the assistant message content
@@ -224,7 +262,7 @@ async def agent_send_message(
         "steps": steps,
         "proposals": proposals,
         "apply_result": apply_result,
-        "image_urls": image_urls,
+        "image_urls": file_urls,
     }
 
 
@@ -235,12 +273,14 @@ async def agent_stream_message(
     content: str = Form(...),
     auto_accept: bool = Form(False),
     images: List[UploadFile] = File(None),
+    files: List[UploadFile] = File(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
     Send a message to the agent and stream the response via SSE.
     Streams thinking, tool calls, text chunks, and proposals in real-time.
+    Supports all file types: images, PDFs, documents.
     """
     # Verify session
     session = await db.get(ChatSession, session_id)
@@ -249,68 +289,26 @@ async def agent_stream_message(
     if session.session_type != "agent":
         raise HTTPException(status_code=400, detail="Not an agent session")
 
-    # Process images if uploaded
-    image_descriptions = []
-    image_urls = []
+    # Merge images and files fields (backwards compat + new field)
+    all_files = []
     if images:
-        for img_file in images:
-            if not img_file.content_type or img_file.content_type not in ALLOWED_IMAGE_TYPES:
-                continue
-            img_bytes = await img_file.read()
-            if len(img_bytes) == 0:
-                continue
+        all_files.extend(images)
+    if files:
+        all_files.extend(files)
 
-            user_dir = UPLOAD_DIR / str(current_user.id)
-            user_dir.mkdir(parents=True, exist_ok=True)
-            ext_map = {"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp"}
-            ext = ext_map.get(img_file.content_type, ".png")
-            unique_name = f"{_uuid.uuid4().hex}{ext}"
-            file_path = user_dir / unique_name
-            with open(file_path, "wb") as f:
-                f.write(img_bytes)
-
-            file_url = _build_url(str(current_user.id), unique_name)
-            image_urls.append(file_url)
-
-            img_record = Image(
-                original_filename=img_file.filename or f"pasted{ext}",
-                stored_filename=unique_name,
-                content_type=img_file.content_type,
-                file_size=len(img_bytes),
-                file_path=str(file_path),
-                user_id=current_user.id,
-            )
-            db.add(img_record)
-            await db.flush()
-            await db.refresh(img_record)
-
-            try:
-                description = await describe_image_from_bytes(img_bytes, img_file.content_type)
-                img_record.description = description
-                img_record.embedded = True
-                image_descriptions.append({
-                    "filename": img_file.filename or unique_name,
-                    "url": file_url,
-                    "description": description,
-                    "image_id": str(img_record.id),
-                })
-            except Exception as e:
-                image_descriptions.append({
-                    "filename": img_file.filename or unique_name,
-                    "url": file_url,
-                    "description": f"(Bild konnte nicht analysiert werden: {str(e)[:100]})",
-                    "image_id": str(img_record.id),
-                })
+    # Process all uploaded files
+    file_descriptions, file_urls = await _process_uploaded_files(all_files, current_user, db)
 
     # Build user message content
     user_content = content
-    if image_descriptions:
-        img_context = "\n\n---\n**Angehängte Bilder:**\n"
-        for desc in image_descriptions:
-            img_context += f"\n📷 **{desc['filename']}**\n"
-            img_context += f"Beschreibung: {desc['description']}\n"
-            img_context += f"URL: {desc['url']}\n"
-        user_content += img_context
+    if file_descriptions:
+        file_context = "\n\n---\n**Angehängte Dateien:**\n"
+        for desc in file_descriptions:
+            icon = "📷" if desc["type"] == "image" else "📄"
+            file_context += f"\n{icon} **{desc['filename']}**\n"
+            file_context += f"Beschreibung: {desc['description']}\n"
+            file_context += f"URL: {desc['url']}\n"
+        user_content += file_context
 
     # Save user message
     user_msg = ChatMessage(session_id=session_id, role="user", content=user_content)
@@ -340,7 +338,7 @@ async def agent_stream_message(
             db=db,
             chat_history=chat_history[:-1],
             auto_accept=auto_accept,
-            image_context=image_descriptions if image_descriptions else None,
+            image_context=file_descriptions if file_descriptions else None,
         ):
             event_type = event.get("type")
 
@@ -420,7 +418,7 @@ async def agent_stream_message(
             "proposals": all_proposals,
             "steps": all_steps,
             "apply_result": apply_result,
-            "image_urls": image_urls,
+            "image_urls": file_urls,
         }, ensure_ascii=False)
         yield f"data: {done_data}\n\n"
 
@@ -542,6 +540,7 @@ async def _apply_create(p: dict, user_id: UUID, db: AsyncSession, background_tas
     title = p.get("title", "Neue Notiz")
     content = p.get("content", "")
     tag_names = p.get("tags", [])
+    attach_file_ids = p.get("attach_file_ids", [])
 
     folder = await _ensure_folder_path(folder_path, user_id, db)
     note = Note(title=title, content=content, note_type="text", folder_id=folder.id, user_id=user_id)
@@ -552,6 +551,17 @@ async def _apply_create(p: dict, user_id: UUID, db: AsyncSession, background_tas
     for tag_name in tag_names:
         tag = await _get_or_create_tag(tag_name, user_id, db)
         note.tags.append(tag)
+
+    # Link attached files to this note and folder
+    for file_id in attach_file_ids:
+        try:
+            file_record = await db.get(Image, UUID(file_id))
+            if file_record and file_record.user_id == user_id:
+                file_record.note_id = note.id
+                file_record.folder_id = folder.id
+        except (ValueError, TypeError):
+            pass
+
     await db.flush()
 
     if background_tasks:

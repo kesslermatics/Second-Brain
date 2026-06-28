@@ -617,13 +617,13 @@ export default api;
 
 // ── Agentic Workspace ────────────────────────────────────────────────
 
-export const runAgent = async (sessionId: string, content: string, autoAccept: boolean = false, images?: File[]) => {
+export const runAgent = async (sessionId: string, content: string, autoAccept: boolean = false, files?: File[]) => {
   const formData = new FormData();
   formData.append('content', content);
   formData.append('auto_accept', String(autoAccept));
-  if (images && images.length > 0) {
-    for (const img of images) {
-      formData.append('images', img);
+  if (files && files.length > 0) {
+    for (const file of files) {
+      formData.append('files', file);
     }
   }
   const { data } = await api.post<AgentRunResult>(`/agent/sessions/${sessionId}/messages`, formData, {
@@ -644,15 +644,15 @@ export const runAgentStream = async (
   sessionId: string,
   content: string,
   autoAccept: boolean = false,
-  images?: File[],
+  files?: File[],
   onEvent?: (event: AgentStreamEvent) => void,
 ): Promise<void> => {
   const formData = new FormData();
   formData.append('content', content);
   formData.append('auto_accept', String(autoAccept));
-  if (images && images.length > 0) {
-    for (const img of images) {
-      formData.append('images', img);
+  if (files && files.length > 0) {
+    for (const file of files) {
+      formData.append('files', file);
     }
   }
 

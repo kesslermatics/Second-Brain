@@ -64,7 +64,7 @@ export default function AgentView() {
     const [appliedProposals, setAppliedProposals] = useState<Set<string>>(new Set());
     const [rejectedProposals, setRejectedProposals] = useState<Set<string>>(new Set());
     const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
-    const [pendingImages, setPendingImages] = useState<File[]>([]);
+    const [pendingFiles, setPendingFiles] = useState<File[]>([]);
 
     // Left panel: note viewer
     const [diffData, setDiffData] = useState<DiffViewData | null>(null);
@@ -112,16 +112,16 @@ export default function AgentView() {
         const items = e.clipboardData?.items; if (!items) return;
         const imgs: File[] = [];
         for (let i = 0; i < items.length; i++) { if (items[i].type.startsWith('image/')) { const f = items[i].getAsFile(); if (f) imgs.push(f); } }
-        if (imgs.length > 0) { e.preventDefault(); setPendingImages((p) => [...p, ...imgs]); }
+        if (imgs.length > 0) { e.preventDefault(); setPendingFiles((p) => [...p, ...imgs]); }
     };
 
-    const handleDrop = (e: React.DragEvent) => { e.preventDefault(); const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/')); if (files.length > 0) setPendingImages((p) => [...p, ...files]); };
+    const handleDrop = (e: React.DragEvent) => { e.preventDefault(); const files = Array.from(e.dataTransfer.files); if (files.length > 0) setPendingFiles((p) => [...p, ...files]); };
 
     // ── Send message ─────────────────────────────────────────────
 
     const handleSend = async () => {
         const inputVal = textareaRef.current?.value?.trim() || '';
-        if ((!inputVal && pendingImages.length === 0) || loading) return;
+        if ((!inputVal && pendingFiles.length === 0) || loading) return;
         let session = activeAgentSession;
         if (!session) { try { const ns = await createChatSession('agent', inputVal.slice(0, 50)); session = await getChatSession(ns.id); setActiveAgentSession(session); await loadAgentSessions(); } catch (e) { console.error(e); return; } }
 
@@ -144,7 +144,7 @@ export default function AgentView() {
                 session.id,
                 currentInput,
                 autoAccept,
-                pendingImages.length > 0 ? pendingImages : undefined,
+                pendingFiles.length > 0 ? pendingFiles : undefined,
                 (event: AgentStreamEvent) => {
                     switch (event.type) {
                         case 'thinking':
@@ -173,7 +173,7 @@ export default function AgentView() {
                 },
             );
 
-            setPendingImages([]);
+            setPendingFiles([]);
             setStreamingThought('');
             setStreamingContent('');
             setStreamingSteps([]);
@@ -378,12 +378,17 @@ export default function AgentView() {
 
                     {/* Input */}
                     <div className="p-3 border-t border-dark-800 flex-shrink-0">
-                        {pendingImages.length > 0 && (
+                        {pendingFiles.length > 0 && (
                             <div className="flex gap-2 mb-2 flex-wrap">
-                                {pendingImages.map((img, i) => (
-                                    <div key={i} className="relative group">
-                                        <img src={URL.createObjectURL(img)} alt="" className="w-10 h-10 object-cover rounded-lg border border-dark-700" />
-                                        <button onClick={() => setPendingImages((p) => p.filter((_, j) => j !== i))} className="absolute -top-1 -right-1 w-4 h-4 bg-red-600 text-white rounded-full flex items-center justify-center text-[10px] opacity-0 group-hover:opacity-100">×</button>
+                                {pendingFiles.map((file, i) => (
+                                    <div key={i} className="relative group flex items-center gap-1.5 px-2 py-1 bg-dark-800 border border-dark-700 rounded-lg">
+                                        {file.type.startsWith('image/') ? (
+                                            <img src={URL.createObjectURL(file)} alt="" className="w-8 h-8 object-cover rounded" />
+                                        ) : (
+                                            <span className="text-lg">📄</span>
+                                        )}
+                                        <span className="text-xs text-dark-300 max-w-[100px] truncate">{file.name}</span>
+                                        <button onClick={() => setPendingFiles((p) => p.filter((_, j) => j !== i))} className="ml-1 text-dark-500 hover:text-red-400"><FiX className="w-3 h-3" /></button>
                                     </div>
                                 ))}
                             </div>
@@ -395,17 +400,18 @@ export default function AgentView() {
                                 onPaste={handlePaste}
                                 placeholder="Schreib dem Agent..."
                                 className="flex-1 px-3 py-2 bg-dark-800 border border-dark-700 rounded-xl text-white text-sm placeholder-dark-600 focus:outline-none focus:border-rose-500 resize-none min-h-[40px] max-h-[140px]" rows={1} />
-                            <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => { const f = Array.from(e.target.files || []); if (f.length) setPendingImages((p) => [...p, ...f]); e.target.value = ''; }} />
-                            <button onClick={() => fileInputRef.current?.click()} className="p-2 rounded-xl bg-dark-800 border border-dark-700 text-dark-400 hover:text-white"><FiImage className="w-4 h-4" /></button>
+                            <input ref={fileInputRef} type="file" accept="image/*,.pdf,.doc,.docx,.txt,.md,.csv,.xlsx" multiple className="hidden" onChange={(e) => { const f = Array.from(e.target.files || []); if (f.length) setPendingFiles((p) => [...p, ...f]); e.target.value = ''; }} />
+                            <button onClick={() => fileInputRef.current?.click()} className="p-2 rounded-xl bg-dark-800 border border-dark-700 text-dark-400 hover:text-white" title="Datei anhängen (Bilder, PDFs, Dokumente)"><FiImage className="w-4 h-4" /></button>
                             <button onClick={handleSend} disabled={loading}
                                 className={`p-2 rounded-xl ${!loading ? 'bg-rose-600 hover:bg-rose-500 text-white' : 'bg-dark-800 text-dark-600 cursor-not-allowed'}`}>
                                 <FiSend className="w-4 h-4" />
                             </button>
-                        </div>
+                        </button>
                     </div>
                 </div>
             </div>
         </div>
+        </div >
     );
 }
 

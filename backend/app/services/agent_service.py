@@ -47,7 +47,12 @@ Du hast Zugriff auf alle Notizen und Bilder des Benutzers über Tools.
 
 3. **Notizen nur wenn sinnvoll**: Erstelle/bearbeite Notizen NUR wenn der Benutzer es explizit wünscht oder es klar Sinn macht. Beim ersten Kontakt zu einem Thema: brainstorme, frage, diskutiere — erstelle NICHT sofort Notizen.
 
-4. **Bilder proaktiv speichern**: Wenn Bilder hochgeladen werden, speichere sie proaktiv als Notiz in einem passenden Ordner. Nutze ![Beschreibung](URL) zum Einbetten.
+4. **Dateien proaktiv ablegen**: Wenn Dateien (PDFs, Bilder, Dokumente) hochgeladen werden:
+   - Erstelle eine Notiz im passenden Ordner
+   - Bette die Datei ein: `![Beschreibung](URL)` für Bilder, `[📄 Dateiname](URL)` für PDFs/Dokumente
+   - Verknüpfe die Datei über `attach_file_ids` damit sie im Ordner gespeichert wird
+   - Füge eine Zusammenfassung/Beschreibung des Inhalts hinzu
+   - Frage NICHT ob du es speichern sollst — tu es proaktiv
 
 5. **Immer informiert**: Nutze die Suchtools proaktiv um relevante bestehende Notizen zu finden. Halte dich thematisch STRIKT an das was gefragt wird.
 
@@ -149,7 +154,7 @@ def _get_agent_tools() -> list:
 
     create_note = types.FunctionDeclaration(
         name="create_note",
-        description="Erstelle eine neue Notiz im Second Brain. Nutze dies wenn der Benutzer explizit eine Notiz erstellen möchte oder bei Bild-Uploads.",
+        description="Erstelle eine neue Notiz im Second Brain. Nutze dies wenn der Benutzer explizit eine Notiz erstellen möchte oder bei Datei-Uploads. Wenn Dateien (PDFs, Bilder) hochgeladen wurden, verknüpfe sie über attach_file_ids und bette sie im Content ein mit ![Beschreibung](URL) oder [Dateiname](URL).",
         parameters={
             "type": "object",
             "properties": {
@@ -163,12 +168,17 @@ def _get_agent_tools() -> list:
                 },
                 "content": {
                     "type": "string",
-                    "description": "Inhalt der Notiz in Markdown",
+                    "description": "Inhalt der Notiz in Markdown. Bette Dateien ein mit: ![Bild](URL) für Bilder oder [📄 Dateiname](URL) für PDFs/Dokumente.",
                 },
                 "tags": {
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "Tags für die Notiz (optional)",
+                },
+                "attach_file_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "IDs der hochgeladenen Dateien die mit dieser Notiz verknüpft werden sollen (aus dem Upload-Kontext)",
                 },
             },
             "required": ["folder_path", "title", "content"],
@@ -340,6 +350,7 @@ async def _execute_tool(name: str, args: dict, user_id: str, db: AsyncSession) -
                     "title": args.get("title", "Neue Notiz"),
                     "content": args.get("content", ""),
                     "tags": args.get("tags", []),
+                    "attach_file_ids": args.get("attach_file_ids", []),
                 },
             }
 
@@ -432,14 +443,19 @@ async def run_agent_stream(
     # Augment the current user message with context
     user_message_parts = []
 
-    # Add image context if present
+    # Add file context if present (images, PDFs, documents)
     if image_context:
-        img_text = "\n\n---\n**Hochgeladene Bilder:**\n"
-        for img in image_context:
-            img_text += f"\n📷 **{img['filename']}** (URL: {img['url']})\n"
-            img_text += f"KI-Beschreibung: {img['description']}\n"
-        img_text += "\nSpeichere diese Bilder proaktiv als Notiz in einem passenden Ordner.\n"
-        user_message_parts.append(instruction + img_text)
+        file_text = "\n\n---\n**Hochgeladene Dateien:**\n"
+        for f in image_context:
+            file_type = f.get("type", "document")
+            icon = "📷" if file_type == "image" else "📄"
+            file_text += f"\n{icon} **{f['filename']}** (file_id: `{f.get('file_id', '')}`)\n"
+            file_text += f"URL: {f['url']}\n"
+            file_text += f"Analyse: {f['description']}\n"
+        file_text += "\nLege diese Dateien proaktiv in einem passenden Ordner ab."
+        file_text += "\nNutze `attach_file_ids` mit den file_ids um die Dateien mit der Notiz zu verknüpfen."
+        file_text += "\nBette sie im Content ein: `![Beschreibung](URL)` für Bilder, `[📄 Dateiname](URL)` für PDFs.\n"
+        user_message_parts.append(instruction + file_text)
     else:
         user_message_parts.append(instruction)
 
