@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useEffect, memo, useCallback } from 'react';
+import { useState, useRef, useEffect, memo, useCallback, type RefObject, type ClipboardEvent as RClipboardEvent, type DragEvent as RDragEvent, type SetStateAction, type Dispatch } from 'react';
 import {
     FiSend, FiCheck, FiX, FiCheckCircle, FiCpu,
     FiChevronDown, FiChevronRight, FiZap, FiLoader,
@@ -61,9 +61,9 @@ export default function AgentView() {
     const [streamingThought, setStreamingThought] = useState('');
     const [streamingContent, setStreamingContent] = useState('');
     const [streamingSteps, setStreamingSteps] = useState<AgentStep[]>([]);
-    const [appliedProposals, setAppliedProposals] = useState<Set<string>>(new Set());
-    const [rejectedProposals, setRejectedProposals] = useState<Set<string>>(new Set());
-    const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
+    const [appliedProposals, setAppliedProposals] = useState(new Set<string>());
+    const [rejectedProposals, setRejectedProposals] = useState(new Set<string>());
+    const [expandedSteps, setExpandedSteps] = useState(new Set<string>());
     const [pendingFiles, setPendingFiles] = useState<File[]>([]);
 
     // Left panel: note viewer
@@ -108,14 +108,14 @@ export default function AgentView() {
 
     const adjustTextarea = () => { const ta = textareaRef.current; if (ta) { ta.style.height = 'auto'; ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`; } };
 
-    const handlePaste = (e: React.ClipboardEvent) => {
+    const handlePaste = (e: RClipboardEvent) => {
         const items = e.clipboardData?.items; if (!items) return;
         const imgs: File[] = [];
         for (let i = 0; i < items.length; i++) { if (items[i].type.startsWith('image/')) { const f = items[i].getAsFile(); if (f) imgs.push(f); } }
         if (imgs.length > 0) { e.preventDefault(); setPendingFiles((p) => [...p, ...imgs]); }
     };
 
-    const handleDrop = (e: React.DragEvent) => { e.preventDefault(); const files = Array.from(e.dataTransfer.files); if (files.length > 0) setPendingFiles((p) => [...p, ...files]); };
+    const handleDrop = (e: RDragEvent) => { e.preventDefault(); const files = Array.from(e.dataTransfer.files); if (files.length > 0) setPendingFiles((p) => [...p, ...files]); };
 
     // ── Send message ─────────────────────────────────────────────
 
@@ -407,18 +407,17 @@ export default function AgentView() {
                                 className={`p-2 rounded-xl ${!loading ? 'bg-rose-600 hover:bg-rose-500 text-white' : 'bg-dark-800 text-dark-600 cursor-not-allowed'}`}>
                                 <FiSend className="w-4 h-4" />
                             </button>
-                        </button>
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
-        </div >
     );
 }
 
 // ── Sub-components ───────────────────────────────────────────────────
 
-function EmptyState({ textareaRef }: { textareaRef: React.RefObject<HTMLTextAreaElement | null> }) {
+function EmptyState({ textareaRef }: { textareaRef: RefObject<HTMLTextAreaElement | null> }) {
     const setInput = (text: string) => { if (textareaRef.current) { textareaRef.current.value = text; textareaRef.current.focus(); } };
     return (
         <div className="h-full flex items-center justify-center">
@@ -454,7 +453,7 @@ function ThinkingIndicator() {
 interface MessageBubbleProps {
     msg: ParsedAgentMessage;
     expandedSteps: Set<string>;
-    setExpandedSteps: React.Dispatch<React.SetStateAction<Set<string>>>;
+    setExpandedSteps: (fn: (prev: Set<string>) => Set<string>) => void;
     appliedProposals: Set<string>;
     rejectedProposals: Set<string>;
     onAcceptProposal: (msgId: string, idx: number, p: AgentProposal) => void;
