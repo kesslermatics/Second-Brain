@@ -1,10 +1,12 @@
 """Infinite Teacher routes — course management, interactive teaching, note generation."""
 
+import json
 import random
 import uuid
 import asyncio
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
@@ -14,11 +16,13 @@ from app.models import User, Tag, Course, CourseUnit, CourseMessage, Note, Folde
 from app.services.teacher_service import (
     generate_curriculum,
     chat_with_teacher,
+    chat_with_teacher_stream,
+    chat_about_book_chapter,
+    chat_about_book_chapter_stream,
     generate_lesson_notes,
     generate_term_note,
     generate_advanced_focus,
     ai_edit_lesson_content,
-    chat_about_book_chapter,
     generate_book_chapter_notes,
     generate_book_term_note,
     generate_quiz,
@@ -613,6 +617,154 @@ async def unit_chat(
         "total_sections": total_sections,
         "is_last_section": is_last_section,
     }
+
+
+@router.post("/courses/{course_id}/units/{unit_id}/chat/stream")
+async def unit_chat_stream(
+    course_id: str,
+    unit_id: str,
+    data: dict,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Stream a teacher response via SSE with thinking + text chunks."""
+    user_message = data.get("message", "").strip()
+    if not user_message:
+        raise HTTPException(status_code=400, detail="Message required")
+
+    # Load course with units
+    course_result = await db.execute(
+        select(Course)
+        .options(selectinload(Course.units))
+        .where(Course.id == course_id, Course.user_id == current_user.id)
+    )
+    course = course_result.scalars().first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    unit = None
+    for u in course.units:
+        if str(u.id) == unit_id:
+            unit = u
+            break
+    if not unit:
+        raise HTTPException(status_code=404, detail="Unit not found")
+
+    # Get chat history
+    msg_result = await db.execute(
+        select(CourseMessage)
+        .where(CourseMessage.course_id == course_id, CourseMessage.unit_id == unit_id)
+        .order_by(CourseMessage.created_at)
+    )
+    existing_messages = msg_result.scalars().all()
+    chat_history = [{"role": m.role, "content": m.content} for m in existing_messages]
+
+    # Context
+    previous_summary = _build_previous_units_summary(list(course.units), unit.order_index)
+    next_title = _get_next_unit_title(list(course.units), unit.order_index)
+
+    # Sections
+    if not unit.sections:
+        try:
+            is_book = (course.kind or "teacher") == "book"
+            unit.sections = await generate_lesson_sections(
+                title=unit.title,
+                description=unit.description or "",
+                learning_objectives=unit.learning_objectives or [],
+                kind="book" if is_book else "lesson",
+                book_title=course.title if is_book else None,
+                book_authors=course.book_authors if is_book else None,
+            )
+            unit.current_section = 0
+        except Exception:
+            unit.sections = None
+
+    if user_message == "[ABSCHNITT_WEITER]" and unit.sections:
+        if (unit.current_section or 0) < len(unit.sections) - 1:
+            unit.current_section = (unit.current_section or 0) + 1
+
+    sections_list = unit.sections or None
+    current_section_idx = unit.current_section or 0
+
+    # Save user message
+    user_msg = CourseMessage(course_id=course.id, unit_id=unit.id, role="user", content=user_message)
+    db.add(user_msg)
+    await db.flush()
+
+    if unit.status == "pending":
+        unit.status = "active"
+
+    await db.commit()
+
+    total_sections = len(sections_list) if sections_list else 0
+    is_last_section = total_sections == 0 or current_section_idx >= total_sections - 1
+
+    async def event_stream():
+        full_response_parts = []
+        is_book = (course.kind or "teacher") == "book"
+
+        if is_book:
+            stream_gen = chat_about_book_chapter_stream(
+                book_title=course.title,
+                book_authors=course.book_authors or [],
+                chapter_number=unit.unit_number,
+                chapter_title=unit.title,
+                chat_history=chat_history,
+                user_message=user_message,
+                previous_chapters_summary=previous_summary,
+                next_chapter_title=next_title,
+                sections=sections_list,
+                current_section=current_section_idx,
+            )
+        else:
+            stream_gen = chat_with_teacher_stream(
+                course_title=course.title,
+                unit_title=unit.title,
+                unit_description=unit.description or "",
+                learning_objectives=unit.learning_objectives or [],
+                chat_history=chat_history,
+                user_message=user_message,
+                previous_units_summary=previous_summary,
+                next_unit_title=next_title,
+                sections=sections_list,
+                current_section=current_section_idx,
+            )
+
+        async for event in stream_gen:
+            if event["type"] == "thinking":
+                yield f"data: {json.dumps({'type': 'thinking', 'content': event['content']}, ensure_ascii=False)}\n\n"
+            elif event["type"] == "chunk":
+                full_response_parts.append(event["content"])
+                yield f"data: {json.dumps({'type': 'chunk', 'content': event['content']}, ensure_ascii=False)}\n\n"
+            elif event["type"] == "done":
+                pass
+
+        # Save assistant message
+        full_text = "".join(full_response_parts)
+        async with async_session() as save_db:
+            assistant_msg = CourseMessage(
+                course_id=course.id, unit_id=unit.id, role="assistant", content=full_text,
+            )
+            save_db.add(assistant_msg)
+            await save_db.commit()
+            msg_id = str(assistant_msg.id)
+
+        # Final event with metadata
+        done_data = json.dumps({
+            "type": "done",
+            "message_id": msg_id,
+            "sections": sections_list or [],
+            "current_section": current_section_idx,
+            "total_sections": total_sections,
+            "is_last_section": is_last_section,
+        }, ensure_ascii=False)
+        yield f"data: {done_data}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
 
 
 # ── Note Generation ───────────────────────────────────────────────────

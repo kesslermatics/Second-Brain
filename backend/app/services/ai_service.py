@@ -1,29 +1,152 @@
-import google.generativeai as genai
+"""
+AI Service — shared Gemini client and utility functions for all AI features.
+Uses the new google-genai SDK.
+"""
+
+from google import genai
+from google.genai import types
 from app.config import get_settings
+from typing import AsyncGenerator
 import asyncio
 import json
 import re
 
 settings = get_settings()
-_genai_configured = False
+
+# ── Shared client (singleton) ─────────────────────────────────────────
+
+_client: genai.Client | None = None
 
 
-def _ensure_genai():
-    global _genai_configured
-    if not _genai_configured:
-        genai.configure(api_key=settings.GEMINI_API_KEY)
-        _genai_configured = True
+def get_client() -> genai.Client:
+    """Get or create the shared Gemini client."""
+    global _client
+    if _client is None:
+        _client = genai.Client(api_key=settings.GEMINI_API_KEY)
+    return _client
 
 
-def get_gemini_model():
-    _ensure_genai()
-    return genai.GenerativeModel("gemini-3-flash-preview")
+# ── Model constants ───────────────────────────────────────────────────
+
+FLASH_MODEL = "gemini-3-flash-preview"
+PRO_MODEL = "gemini-3.1-pro-preview"
 
 
-async def _generate(model, prompt) -> str:
-    """Run synchronous Gemini generate_content in a thread so we never block the event loop."""
-    response = await asyncio.to_thread(model.generate_content, prompt)
+async def generate(prompt: str, model: str = None, system_instruction: str = None, temperature: float = None, tools=None) -> str:
+    """Generate content using the new SDK. Async-native."""
+    client = get_client()
+    model_name = model or FLASH_MODEL
+
+    config = types.GenerateContentConfig()
+    if system_instruction:
+        config.system_instruction = system_instruction
+    if temperature is not None:
+        config.temperature = temperature
+    if tools:
+        config.tools = tools
+
+    response = await client.aio.models.generate_content(
+        model=model_name,
+        contents=prompt,
+        config=config,
+    )
     return response.text
+
+
+async def generate_stream(
+    prompt: str,
+    model: str = None,
+    system_instruction: str = None,
+    temperature: float = None,
+    tools=None,
+) -> AsyncGenerator[dict, None]:
+    """
+    Stream content generation. Yields events:
+    - {"type": "thinking", "content": "..."} — thought summaries (Pro model)
+    - {"type": "chunk", "content": "..."} — response text chunks
+    - {"type": "done"} — stream finished
+    """
+    client = get_client()
+    model_name = model or FLASH_MODEL
+
+    config = types.GenerateContentConfig()
+    if system_instruction:
+        config.system_instruction = system_instruction
+    if temperature is not None:
+        config.temperature = temperature
+    if tools:
+        config.tools = tools
+
+    async for chunk in await client.aio.models.generate_content_stream(
+        model=model_name,
+        contents=prompt,
+        config=config,
+    ):
+        # Handle thinking (thought parts in candidates)
+        if chunk.candidates:
+            for candidate in chunk.candidates:
+                if candidate.content and candidate.content.parts:
+                    for part in candidate.content.parts:
+                        if hasattr(part, 'thought') and part.thought:
+                            yield {"type": "thinking", "content": part.text or ""}
+
+        # Handle text chunks
+        if chunk.text:
+            yield {"type": "chunk", "content": chunk.text}
+
+    yield {"type": "done"}
+
+
+async def generate_with_search(prompt: str, model: str = None, system_instruction: str = None) -> str:
+    """Generate content with Google Search grounding enabled."""
+    client = get_client()
+    model_name = model or FLASH_MODEL
+
+    config = types.GenerateContentConfig(
+        tools=[types.Tool(google_search=types.GoogleSearch())],
+    )
+    if system_instruction:
+        config.system_instruction = system_instruction
+
+    response = await client.aio.models.generate_content(
+        model=model_name,
+        contents=prompt,
+        config=config,
+    )
+    return response.text
+
+
+async def generate_with_search_stream(
+    prompt: str,
+    model: str = None,
+    system_instruction: str = None,
+) -> AsyncGenerator[dict, None]:
+    """Stream content with Google Search grounding. Same event format as generate_stream."""
+    client = get_client()
+    model_name = model or FLASH_MODEL
+
+    config = types.GenerateContentConfig(
+        tools=[types.Tool(google_search=types.GoogleSearch())],
+    )
+    if system_instruction:
+        config.system_instruction = system_instruction
+
+    async for chunk in await client.aio.models.generate_content_stream(
+        model=model_name,
+        contents=prompt,
+        config=config,
+    ):
+        if chunk.candidates:
+            for candidate in chunk.candidates:
+                if candidate.content and candidate.content.parts:
+                    for part in candidate.content.parts:
+                        if hasattr(part, 'thought') and part.thought:
+                            yield {"type": "thinking", "content": part.text or ""}
+
+        if chunk.text:
+            yield {"type": "chunk", "content": chunk.text}
+
+    yield {"type": "done"}
 
 
 # ── Default Prompt Templates ──────────────────────────────────────────
@@ -122,11 +245,8 @@ def get_default_prompts() -> dict:
 
 async def process_note_input(user_input: str, folder_structure: list[dict], custom_prompt: str = None, existing_tags: list[str] = None) -> dict:
     """Process user input and suggest where to save it as a note."""
-    model = get_gemini_model()
-
     folder_tree_str = json.dumps(folder_structure, indent=2, default=str)
 
-    # Build tags context
     tags_str = ", ".join(existing_tags) if existing_tags else "(keine)"
     tags_instruction = f"""\n\nBestehende Tags im System: {tags_str}
 
@@ -142,7 +262,7 @@ Beispiel: "suggested_tags": ["python", "machine-learning", "tutorial"]"""
         .replace("{{BENUTZEREINGABE}}", user_input)
     ) + tags_instruction
 
-    text = (await _generate(model, prompt)).strip()
+    text = (await generate(prompt, temperature=0.4)).strip()
 
     json_match = re.search(r'\{[\s\S]*\}', text)
     if json_match:
@@ -166,9 +286,7 @@ Beispiel: "suggested_tags": ["python", "machine-learning", "tutorial"]"""
 
 
 async def answer_with_rag(question: str, context_notes: list[dict], chat_history: list[dict] = None, custom_prompt: str = None) -> str:
-    """Answer a question using RAG context."""
-    model = get_gemini_model()
-
+    """Answer a question using RAG context. Uses Pro model for quality."""
     context_str = ""
     for note in context_notes:
         context_str += f"\n--- Notiz: {note['title']} (Pfad: {note['folder_path']}) ---\n"
@@ -190,13 +308,11 @@ async def answer_with_rag(question: str, context_notes: list[dict], chat_history
         .replace("{{FRAGE}}", question)
     )
 
-    return await _generate(model, prompt)
+    return await generate(prompt, model=PRO_MODEL)
 
 
 async def edit_note_with_ai(current_content: str, instruction: str, custom_prompt: str = None) -> str:
     """Edit a note based on AI instruction."""
-    model = get_gemini_model()
-
     prompt_template = custom_prompt or DEFAULT_EDIT_PROMPT
     prompt = (
         prompt_template
@@ -204,15 +320,13 @@ async def edit_note_with_ai(current_content: str, instruction: str, custom_promp
         .replace("{{ANWEISUNG}}", instruction)
     )
 
-    return (await _generate(model, prompt)).strip()
+    return (await generate(prompt)).strip()
 
 
 # ── AI: Tag suggestion ────────────────────────────────────────────────
 
 async def suggest_tags(title: str, content: str, existing_tags: list[str]) -> list[str]:
     """Suggest tags for a note, preferring existing tags to avoid duplicates."""
-    model = get_gemini_model()
-
     existing_str = ", ".join(existing_tags) if existing_tags else "(keine)"
 
     prompt = f"""Du bist ein Tag-Generator für ein Second Brain System.
@@ -228,7 +342,7 @@ Notiz-Inhalt (Auszug): {content[:1500]}
 
 Antworte NUR mit einem JSON-Array von Strings, z.B.: ["tag1", "tag2", "tag3"]"""
 
-    text = (await _generate(model, prompt)).strip()
+    text = (await generate(prompt, temperature=0.3)).strip()
 
     json_match = re.search(r'\[[\s\S]*?\]', text)
     if json_match:
@@ -244,8 +358,6 @@ Antworte NUR mit einem JSON-Array von Strings, z.B.: ["tag1", "tag2", "tag3"]"""
 
 async def generate_flashcards(title: str, content: str, max_cards: int = 5) -> list[dict]:
     """Generate question-answer flashcards from a note."""
-    model = get_gemini_model()
-
     prompt = f"""Du bist ein Lernkarten-Generator. Erstelle aus der folgenden Notiz {max_cards} Lernkarten 
 im Frage-Antwort-Format. Die Fragen sollen das Verständnis der Kernkonzepte testen.
 
@@ -259,7 +371,7 @@ Antworte NUR mit einem JSON-Array:
     {{"question": "Frage 2?", "answer": "Antwort 2"}}
 ]"""
 
-    text = (await _generate(model, prompt)).strip()
+    text = (await generate(prompt, temperature=0.5)).strip()
 
     json_match = re.search(r'\[[\s\S]*\]', text)
     if json_match:
@@ -279,8 +391,6 @@ Antworte NUR mit einem JSON-Array:
 
 async def suggest_links(note_title: str, note_content: str, candidate_notes: list[dict]) -> list[str]:
     """Suggest which candidate notes are semantically related to the given note."""
-    model = get_gemini_model()
-
     candidates_str = "\n".join(
         f"- ID: {c['id']}, Titel: {c['title']}, Auszug: {c['preview'][:200]}"
         for c in candidate_notes
@@ -297,7 +407,7 @@ Inhalt (Auszug): {note_content[:1000]}
 Kandidaten:
 {candidates_str}"""
 
-    text = (await _generate(model, prompt)).strip()
+    text = (await generate(prompt, temperature=0.2)).strip()
 
     json_match = re.search(r'\[[\s\S]*?\]', text)
     if json_match:
@@ -309,12 +419,10 @@ Kandidaten:
     return []
 
 
-# ── AI: Summarization ─────────────────────────────────────────────────
+# ── AI: Chat title ────────────────────────────────────────────────────
 
 async def generate_chat_title(first_message: str) -> str:
     """Generate a short, descriptive chat title from the first user message."""
-    model = get_gemini_model()
-
     prompt = f"""Erstelle einen sehr kurzen Titel (max 5 Wörter) für eine Chat-Konversation, 
 die mit folgender Nachricht beginnt. Der Titel soll den Kern der Anfrage zusammenfassen.
 Antworte NUR mit dem Titel, ohne Anführungszeichen oder zusätzlichen Text.
@@ -324,8 +432,7 @@ Nachricht: {first_message[:500]}
 Titel:"""
 
     try:
-        title = (await _generate(model, prompt)).strip().strip('"\'')
-        # Enforce max length
+        title = (await generate(prompt, temperature=0.3)).strip().strip('"\'')
         if len(title) > 60:
             title = title[:57] + "..."
         return title or first_message[:50]
@@ -333,12 +440,12 @@ Titel:"""
         return first_message[:50] + ("..." if len(first_message) > 50 else "")
 
 
+# ── AI: Summarization ─────────────────────────────────────────────────
+
 async def generate_summary(notes: list[dict], scope_label: str) -> str:
     """Generate a summary across multiple notes."""
-    model = get_gemini_model()
-
     notes_str = ""
-    for n in notes[:20]:  # limit to 20 notes
+    for n in notes[:20]:
         notes_str += f"\n### {n['title']}\n{n['content'][:500]}\n"
 
     prompt = f"""Du bist ein Second Brain Assistent. Erstelle eine umfassende Zusammenfassung 
@@ -355,4 +462,4 @@ Notizen:
 
 Zusammenfassung:"""
 
-    return await _generate(model, prompt)
+    return await generate(prompt, model=PRO_MODEL)

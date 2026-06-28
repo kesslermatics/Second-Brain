@@ -1,254 +1,586 @@
 """
-Agentic Workspace Service — conversational AI agent that can read, search,
-brainstorm and plan with the user, and only writes/creates notes when appropriate.
+Agentic Workspace Service — true multi-turn, function-calling agent using
+gemini-3.1-pro-preview with thinking and streaming.
 
-The agent operates conversationally:
-1. Receives user message + context (folder structure, chat history)
-2. Can use tools to search/read notes AND images for context
-3. Responds conversationally — brainstorming, asking questions, planning
-4. Only generates proposals (create/update/delete) when the user explicitly asks
-   or when it makes clear sense from the conversation
-5. Can autonomously save images to appropriate folders when they are relevant
+Architecture:
+- Uses the new google-genai SDK with native function calling (no JSON simulation)
+- Multi-turn chat: real conversation history with proper roles
+- Thinking model: streams thought summaries + response chunks
+- Autonomous tool loop: model decides when to call tools, we execute and feed back
 """
 
 import json
 import re
 import asyncio
-from typing import Optional
+import logging
+from typing import Optional, AsyncGenerator
 from uuid import UUID
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, or_, func
 
 from app.config import get_settings
 from app.models import Note, Folder, Tag, Image, note_tags
+from app.services.ai_service import get_client, PRO_MODEL
 from app.services.vector_service import hybrid_search
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
-_genai_configured = False
 
+# ── Agent model ───────────────────────────────────────────────────────
 
-def _ensure_genai():
-    global _genai_configured
-    if not _genai_configured:
-        genai.configure(api_key=settings.GEMINI_API_KEY)
-        _genai_configured = True
+AGENT_MODEL = PRO_MODEL  # gemini-3.1-pro-preview — thinking model
 
+# ── System instruction (lean, no JSON format rules) ───────────────────
 
-def _get_model():
-    _ensure_genai()
-    return genai.GenerativeModel("gemini-3-flash-preview")
-
-
-async def _generate(model, prompt: str) -> str:
-    response = await asyncio.to_thread(model.generate_content, prompt)
-    return response.text
-
-
-# ── Tool implementations ──────────────────────────────────────────────
-
-async def _tool_search(query: str, user_id: str, db: AsyncSession, limit: int = 10) -> list[dict]:
-    """Semantic + full-text search over all notes (includes image descriptions in vector index)."""
-    results = await hybrid_search(query=query, user_id=user_id, db=db, limit=limit)
-    return [
-        {
-            "note_id": r["note_id"],
-            "title": r["title"],
-            "folder_path": r["folder_path"],
-            "preview": r["content_preview"][:500],
-            "score": r["score"],
-            "type": r.get("type", "note"),
-        }
-        for r in results
-    ]
-
-
-async def _tool_read_note(note_id: str, user_id: str, db: AsyncSession) -> Optional[dict]:
-    """Read full content of a specific note."""
-    try:
-        note = await db.get(Note, UUID(note_id))
-    except (ValueError, TypeError):
-        return None
-    if not note or str(note.user_id) != user_id:
-        return None
-    folder = await db.get(Folder, note.folder_id)
-    tag_result = await db.execute(
-        select(Tag.name)
-        .join(note_tags, Tag.id == note_tags.c.tag_id)
-        .where(note_tags.c.note_id == note.id)
-    )
-    tag_names = [row[0] for row in tag_result.all()]
-    return {
-        "note_id": str(note.id),
-        "title": note.title,
-        "content": note.content,
-        "folder_path": folder.path if folder else "",
-        "tags": tag_names,
-        "updated_at": note.updated_at.isoformat() if note.updated_at else "",
-    }
-
-
-async def _tool_list_folders(user_id: str, db: AsyncSession) -> list[dict]:
-    """List all folders for the user."""
-    result = await db.execute(
-        select(Folder)
-        .where(Folder.user_id == UUID(user_id))
-        .order_by(Folder.path)
-    )
-    folders = result.scalars().all()
-    return [{"id": str(f.id), "name": f.name, "path": f.path} for f in folders]
-
-
-async def _tool_list_notes_in_folder(folder_path: str, user_id: str, db: AsyncSession) -> list[dict]:
-    """List all notes in a specific folder (by path)."""
-    folder_result = await db.execute(
-        select(Folder).where(Folder.path == folder_path, Folder.user_id == UUID(user_id))
-    )
-    folder = folder_result.scalar_one_or_none()
-    if not folder:
-        return []
-    notes_result = await db.execute(
-        select(Note).where(Note.folder_id == folder.id).order_by(Note.updated_at.desc())
-    )
-    notes = notes_result.scalars().all()
-    return [
-        {"note_id": str(n.id), "title": n.title, "preview": n.content[:300]}
-        for n in notes
-    ]
-
-
-async def _tool_search_images(query: str, user_id: str, db: AsyncSession, limit: int = 10) -> list[dict]:
-    """Search images by their AI-generated descriptions."""
-    from sqlalchemy import or_, func
-
-    result = await db.execute(
-        select(Image)
-        .where(
-            Image.user_id == UUID(user_id),
-            Image.description.isnot(None),
-            or_(
-                func.lower(Image.description).contains(query.lower()),
-                func.lower(Image.original_filename).contains(query.lower()),
-            ),
-        )
-        .order_by(Image.created_at.desc())
-        .limit(limit)
-    )
-    images = result.scalars().all()
-
-    backend_url = settings.BACKEND_URL or "http://localhost:8000"
-    return [
-        {
-            "image_id": str(img.id),
-            "filename": img.original_filename,
-            "description": img.description[:500] if img.description else "",
-            "url": f"{backend_url}/uploads/{user_id}/{img.stored_filename}",
-            "folder_id": str(img.folder_id) if img.folder_id else None,
-            "created_at": img.created_at.isoformat() if img.created_at else "",
-        }
-        for img in images
-    ]
-
-
-async def _tool_get_image(image_id: str, user_id: str, db: AsyncSession) -> Optional[dict]:
-    """Get full details of a specific image including its description."""
-    try:
-        img = await db.get(Image, UUID(image_id))
-    except (ValueError, TypeError):
-        return None
-    if not img or str(img.user_id) != user_id:
-        return None
-
-    backend_url = settings.BACKEND_URL or "http://localhost:8000"
-    return {
-        "image_id": str(img.id),
-        "filename": img.original_filename,
-        "description": img.description or "",
-        "url": f"{backend_url}/uploads/{user_id}/{img.stored_filename}",
-        "folder_id": str(img.folder_id) if img.folder_id else None,
-        "note_id": str(img.note_id) if img.note_id else None,
-        "created_at": img.created_at.isoformat() if img.created_at else "",
-    }
-
-
-# ── Agent Loop ────────────────────────────────────────────────────────
-
-AGENT_SYSTEM_PROMPT = """Du bist ein intelligenter Assistent für ein Second Brain / Notiz-System.
+AGENT_SYSTEM_INSTRUCTION = """Du bist ein intelligenter, eloquenter Assistent für ein persönliches Second Brain / Notiz-System.
 Du kannst mit dem Benutzer brainstormen, planen, Fragen stellen und Ideen entwickeln.
-Du hast Zugriff auf alle Notizen UND Bilder des Benutzers.
+Du hast Zugriff auf alle Notizen und Bilder des Benutzers über Tools.
 
-## Dein Verhalten:
+## Verhalten:
 
-1. **Konversationell**: Du führst ein Gespräch. Stelle Rückfragen wenn nötig, brainstorme mit,
-   schlage Strukturen vor, diskutiere Ideen.
-   
-2. **Notizen nur wenn sinnvoll**: Erstelle/bearbeite Notizen NUR wenn:
-   - Der Benutzer es explizit wünscht ("erstelle eine Notiz", "schreib das auf", "mach daraus eine Notiz")
-   - Es aus dem Gesprächskontext klar ergibt, dass eine Notiz erstellt werden soll
-   - Du genug Informationen hast um eine sinnvolle Notiz zu erstellen
-   
-3. **Bilder proaktiv speichern**: Wenn der Benutzer ein Bild hochlädt:
-   - Analysiere was auf dem Bild zu sehen ist
-   - Speichere es in einem passenden Ordner als Notiz (mit dem Bild eingebettet + Beschreibung)
-   - Frage NICHT ob du es speichern sollst — tu es einfach wenn es relevant ist
-   - Nutze die Markdown-Syntax: ![Beschreibung](URL) zum Einbetten
-   
-4. **Immer informiert**: Nutze die Suchfunktion proaktiv um relevante bestehende Notizen
-   UND Bilder zu finden. Wenn der Kontext es erfordert, suche auch nach relevanten Bildern.
+1. **Konversationell & intelligent**: Führe ein echtes Gespräch auf hohem Niveau. Stelle Rückfragen, brainstorme mit, schlage Strukturen vor, diskutiere Ideen tiefgründig. Sei eloquent, präzise und hilfreich.
 
-5. **Ordnerstruktur-Intelligenz**: 
-   - Analysiere die bestehende Ordnerstruktur GENAU bevor du Notizen erstellst
-   - Erstelle UNTERORDNER wenn ein Thema mehrere Aspekte hat (z.B. "Wohnung/Checkliste", "Wohnung/Budget", "Wohnung/Einrichtung")
-   - Nutze bestehende Ordner wenn sie passen — erstelle KEINE Duplikate
-   - Wenn ein Thema nichts mit bestehenden Notizen zu tun hat, lege einen NEUEN thematischen Ordner an
-   - Vermeide es, alles in einen flachen "Notizen" oder "Allgemein" Ordner zu werfen
-   - Orientiere dich an der Hierarchie die der Benutzer bereits aufgebaut hat
-   - WICHTIG: Suche NUR nach relevanten Notizen die wirklich zum aktuellen Thema gehören.
-     Wenn der User z.B. über Wohnungsplanung spricht, suche nicht nach Finanzen/Investments 
-     es sei denn er fragt explizit danach.
+2. **Notizen nur wenn sinnvoll**: Erstelle/bearbeite Notizen NUR wenn der Benutzer es explizit wünscht oder es klar Sinn macht. Beim ersten Kontakt zu einem Thema: brainstorme, frage, diskutiere — erstelle NICHT sofort Notizen.
 
-## Antwortformat:
+3. **Bilder proaktiv speichern**: Wenn Bilder hochgeladen werden, speichere sie proaktiv als Notiz in einem passenden Ordner. Nutze ![Beschreibung](URL) zum Einbetten.
 
-Deine Antwort MUSS immer gültiges JSON sein:
+4. **Immer informiert**: Nutze die Suchtools proaktiv um relevante bestehende Notizen zu finden. Halte dich thematisch STRIKT an das was gefragt wird.
 
-```json
-{
-  "response": "Deine Nachricht an den Benutzer (Markdown erlaubt)",
-  "tool_calls": [...],
-  "proposals": [...]
-}
-```
+5. **Ordnerstruktur-Intelligenz**: Analysiere die bestehende Struktur genau. Erstelle sinnvolle Unterordner. Nutze bestehende Ordner wenn sie passen.
 
-### Felder:
-- `response` (PFLICHT): Deine Nachricht an den Benutzer. Kann Markdown enthalten.
-  Hier brainstormst du, stellst Fragen, diskutierst, etc.
-  
-- `tool_calls` (optional): Tools die du ausführen willst um Kontext zu bekommen:
-  - `{"tool": "search", "query": "..."}` — Suche über Notizen UND Bilder (semantisch + Volltext)
-  - `{"tool": "read_note", "note_id": "..."}` — Vollständige Notiz lesen
-  - `{"tool": "list_folders"}` — Alle Ordner auflisten
-  - `{"tool": "list_notes", "folder_path": "..."}` — Notizen in einem Ordner auflisten
-  - `{"tool": "search_images", "query": "..."}` — Bilder nach Beschreibung/Dateiname suchen
-  - `{"tool": "get_image", "image_id": "..."}` — Details eines bestimmten Bildes abrufen
-  
-- `proposals` (optional, NUR wenn der Benutzer es will oder es klar Sinn macht):
-  - `{"type": "create", "folder_path": "...", "title": "...", "content": "...", "tags": [...], "reason": "..."}`
-  - `{"type": "update", "note_id": "...", "new_title": "...", "new_content": "...", "reason": "..."}`
-  - `{"type": "delete", "note_id": "...", "reason": "..."}`
+## Proposals (Notiz-Änderungen):
 
-### Wichtig:
-- `folder_path` bei create MUSS ein sinnvoller Pfad sein, z.B. "Projekte/Umzug" oder "Wohnung/Planung/Checkliste"
-- Proposals nur generieren wenn du genug Info hast UND der Benutzer es möchte
-- AUSNAHME: Bei hochgeladenen Bildern darfst du proaktiv eine Notiz erstellen um das Bild zu speichern
-- Beim ersten Kontakt zu einem Thema: IMMER erstmal fragen/brainstormen, NICHT sofort Notizen erstellen
-- Verweise auf bestehende Notizen/Bilder wenn du welche findest
-- Wenn du ein Bild in eine Notiz einbettest, nutze: ![Beschreibung](URL)
-- Schreibe den Content in Proposals immer in gut formatiertem Markdown mit Headings, Listen, Callouts
-- Antworte IMMER auf Deutsch (oder in der Sprache des Benutzers)
-- Halte dich thematisch STRIKT an das was der Benutzer fragt — bringe keine unrelevanten Notizen ein
-"""
+Wenn du Notizen erstellen/ändern/löschen willst, nutze die entsprechenden Tools:
+- `create_note`: Neue Notiz erstellen
+- `update_note`: Bestehende Notiz bearbeiten
+- `delete_note`: Notiz löschen
 
+Schreibe Notiz-Inhalte immer in gut formatiertem Markdown mit Headings, Listen, Callouts.
+
+## Sprache:
+Antworte IMMER in der Sprache des Benutzers (Standard: Deutsch)."""
+
+
+# ── Tool definitions (native function declarations) ───────────────────
+
+def _get_agent_tools() -> list:
+    """Define the tools available to the agent as Python functions for automatic calling."""
+
+    # We use manual FunctionDeclarations for more control over descriptions
+    search_notes = types.FunctionDeclaration(
+        name="search_notes",
+        description="Semantische und Volltextsuche über alle Notizen und Bilder des Benutzers. Nutze dies proaktiv um relevanten Kontext zu finden.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Suchanfrage (semantisch + Volltext)",
+                },
+            },
+            "required": ["query"],
+        },
+    )
+
+    read_note = types.FunctionDeclaration(
+        name="read_note",
+        description="Lese den vollständigen Inhalt einer bestimmten Notiz anhand ihrer ID.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "note_id": {
+                    "type": "string",
+                    "description": "UUID der Notiz",
+                },
+            },
+            "required": ["note_id"],
+        },
+    )
+
+    list_folders = types.FunctionDeclaration(
+        name="list_folders",
+        description="Liste alle Ordner des Benutzers auf. Nützlich um die Struktur zu verstehen bevor Notizen erstellt werden.",
+        parameters={
+            "type": "object",
+            "properties": {},
+        },
+    )
+
+    list_notes_in_folder = types.FunctionDeclaration(
+        name="list_notes_in_folder",
+        description="Liste alle Notizen in einem bestimmten Ordner (nach Pfad).",
+        parameters={
+            "type": "object",
+            "properties": {
+                "folder_path": {
+                    "type": "string",
+                    "description": "Pfad des Ordners, z.B. 'Projekte/Umzug'",
+                },
+            },
+            "required": ["folder_path"],
+        },
+    )
+
+    search_images = types.FunctionDeclaration(
+        name="search_images",
+        description="Suche Bilder anhand ihrer KI-generierten Beschreibungen oder Dateinamen.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Suchbegriff für Bilder",
+                },
+            },
+            "required": ["query"],
+        },
+    )
+
+    create_note = types.FunctionDeclaration(
+        name="create_note",
+        description="Erstelle eine neue Notiz im Second Brain. Nutze dies wenn der Benutzer explizit eine Notiz erstellen möchte oder bei Bild-Uploads.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "folder_path": {
+                    "type": "string",
+                    "description": "Ordnerpfad für die Notiz, z.B. 'Projekte/Webdesign'",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Titel der Notiz",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Inhalt der Notiz in Markdown",
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Tags für die Notiz (optional)",
+                },
+            },
+            "required": ["folder_path", "title", "content"],
+        },
+    )
+
+    update_note = types.FunctionDeclaration(
+        name="update_note",
+        description="Aktualisiere eine bestehende Notiz (Titel und/oder Inhalt).",
+        parameters={
+            "type": "object",
+            "properties": {
+                "note_id": {
+                    "type": "string",
+                    "description": "UUID der zu aktualisierenden Notiz",
+                },
+                "new_title": {
+                    "type": "string",
+                    "description": "Neuer Titel (optional, leer lassen um nicht zu ändern)",
+                },
+                "new_content": {
+                    "type": "string",
+                    "description": "Neuer Inhalt in Markdown (optional)",
+                },
+            },
+            "required": ["note_id"],
+        },
+    )
+
+    delete_note = types.FunctionDeclaration(
+        name="delete_note",
+        description="Lösche eine Notiz aus dem Second Brain.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "note_id": {
+                    "type": "string",
+                    "description": "UUID der zu löschenden Notiz",
+                },
+            },
+            "required": ["note_id"],
+        },
+    )
+
+    return [types.Tool(function_declarations=[
+        search_notes,
+        read_note,
+        list_folders,
+        list_notes_in_folder,
+        search_images,
+        create_note,
+        update_note,
+        delete_note,
+    ])]
+
+
+# ── Tool execution ────────────────────────────────────────────────────
+
+async def _execute_tool(name: str, args: dict, user_id: str, db: AsyncSession) -> dict:
+    """Execute a tool call and return the result as a dict."""
+    try:
+        if name == "search_notes":
+            results = await hybrid_search(
+                query=args.get("query", ""),
+                user_id=user_id,
+                db=db,
+                limit=10,
+            )
+            return {
+                "results": [
+                    {
+                        "note_id": r["note_id"],
+                        "title": r["title"],
+                        "folder_path": r["folder_path"],
+                        "preview": r["content_preview"][:500],
+                        "score": r["score"],
+                    }
+                    for r in results
+                ]
+            }
+
+        elif name == "read_note":
+            note_id = args.get("note_id", "")
+            try:
+                note = await db.get(Note, UUID(note_id))
+            except (ValueError, TypeError):
+                return {"error": "Ungültige Notiz-ID"}
+            if not note or str(note.user_id) != user_id:
+                return {"error": "Notiz nicht gefunden"}
+            folder = await db.get(Folder, note.folder_id)
+            tag_result = await db.execute(
+                select(Tag.name)
+                .join(note_tags, Tag.id == note_tags.c.tag_id)
+                .where(note_tags.c.note_id == note.id)
+            )
+            tag_names = [row[0] for row in tag_result.all()]
+            return {
+                "note_id": str(note.id),
+                "title": note.title,
+                "content": note.content,
+                "folder_path": folder.path if folder else "",
+                "tags": tag_names,
+            }
+
+        elif name == "list_folders":
+            result = await db.execute(
+                select(Folder)
+                .where(Folder.user_id == UUID(user_id))
+                .order_by(Folder.path)
+            )
+            folders = result.scalars().all()
+            return {"folders": [{"path": f.path, "name": f.name} for f in folders]}
+
+        elif name == "list_notes_in_folder":
+            folder_path = args.get("folder_path", "")
+            folder_result = await db.execute(
+                select(Folder).where(Folder.path == folder_path, Folder.user_id == UUID(user_id))
+            )
+            folder = folder_result.scalar_one_or_none()
+            if not folder:
+                return {"error": f"Ordner '{folder_path}' nicht gefunden"}
+            notes_result = await db.execute(
+                select(Note).where(Note.folder_id == folder.id).order_by(Note.updated_at.desc())
+            )
+            notes = notes_result.scalars().all()
+            return {
+                "notes": [
+                    {"note_id": str(n.id), "title": n.title, "preview": n.content[:300]}
+                    for n in notes
+                ]
+            }
+
+        elif name == "search_images":
+            query = args.get("query", "")
+            result = await db.execute(
+                select(Image)
+                .where(
+                    Image.user_id == UUID(user_id),
+                    Image.description.isnot(None),
+                    or_(
+                        func.lower(Image.description).contains(query.lower()),
+                        func.lower(Image.original_filename).contains(query.lower()),
+                    ),
+                )
+                .order_by(Image.created_at.desc())
+                .limit(10)
+            )
+            images = result.scalars().all()
+            backend_url = settings.BACKEND_URL or "http://localhost:8000"
+            return {
+                "images": [
+                    {
+                        "image_id": str(img.id),
+                        "filename": img.original_filename,
+                        "description": img.description[:500] if img.description else "",
+                        "url": f"{backend_url}/uploads/{user_id}/{img.stored_filename}",
+                    }
+                    for img in images
+                ]
+            }
+
+        elif name == "create_note":
+            # Return as a proposal — will be applied by the route handler
+            return {
+                "status": "proposal_created",
+                "proposal": {
+                    "type": "create",
+                    "folder_path": args.get("folder_path", "Allgemein"),
+                    "title": args.get("title", "Neue Notiz"),
+                    "content": args.get("content", ""),
+                    "tags": args.get("tags", []),
+                },
+            }
+
+        elif name == "update_note":
+            return {
+                "status": "proposal_created",
+                "proposal": {
+                    "type": "update",
+                    "note_id": args.get("note_id", ""),
+                    "new_title": args.get("new_title"),
+                    "new_content": args.get("new_content"),
+                },
+            }
+
+        elif name == "delete_note":
+            return {
+                "status": "proposal_created",
+                "proposal": {
+                    "type": "delete",
+                    "note_id": args.get("note_id", ""),
+                },
+            }
+
+        else:
+            return {"error": f"Unbekanntes Tool: {name}"}
+
+    except Exception as e:
+        logger.error(f"Tool execution error ({name}): {e}")
+        return {"error": str(e)}
+
+
+# ── Build multi-turn contents from chat history ───────────────────────
+
+def _build_contents(chat_history: list[dict], image_context: list[dict] | None = None) -> list[types.Content]:
+    """Convert DB chat history into proper multi-turn contents for the API."""
+    contents = []
+
+    for msg in chat_history:
+        role = msg["role"]
+        content_text = msg["content"]
+
+        # Strip hidden agent metadata from stored assistant messages
+        content_text = re.sub(r'<!-- AGENT_META[\s\S]*?AGENT_META -->', '', content_text).strip()
+
+        if role == "user":
+            contents.append(types.Content(
+                role="user",
+                parts=[types.Part.from_text(text=content_text)],
+            ))
+        elif role == "assistant":
+            contents.append(types.Content(
+                role="model",
+                parts=[types.Part.from_text(text=content_text)],
+            ))
+
+    return contents
+
+
+# ── Streaming agent run ───────────────────────────────────────────────
+
+async def run_agent_stream(
+    instruction: str,
+    user_id: str,
+    db: AsyncSession,
+    chat_history: list[dict] = None,
+    auto_accept: bool = False,
+    image_context: list[dict] | None = None,
+) -> AsyncGenerator[dict, None]:
+    """
+    Run the agent with streaming. Yields SSE-compatible events:
+    - {"type": "thinking", "content": "..."} — thought summaries
+    - {"type": "chunk", "content": "..."} — response text chunks
+    - {"type": "tool_call", "content": "..."} — tool being called
+    - {"type": "tool_result", "content": "..."} — tool result summary
+    - {"type": "proposal", "proposal": {...}} — note change proposal
+    - {"type": "done", "proposals": [...]} — final event
+    """
+    client = get_client()
+
+    # Build the folder context as part of the user message
+    folders_result = await db.execute(
+        select(Folder).where(Folder.user_id == UUID(user_id)).order_by(Folder.path)
+    )
+    folders = folders_result.scalars().all()
+    folder_tree = "\n".join(f"  📁 {f.path}" for f in folders) or "(keine Ordner)"
+
+    # Build multi-turn conversation
+    contents = _build_contents(chat_history or [], image_context)
+
+    # Augment the current user message with context
+    user_message_parts = []
+
+    # Add image context if present
+    if image_context:
+        img_text = "\n\n---\n**Hochgeladene Bilder:**\n"
+        for img in image_context:
+            img_text += f"\n📷 **{img['filename']}** (URL: {img['url']})\n"
+            img_text += f"KI-Beschreibung: {img['description']}\n"
+        img_text += "\nSpeichere diese Bilder proaktiv als Notiz in einem passenden Ordner.\n"
+        user_message_parts.append(instruction + img_text)
+    else:
+        user_message_parts.append(instruction)
+
+    # Add folder context as system-level info in the user turn
+    context_suffix = f"\n\n[Aktuelle Ordnerstruktur:\n{folder_tree}]"
+    user_message_parts[0] += context_suffix
+
+    contents.append(types.Content(
+        role="user",
+        parts=[types.Part.from_text(text=user_message_parts[0])],
+    ))
+
+    # Agent config
+    config = types.GenerateContentConfig(
+        system_instruction=AGENT_SYSTEM_INSTRUCTION,
+        tools=_get_agent_tools(),
+        temperature=0.8,
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+    )
+
+    proposals = []
+    steps = []
+    max_tool_rounds = 5  # prevent infinite loops
+
+    for round_num in range(max_tool_rounds + 1):
+        # Stream the response
+        full_text_parts = []
+        function_calls = []
+
+        async for chunk in await client.aio.models.generate_content_stream(
+            model=AGENT_MODEL,
+            contents=contents,
+            config=config,
+        ):
+            # Handle text chunks
+            if chunk.text:
+                full_text_parts.append(chunk.text)
+                yield {"type": "chunk", "content": chunk.text}
+
+            # Handle thinking (thought parts)
+            if chunk.candidates:
+                for candidate in chunk.candidates:
+                    if candidate.content and candidate.content.parts:
+                        for part in candidate.content.parts:
+                            if hasattr(part, 'thought') and part.thought:
+                                yield {"type": "thinking", "content": part.text or ""}
+
+            # Collect function calls
+            if chunk.function_calls:
+                function_calls.extend(chunk.function_calls)
+
+        # If no function calls, we're done
+        if not function_calls:
+            break
+
+        # If we've exhausted rounds, break
+        if round_num >= max_tool_rounds:
+            break
+
+        # Execute function calls
+        full_response_text = "".join(full_text_parts)
+
+        # Add the model's response (with function calls) to contents
+        model_parts = []
+        if full_response_text:
+            model_parts.append(types.Part.from_text(text=full_response_text))
+        for fc in function_calls:
+            model_parts.append(types.Part(function_call=fc))
+
+        contents.append(types.Content(role="model", parts=model_parts))
+
+        # Execute each function call and build function responses
+        function_response_parts = []
+        for fc in function_calls:
+            tool_name = fc.name
+            tool_args = dict(fc.args) if fc.args else {}
+
+            step_desc = f"🔧 {tool_name}"
+            if tool_args.get("query"):
+                step_desc += f': "{tool_args["query"]}"'
+            elif tool_args.get("folder_path"):
+                step_desc += f': "{tool_args["folder_path"]}"'
+            elif tool_args.get("note_id"):
+                step_desc += f': {tool_args["note_id"][:8]}...'
+            elif tool_args.get("title"):
+                step_desc += f': "{tool_args["title"]}"'
+
+            yield {"type": "tool_call", "content": step_desc}
+            steps.append({"type": "tool_call", "content": step_desc})
+
+            # Execute
+            result = await _execute_tool(tool_name, tool_args, user_id, db)
+
+            # Check if this generated a proposal
+            if result.get("status") == "proposal_created":
+                proposal = result["proposal"]
+                proposals.append(proposal)
+                yield {"type": "proposal", "proposal": proposal}
+                # Tell the model the proposal was created
+                result = {"status": "success", "message": f"Proposal erstellt: {proposal['type']} — wird dem Benutzer zur Bestätigung angezeigt."}
+
+            # Summarize result for streaming UI
+            result_summary = _summarize_tool_result(tool_name, result)
+            yield {"type": "tool_result", "content": result_summary}
+            steps.append({"type": "tool_result", "content": result_summary})
+
+            # Build function response part
+            function_response_parts.append(
+                types.Part.from_function_response(
+                    name=tool_name,
+                    response=result,
+                )
+            )
+
+        # Add function responses to contents
+        contents.append(types.Content(role="tool", parts=function_response_parts))
+
+        # Continue the loop — model will generate a follow-up response
+
+    yield {"type": "done", "proposals": proposals, "steps": steps}
+
+
+def _summarize_tool_result(tool_name: str, result: dict) -> str:
+    """Create a short human-readable summary of a tool result."""
+    if "error" in result:
+        return f"❌ Fehler: {result['error']}"
+
+    if tool_name == "search_notes":
+        count = len(result.get("results", []))
+        return f"📋 {count} Ergebnisse gefunden"
+    elif tool_name == "read_note":
+        title = result.get("title", "?")
+        return f'📖 Gelesen: "{title}"'
+    elif tool_name == "list_folders":
+        count = len(result.get("folders", []))
+        return f"📁 {count} Ordner"
+    elif tool_name == "list_notes_in_folder":
+        count = len(result.get("notes", []))
+        return f"📋 {count} Notizen"
+    elif tool_name == "search_images":
+        count = len(result.get("images", []))
+        return f"🖼️ {count} Bilder gefunden"
+    elif tool_name in ("create_note", "update_note", "delete_note"):
+        return f"✅ {result.get('message', 'Proposal erstellt')}"
+    else:
+        return "✅ Erledigt"
+
+
+# ── Non-streaming fallback (for backwards compat) ─────────────────────
 
 async def run_agent(
     instruction: str,
@@ -259,188 +591,35 @@ async def run_agent(
     image_context: list[dict] = None,
 ) -> dict:
     """
-    Run the agent. Returns:
-    - response: the agent's conversational message
-    - steps: list of {type, content} — tool calls executed
-    - proposals: list of proposed changes (may be empty)
+    Non-streaming agent run. Collects all stream events and returns the final result.
+    Used as fallback when streaming isn't available.
     """
-    model = _get_model()
-
-    # Gather folder context
-    folders = await _tool_list_folders(user_id, db)
-    folder_tree_str = "\n".join(f"  📁 {f['path']}" for f in folders) or "(keine Ordner)"
-
-    # Build conversation context
-    history_str = ""
-    if chat_history:
-        for msg in chat_history[-10:]:
-            role = "Benutzer" if msg["role"] == "user" else "Assistent"
-            # Strip hidden metadata from assistant messages in history
-            content = msg["content"]
-            content = re.sub(r'<!-- AGENT_META[\s\S]*?AGENT_META -->', '', content).strip()
-            history_str += f"\n{role}: {content}\n"
-
-    # Build image context if images were uploaded
-    image_info = ""
-    if image_context:
-        image_info = "\n\n## Vom Benutzer hochgeladene Bilder (in dieser Nachricht):\n"
-        for img in image_context:
-            image_info += f"\n📷 **{img['filename']}** (URL: {img['url']})\n"
-            image_info += f"KI-Beschreibung: {img['description']}\n"
-        image_info += "\nDiese Bilder sind bereits auf dem Server gespeichert."
-        image_info += "\nDu kannst sie in Notizen einbetten mit: ![Beschreibung](URL)"
-        image_info += "\nSpeichere sie proaktiv als Notiz in einem passenden Ordner wenn sie relevant sind."
-        image_info += "\nDer Benutzer erwartet dass du die Bilder sinnvoll einordnest und ablegen kannst.\n"
-
-    context = f"""{AGENT_SYSTEM_PROMPT}
-
-## Aktuelle Ordnerstruktur des Benutzers:
-{folder_tree_str}
-
-## Bisheriger Gesprächsverlauf:
-{history_str if history_str else "(Neues Gespräch)"}
-{image_info}
-## Aktuelle Nachricht des Benutzers:
-{instruction}
-
-Antworte als JSON. Wenn du zuerst Notizen/Bilder durchsuchen willst, setze tool_calls.
-Wenn du direkt antworten kannst (z.B. bei Rückfragen oder Brainstorming), setze nur response.
-Wenn Bilder hochgeladen wurden, speichere sie proaktiv als Notiz in einem passenden Ordner."""
-
-    steps = []
+    response_parts = []
     proposals = []
-    response_text = ""
+    steps = []
 
-    # Phase 1: Initial generation (may include tool_calls)
-    raw = await _generate(model, context)
-    parsed = _extract_json(raw)
-
-    if parsed is None:
-        response_text = raw.strip()
-        return {
-            "response": response_text,
-            "steps": steps,
-            "proposals": [],
-            "auto_accept": auto_accept,
-        }
-
-    # Execute tool calls if requested
-    tool_calls = parsed.get("tool_calls", [])
-    if tool_calls:
-        tool_results = []
-        for call in tool_calls:
-            if not isinstance(call, dict):
-                continue
-            tool_name = call.get("tool", "")
-
-            if tool_name == "search":
-                query = call.get("query", "")
-                steps.append({"type": "tool_call", "content": f"🔍 Suche: \"{query}\""})
-                results = await _tool_search(query, user_id, db)
-                steps.append({"type": "tool_result", "content": f"{len(results)} Ergebnisse gefunden"})
-                tool_results.append({"tool": "search", "query": query, "results": results})
-
-            elif tool_name == "read_note":
-                note_id = call.get("note_id", "")
-                steps.append({"type": "tool_call", "content": f"📖 Lese Notiz: {note_id[:8]}..."})
-                result = await _tool_read_note(note_id, user_id, db)
-                if result:
-                    steps.append({"type": "tool_result", "content": f"Gelesen: \"{result['title']}\""})
-                else:
-                    steps.append({"type": "tool_result", "content": "Notiz nicht gefunden"})
-                tool_results.append({"tool": "read_note", "result": result})
-
-            elif tool_name == "list_folders":
-                steps.append({"type": "tool_call", "content": "📁 Liste Ordner"})
-                result = await _tool_list_folders(user_id, db)
-                steps.append({"type": "tool_result", "content": f"{len(result)} Ordner"})
-                tool_results.append({"tool": "list_folders", "result": result})
-
-            elif tool_name == "list_notes":
-                fp = call.get("folder_path", "")
-                steps.append({"type": "tool_call", "content": f"📋 Notizen in: {fp}"})
-                result = await _tool_list_notes_in_folder(fp, user_id, db)
-                steps.append({"type": "tool_result", "content": f"{len(result)} Notizen"})
-                tool_results.append({"tool": "list_notes", "result": result})
-
-            elif tool_name == "search_images":
-                query = call.get("query", "")
-                steps.append({"type": "tool_call", "content": f"🖼️ Bildsuche: \"{query}\""})
-                results = await _tool_search_images(query, user_id, db)
-                steps.append({"type": "tool_result", "content": f"{len(results)} Bilder gefunden"})
-                tool_results.append({"tool": "search_images", "query": query, "results": results})
-
-            elif tool_name == "get_image":
-                image_id = call.get("image_id", "")
-                steps.append({"type": "tool_call", "content": f"🖼️ Bild laden: {image_id[:8]}..."})
-                result = await _tool_get_image(image_id, user_id, db)
-                if result:
-                    steps.append({"type": "tool_result", "content": f"Bild: \"{result['filename']}\""})
-                else:
-                    steps.append({"type": "tool_result", "content": "Bild nicht gefunden"})
-                tool_results.append({"tool": "get_image", "result": result})
-
-        # Phase 2: Generate final response with tool results
-        followup = f"""Die Tool-Ergebnisse:
-```json
-{json.dumps(tool_results, ensure_ascii=False, default=str)[:6000]}
-```
-
-Basierend auf diesen Informationen, antworte dem Benutzer jetzt.
-Denk dran: Brainstorme, stelle Fragen, oder erstelle Proposals nur wenn es Sinn macht.
-Wenn Bilder hochgeladen wurden und du noch kein Proposal dafür erstellt hast, speichere sie jetzt.
-Antworte als JSON mit mindestens dem "response" Feld."""
-
-        raw2 = await _generate(model, context + f"\n\n[Deine erste Antwort mit tool_calls]: {raw}\n\n[Tool-Ergebnisse]:\n{followup}")
-        parsed2 = _extract_json(raw2)
-
-        if parsed2:
-            response_text = parsed2.get("response", "")
-            proposals = parsed2.get("proposals", [])
-        else:
-            response_text = raw2.strip()
-    else:
-        response_text = parsed.get("response", "")
-        proposals = parsed.get("proposals", [])
+    async for event in run_agent_stream(
+        instruction=instruction,
+        user_id=user_id,
+        db=db,
+        chat_history=chat_history,
+        auto_accept=auto_accept,
+        image_context=image_context,
+    ):
+        event_type = event.get("type")
+        if event_type == "chunk":
+            response_parts.append(event["content"])
+        elif event_type == "proposal":
+            proposals.append(event["proposal"])
+        elif event_type in ("tool_call", "tool_result"):
+            steps.append({"type": event_type, "content": event["content"]})
+        elif event_type == "done":
+            proposals = event.get("proposals", proposals)
+            steps = event.get("steps", steps)
 
     return {
-        "response": response_text,
+        "response": "".join(response_parts),
         "steps": steps,
         "proposals": proposals,
         "auto_accept": auto_accept,
     }
-
-
-def _extract_json(text: str):
-    """Extract JSON from LLM response — handles code fences and raw JSON."""
-    text = text.strip()
-
-    # Try to extract from code fences first
-    fence_match = re.search(r'```(?:json)?\s*([\s\S]*?)```', text)
-    if fence_match:
-        text = fence_match.group(1).strip()
-
-    # Try parsing as-is
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-
-    # Try finding the first { and parse from there
-    start = text.find('{')
-    if start == -1:
-        return None
-
-    # Find matching end brace
-    depth = 0
-    for i in range(start, len(text)):
-        if text[i] == '{':
-            depth += 1
-        elif text[i] == '}':
-            depth -= 1
-            if depth == 0:
-                try:
-                    return json.loads(text[start:i + 1])
-                except json.JSONDecodeError:
-                    break
-    return None

@@ -8,6 +8,7 @@ import os
 import uuid as _uuid
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Form
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from uuid import UUID
@@ -18,7 +19,7 @@ from app.database import get_db
 from app.auth import get_current_user
 from app.models import User, Note, Folder, Tag, NoteVersion, note_tags, ChatSession, ChatMessage, Image
 from app.schemas import ChatMessageResponse
-from app.services.agent_service import run_agent
+from app.services.agent_service import run_agent, run_agent_stream
 from app.services.ai_service import generate_chat_title
 from app.services.vision_service import describe_image, describe_image_from_bytes
 from app.services.vector_service import upsert_note_embedding, delete_note_embedding
@@ -224,6 +225,213 @@ async def agent_send_message(
         "apply_result": apply_result,
         "image_urls": image_urls,
     }
+
+
+@router.post("/sessions/{session_id}/messages/stream")
+async def agent_stream_message(
+    session_id: UUID,
+    background_tasks: BackgroundTasks,
+    content: str = Form(...),
+    auto_accept: bool = Form(False),
+    images: List[UploadFile] = File(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Send a message to the agent and stream the response via SSE.
+    Streams thinking, tool calls, text chunks, and proposals in real-time.
+    """
+    # Verify session
+    session = await db.get(ChatSession, session_id)
+    if not session or session.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.session_type != "agent":
+        raise HTTPException(status_code=400, detail="Not an agent session")
+
+    # Process images if uploaded
+    image_descriptions = []
+    image_urls = []
+    if images:
+        for img_file in images:
+            if not img_file.content_type or img_file.content_type not in ALLOWED_IMAGE_TYPES:
+                continue
+            img_bytes = await img_file.read()
+            if len(img_bytes) == 0:
+                continue
+
+            user_dir = UPLOAD_DIR / str(current_user.id)
+            user_dir.mkdir(parents=True, exist_ok=True)
+            ext_map = {"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp"}
+            ext = ext_map.get(img_file.content_type, ".png")
+            unique_name = f"{_uuid.uuid4().hex}{ext}"
+            file_path = user_dir / unique_name
+            with open(file_path, "wb") as f:
+                f.write(img_bytes)
+
+            file_url = _build_url(str(current_user.id), unique_name)
+            image_urls.append(file_url)
+
+            img_record = Image(
+                original_filename=img_file.filename or f"pasted{ext}",
+                stored_filename=unique_name,
+                content_type=img_file.content_type,
+                file_size=len(img_bytes),
+                file_path=str(file_path),
+                user_id=current_user.id,
+            )
+            db.add(img_record)
+            await db.flush()
+            await db.refresh(img_record)
+
+            try:
+                description = await describe_image_from_bytes(img_bytes, img_file.content_type)
+                img_record.description = description
+                img_record.embedded = True
+                image_descriptions.append({
+                    "filename": img_file.filename or unique_name,
+                    "url": file_url,
+                    "description": description,
+                    "image_id": str(img_record.id),
+                })
+            except Exception as e:
+                image_descriptions.append({
+                    "filename": img_file.filename or unique_name,
+                    "url": file_url,
+                    "description": f"(Bild konnte nicht analysiert werden: {str(e)[:100]})",
+                    "image_id": str(img_record.id),
+                })
+
+    # Build user message content
+    user_content = content
+    if image_descriptions:
+        img_context = "\n\n---\n**Angehängte Bilder:**\n"
+        for desc in image_descriptions:
+            img_context += f"\n📷 **{desc['filename']}**\n"
+            img_context += f"Beschreibung: {desc['description']}\n"
+            img_context += f"URL: {desc['url']}\n"
+        user_content += img_context
+
+    # Save user message
+    user_msg = ChatMessage(session_id=session_id, role="user", content=user_content)
+    db.add(user_msg)
+    await db.flush()
+
+    # Load chat history
+    history_result = await db.execute(
+        select(ChatMessage)
+        .where(ChatMessage.session_id == session_id)
+        .order_by(ChatMessage.created_at)
+    )
+    all_messages = history_result.scalars().all()
+    chat_history = [{"role": m.role, "content": m.content} for m in all_messages]
+
+    await db.commit()
+
+    # Stream the agent response
+    async def event_stream():
+        full_response_parts = []
+        all_proposals = []
+        all_steps = []
+
+        async for event in run_agent_stream(
+            instruction=user_content,
+            user_id=str(current_user.id),
+            db=db,
+            chat_history=chat_history[:-1],
+            auto_accept=auto_accept,
+            image_context=image_descriptions if image_descriptions else None,
+        ):
+            event_type = event.get("type")
+
+            if event_type == "thinking":
+                data = json.dumps({"type": "thinking", "content": event["content"]}, ensure_ascii=False)
+                yield f"data: {data}\n\n"
+            elif event_type == "chunk":
+                full_response_parts.append(event["content"])
+                data = json.dumps({"type": "chunk", "content": event["content"]}, ensure_ascii=False)
+                yield f"data: {data}\n\n"
+            elif event_type == "tool_call":
+                all_steps.append(event)
+                data = json.dumps({"type": "tool_call", "content": event["content"]}, ensure_ascii=False)
+                yield f"data: {data}\n\n"
+            elif event_type == "tool_result":
+                all_steps.append(event)
+                data = json.dumps({"type": "tool_result", "content": event["content"]}, ensure_ascii=False)
+                yield f"data: {data}\n\n"
+            elif event_type == "proposal":
+                all_proposals.append(event["proposal"])
+                data = json.dumps({"type": "proposal", "proposal": event["proposal"]}, ensure_ascii=False)
+                yield f"data: {data}\n\n"
+            elif event_type == "done":
+                all_proposals = event.get("proposals", all_proposals)
+                all_steps = event.get("steps", all_steps)
+
+        # Save assistant message to DB
+        from app.database import async_session
+        agent_response = "".join(full_response_parts)
+        metadata = {}
+        if all_proposals:
+            metadata["proposals"] = all_proposals
+        if all_steps:
+            metadata["steps"] = all_steps
+
+        stored_content = agent_response
+        if metadata:
+            stored_content += f"\n\n<!-- AGENT_META\n{json.dumps(metadata, ensure_ascii=False)}\nAGENT_META -->"
+
+        async with async_session() as save_db:
+            assistant_msg = ChatMessage(
+                session_id=session_id, role="assistant", content=stored_content,
+            )
+            save_db.add(assistant_msg)
+
+            # Auto-generate title on first messages
+            count_result = await save_db.execute(
+                select(func.count(ChatMessage.id)).where(ChatMessage.session_id == session_id)
+            )
+            count = count_result.scalar()
+            if count <= 2:
+                try:
+                    ai_title = await generate_chat_title(content)
+                    s = await save_db.get(ChatSession, session_id)
+                    if s:
+                        s.title = ai_title
+                except Exception:
+                    s = await save_db.get(ChatSession, session_id)
+                    if s:
+                        s.title = content[:50] + ("..." if len(content) > 50 else "")
+
+            # Auto-accept proposals
+            apply_result = None
+            if auto_accept and all_proposals:
+                apply_result = await _apply_proposals(
+                    proposals=all_proposals,
+                    user_id=current_user.id,
+                    db=save_db,
+                    background_tasks=background_tasks,
+                )
+
+            await save_db.commit()
+
+        # Send final done event
+        done_data = json.dumps({
+            "type": "done",
+            "proposals": all_proposals,
+            "steps": all_steps,
+            "apply_result": apply_result,
+            "image_urls": image_urls,
+        }, ensure_ascii=False)
+        yield f"data: {done_data}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/apply")

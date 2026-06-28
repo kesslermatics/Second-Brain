@@ -1,22 +1,15 @@
 """Book processing service — search, TOC extraction, chapter note generation, topic deep-dive."""
 
-import google.generativeai as genai
-from google.ai.generativelanguage_v1beta import types as glm_types
-from app.services.ai_service import get_gemini_model, DEFAULT_NOTE_PROMPT
+from app.services.ai_service import generate_with_search, generate, generate_stream, generate_with_search_stream, PRO_MODEL, FLASH_MODEL, DEFAULT_NOTE_PROMPT
 from app.config import get_settings
-import asyncio
 import json
 import re
-
-# Google Search grounding tool (google_search_retrieval is deprecated)
-GOOGLE_SEARCH_TOOL = glm_types.Tool(google_search=glm_types.Tool.GoogleSearch())
 
 settings = get_settings()
 
 
 async def search_book(query: str) -> dict:
     """Search for a book using Gemini with Google Search grounding and return structured info."""
-    model = get_gemini_model()
 
     prompt = f"""Suche nach dem Buch: "{query}"
 
@@ -41,8 +34,7 @@ Wenn kein passendes Buch gefunden wird:
     "suggestion": "Meintest du vielleicht...?"
 }}"""
 
-    response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
-    text = response.text.strip()
+    text = (await generate_with_search(prompt, model=PRO_MODEL)).strip()
 
     json_match = re.search(r'\{[\s\S]*\}', text)
     if json_match:
@@ -56,7 +48,6 @@ Wenn kein passendes Buch gefunden wird:
 
 async def get_book_toc(book_title: str, authors: list[str]) -> dict:
     """Get the full table of contents for a book using Gemini with grounding."""
-    model = get_gemini_model()
 
     authors_str = ", ".join(authors)
 
@@ -93,8 +84,7 @@ Lasse folgende Einträge KOMPLETT WEG (sie haben keinen inhaltlichen Mehrwert):
 
 Nur inhaltliche Kapitel mit echtem Lerninhalt sollen aufgelistet werden."""
 
-    response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
-    text = response.text.strip()
+    text = (await generate_with_search(prompt, model=PRO_MODEL)).strip()
 
     json_match = re.search(r'\{[\s\S]*\}', text)
     if json_match:
@@ -116,7 +106,6 @@ async def generate_chapter_note(
     existing_note_titles: list[str] | None = None,
 ) -> dict:
     """Generate a structured note for a specific book chapter."""
-    model = get_gemini_model()
 
     authors_str = ", ".join(authors)
     tags_str = ", ".join(existing_tags) if existing_tags else "(keine)"
@@ -175,8 +164,7 @@ Formatierungsregeln für formatted_content (sehr wichtig!):
 - Die Notiz soll wie eine gute Zusammenfassung sein, die man zum Lernen nutzen kann
 - Schreibe in der Sprache des Buches"""
 
-    response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
-    text = response.text.strip()
+    text = (await generate_with_search(prompt, model=PRO_MODEL)).strip()
 
     json_match = re.search(r'\{[\s\S]*\}', text)
     if json_match:
@@ -206,7 +194,6 @@ async def generate_topic_note(
     existing_tags: list[str] = None,
 ) -> dict:
     """Generate a note for an arbitrary topic in the context of a book."""
-    model = get_gemini_model()
 
     authors_str = ", ".join(authors)
     tags_str = ", ".join(existing_tags) if existing_tags else "(keine)"
@@ -249,8 +236,7 @@ Formatierungsregeln für formatted_content (sehr wichtig!):
 - Die Notiz soll wie ein guter Lexikon-/Wikipedia-Eintrag sein, den man zum Lernen nutzen kann
 - Schreibe in der Sprache des Buches"""
 
-    response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
-    text = response.text.strip()
+    text = (await generate_with_search(prompt)).strip()
 
     json_match = re.search(r'\{[\s\S]*\}', text)
     if json_match:
@@ -275,7 +261,6 @@ Formatierungsregeln für formatted_content (sehr wichtig!):
 
 async def ai_edit_book_content(current_content: str, instruction: str) -> str:
     """Edit book-generated content based on an instruction (no note_id needed)."""
-    model = get_gemini_model()
 
     prompt = f"""Du bist ein Second Brain Assistent. Bearbeite die folgende Notiz basierend auf der Anweisung.
 
@@ -286,8 +271,7 @@ ANWEISUNG: {instruction}
 
 Gib NUR den neuen, vollständigen Notiz-Inhalt zurück (Markdown). Kein JSON, keine Erklärung, nur der Inhalt."""
 
-    response = await asyncio.to_thread(model.generate_content, prompt)
-    return response.text.strip()
+    return (await generate(prompt, model=PRO_MODEL)).strip()
 
 
 async def generate_chapter_summary(
@@ -302,7 +286,6 @@ async def generate_chapter_summary(
     If chat_history is provided, the summary is based on what was actually discussed.
     Otherwise, AI generates a summary from its own knowledge + Google Search.
     """
-    model = get_gemini_model()
     authors_str = ", ".join(authors) if authors else "Unbekannt"
 
     if chat_history and len([m for m in chat_history if m.get("role") in ("user", "assistant")]) >= 2:
@@ -345,7 +328,7 @@ AUFGABE: Erstelle eine Zusammenfassung, die:
 Gib NUR den Markdown-Inhalt zurück, kein JSON, keine Erklärung.
 Beginne NICHT mit dem Kapiteltitel als Heading (der wird separat angezeigt)."""
 
-        response = await asyncio.to_thread(model.generate_content, prompt)
+        response_text = await generate(prompt, model=PRO_MODEL)
     else:
         # No chat history — generate from AI knowledge
         prompt = f"""Du bist ein Second Brain Assistent. Erstelle eine hochwertige, gut strukturierte Zusammenfassung
@@ -374,6 +357,6 @@ AUFGABE: Erstelle eine Zusammenfassung, die:
 Gib NUR den Markdown-Inhalt zurück, kein JSON, keine Erklärung.
 Beginne NICHT mit dem Kapiteltitel als Heading (der wird separat angezeigt)."""
 
-        response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
+        response_text = await generate_with_search(prompt, model=PRO_MODEL)
 
-    return response.text.strip()
+    return response_text.strip()

@@ -14,7 +14,7 @@ import {
     searchBook, getBookToc,
     getBookCourses, getTeacherCourse, deleteTeacherCourse,
     createBookCourse, updateCourseStatus, updateCourseUnit,
-    getUnitMessages, sendTeacherChat,
+    getUnitMessages, sendTeacherChat, sendTeacherChatStream,
     generateLessonNotes, generateTermNote,
     recordNotesGenerated,
     generateUnitQuiz, generateUnitRecap,
@@ -61,6 +61,8 @@ export default function BookPanel() {
     const [messages, setMessages] = useState<CourseMessage[]>([]);
     const [chatInput, setChatInput] = useState('');
     const [sendingChat, setSendingChat] = useState(false);
+    const [streamingContent, setStreamingContent] = useState('');
+    const [streamingThought, setStreamingThought] = useState('');
 
     // Note generation
     const [generatingNotes, setGeneratingNotes] = useState(false);
@@ -248,7 +250,19 @@ export default function BookPanel() {
             setMessages(msgs);
             if (msgs.length === 0) {
                 setSendingChat(true);
-                const response = await sendTeacherChat(course.id, unit.id, '[START]');
+                setStreamingContent('');
+                setStreamingThought('');
+                let fullContent = '';
+                const response = await sendTeacherChatStream(course.id, unit.id, '[START]', (event) => {
+                    if (event.type === 'thinking') {
+                        setStreamingThought((prev) => prev + event.content);
+                    } else if (event.type === 'chunk') {
+                        fullContent += event.content;
+                        setStreamingContent(fullContent);
+                    }
+                });
+                setStreamingContent('');
+                setStreamingThought('');
                 setMessages([
                     { id: 'start', role: 'user', content: '[START]', metadata: null, created_at: null },
                     response.message,
@@ -313,6 +327,8 @@ export default function BookPanel() {
         const msg = chatInput.trim();
         setChatInput('');
         setSendingChat(true);
+        setStreamingContent('');
+        setStreamingThought('');
         userSentMessageRef.current = true;  // invalidate prefetched notes
 
         const tempId = `temp-${Date.now()}`;
@@ -322,7 +338,17 @@ export default function BookPanel() {
         ]);
 
         try {
-            const response = await sendTeacherChat(view.course.id, view.unit.id, msg);
+            let fullContent = '';
+            const response = await sendTeacherChatStream(view.course.id, view.unit.id, msg, (event) => {
+                if (event.type === 'thinking') {
+                    setStreamingThought((prev) => prev + event.content);
+                } else if (event.type === 'chunk') {
+                    fullContent += event.content;
+                    setStreamingContent(fullContent);
+                }
+            });
+            setStreamingContent('');
+            setStreamingThought('');
             setMessages((prev) => [...prev.filter((m) => m.id !== tempId),
             { id: tempId, role: 'user', content: msg, metadata: null, created_at: new Date().toISOString() },
             response.message
@@ -331,6 +357,8 @@ export default function BookPanel() {
         } catch {
             setError('Fehler beim Senden der Nachricht.');
             setMessages((prev) => prev.filter((m) => m.id !== tempId));
+            setStreamingContent('');
+            setStreamingThought('');
         } finally {
             setSendingChat(false);
             chatInputRef.current?.focus();
@@ -341,13 +369,27 @@ export default function BookPanel() {
     const handleNextSection = async () => {
         if (view.kind !== 'lesson-chat' || sendingChat) return;
         setSendingChat(true);
+        setStreamingContent('');
+        setStreamingThought('');
         userSentMessageRef.current = true;
         try {
-            const response = await sendTeacherChat(view.course.id, view.unit.id, '[ABSCHNITT_WEITER]');
+            let fullContent = '';
+            const response = await sendTeacherChatStream(view.course.id, view.unit.id, '[ABSCHNITT_WEITER]', (event) => {
+                if (event.type === 'thinking') {
+                    setStreamingThought((prev) => prev + event.content);
+                } else if (event.type === 'chunk') {
+                    fullContent += event.content;
+                    setStreamingContent(fullContent);
+                }
+            });
+            setStreamingContent('');
+            setStreamingThought('');
             setMessages((prev) => [...prev, response.message]);
             setSection({ current: response.current_section, total: response.total_sections });
         } catch {
             setError('Fehler beim Laden des nächsten Abschnitts.');
+            setStreamingContent('');
+            setStreamingThought('');
         } finally {
             setSendingChat(false);
         }
@@ -1246,12 +1288,25 @@ export default function BookPanel() {
 
                     {sendingChat && (
                         <div className="flex justify-start">
-                            <div className="bg-dark-800 border border-dark-700 rounded-2xl rounded-bl-md px-4 py-3">
-                                <div className="flex items-center gap-2 text-dark-400">
-                                    <div className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" />
-                                    <div className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" style={{ animationDelay: '0.2s' }} />
-                                    <div className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" style={{ animationDelay: '0.4s' }} />
-                                </div>
+                            <div className="bg-dark-800 border border-dark-700 rounded-2xl rounded-bl-md px-4 py-3 max-w-[85%]">
+                                {streamingThought && (
+                                    <div className="text-xs text-dark-500 italic border-l-2 border-dark-700 pl-2 py-1 mb-2">
+                                        <span className="text-dark-600 font-medium">💭</span> {streamingThought}
+                                    </div>
+                                )}
+                                {streamingContent ? (
+                                    <div className="prose prose-invert prose-sm max-w-none text-sm">
+                                        <ReactMarkdown components={markdownComponents} remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>
+                                            {streamingContent}
+                                        </ReactMarkdown>
+                                    </div>
+                                ) : (
+                                    <div className="flex items-center gap-2 text-dark-400">
+                                        <div className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" />
+                                        <div className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" style={{ animationDelay: '0.2s' }} />
+                                        <div className="w-2 h-2 bg-amber-400 rounded-full animate-pulse" style={{ animationDelay: '0.4s' }} />
+                                    </div>
+                                )}
                             </div>
                         </div>
                     )}

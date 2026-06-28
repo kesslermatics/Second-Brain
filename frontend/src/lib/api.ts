@@ -8,7 +8,7 @@ import type {
   BookSearchResult, BookTocResult, BookChapter, BookChapterNoteResult,
   CourseListItem, CourseDetail, CourseMessage as CourseMsg, CourseNoteResult, AdvancedFocusSuggestion,
   BookSummariesResponse, QuizQuestion, LessonRecap, TeacherChatResponse,
-  AgentRunResult,
+  AgentRunResult, AgentStep, AgentProposal,
 } from './types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -464,6 +464,79 @@ export const sendTeacherChat = async (courseId: string, unitId: string, message:
   return data;
 };
 
+export type TeacherStreamEvent =
+  | { type: 'thinking'; content: string }
+  | { type: 'chunk'; content: string }
+  | { type: 'done'; message_id: string; sections: unknown[]; current_section: number; total_sections: number; is_last_section: boolean };
+
+export const sendTeacherChatStream = async (
+  courseId: string,
+  unitId: string,
+  message: string,
+  onEvent?: (event: TeacherStreamEvent) => void,
+): Promise<TeacherChatResponse> => {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('brain_token') : null;
+
+  const response = await fetch(`${API_URL}/api/teacher/courses/${courseId}/units/${unitId}/chat/stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ message }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Teacher stream failed: ${response.status}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('No reader available');
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let fullContent = '';
+  let doneEvent: TeacherStreamEvent | null = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const jsonStr = line.slice(6).trim();
+        if (!jsonStr) continue;
+        try {
+          const event = JSON.parse(jsonStr) as TeacherStreamEvent;
+          if (event.type === 'chunk') fullContent += event.content;
+          if (event.type === 'done') doneEvent = event;
+          onEvent?.(event);
+        } catch { /* skip */ }
+      }
+    }
+  }
+
+  // Return a compatible TeacherChatResponse
+  const done = doneEvent as Extract<TeacherStreamEvent, { type: 'done' }> | null;
+  return {
+    message: {
+      id: done?.message_id || `stream-${Date.now()}`,
+      role: 'assistant',
+      content: fullContent,
+      metadata: null,
+      created_at: new Date().toISOString(),
+    },
+    sections: (done?.sections || []) as TeacherChatResponse['sections'],
+    current_section: done?.current_section ?? 0,
+    total_sections: done?.total_sections ?? 0,
+    is_last_section: done?.is_last_section ?? false,
+  };
+};
+
 export const generateLessonNotes = async (courseId: string, unitId: string) => {
   const { data } = await api.post<{ notes: CourseNoteResult[] }>(`/teacher/courses/${courseId}/units/${unitId}/generate-notes`);
   return data.notes;
@@ -557,6 +630,73 @@ export const runAgent = async (sessionId: string, content: string, autoAccept: b
     headers: { 'Content-Type': 'multipart/form-data' },
   });
   return data;
+};
+
+export type AgentStreamEvent =
+  | { type: 'thinking'; content: string }
+  | { type: 'chunk'; content: string }
+  | { type: 'tool_call'; content: string }
+  | { type: 'tool_result'; content: string }
+  | { type: 'proposal'; proposal: AgentProposal }
+  | { type: 'done'; proposals: AgentProposal[]; steps: AgentStep[]; apply_result?: unknown; image_urls?: string[] };
+
+export const runAgentStream = async (
+  sessionId: string,
+  content: string,
+  autoAccept: boolean = false,
+  images?: File[],
+  onEvent?: (event: AgentStreamEvent) => void,
+): Promise<void> => {
+  const formData = new FormData();
+  formData.append('content', content);
+  formData.append('auto_accept', String(autoAccept));
+  if (images && images.length > 0) {
+    for (const img of images) {
+      formData.append('images', img);
+    }
+  }
+
+  const token = typeof window !== 'undefined' ? localStorage.getItem('brain_token') : null;
+
+  const response = await fetch(`${API_URL}/api/agent/sessions/${sessionId}/messages/stream`, {
+    method: 'POST',
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Agent stream failed: ${response.status}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('No reader available');
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const jsonStr = line.slice(6).trim();
+        if (!jsonStr) continue;
+        try {
+          const event = JSON.parse(jsonStr) as AgentStreamEvent;
+          onEvent?.(event);
+        } catch {
+          // Skip malformed events
+        }
+      }
+    }
+  }
 };
 
 export const applyAgentProposals = async (proposals: unknown[]) => {

@@ -1,9 +1,9 @@
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
-import google.generativeai as genai
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text, func
 from app.config import get_settings
+from app.services.ai_service import get_client
 import uuid
 import numpy as np
 import asyncio
@@ -15,11 +15,10 @@ settings = get_settings()
 
 COLLECTION_NAME = "brain_notes"
 EMBEDDING_DIMENSION = 768
-EMBEDDING_MODEL = "models/gemini-embedding-001"
+EMBEDDING_MODEL = "gemini-embedding-001"
 
 # Lazy initialization — avoid blocking at import time during cold starts
 _qdrant_client = None
-_genai_configured = False
 
 
 def _get_qdrant():
@@ -34,13 +33,6 @@ def _get_qdrant():
             timeout=30,
         )
     return _qdrant_client
-
-
-def _ensure_genai():
-    global _genai_configured
-    if not _genai_configured:
-        genai.configure(api_key=settings.GEMINI_API_KEY)
-        _genai_configured = True
 
 
 async def ensure_collection():
@@ -75,26 +67,24 @@ def _normalize(vec: list[float]) -> list[float]:
 
 def get_embedding(text: str) -> list[float]:
     """Get document embedding using gemini-embedding-001."""
-    _ensure_genai()
-    result = genai.embed_content(
+    client = get_client()
+    result = client.models.embed_content(
         model=EMBEDDING_MODEL,
-        content=text,
-        task_type="RETRIEVAL_DOCUMENT",
-        output_dimensionality=EMBEDDING_DIMENSION,
+        contents=text,
+        config={"task_type": "RETRIEVAL_DOCUMENT", "output_dimensionality": EMBEDDING_DIMENSION},
     )
-    return _normalize(result["embedding"])
+    return _normalize(result.embeddings[0].values)
 
 
 def get_query_embedding(text: str) -> list[float]:
     """Get query embedding using gemini-embedding-001."""
-    _ensure_genai()
-    result = genai.embed_content(
+    client = get_client()
+    result = client.models.embed_content(
         model=EMBEDDING_MODEL,
-        content=text,
-        task_type="RETRIEVAL_QUERY",
-        output_dimensionality=EMBEDDING_DIMENSION,
+        contents=text,
+        config={"task_type": "RETRIEVAL_QUERY", "output_dimensionality": EMBEDDING_DIMENSION},
     )
-    return _normalize(result["embedding"])
+    return _normalize(result.embeddings[0].values)
 
 
 def upsert_note_embedding(note_id: str, user_id: str, title: str, content: str, folder_path: str):

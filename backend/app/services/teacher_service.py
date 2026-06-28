@@ -1,15 +1,10 @@
 """Infinite Teacher service — curriculum generation, interactive teaching chat, note generation."""
 
-import google.generativeai as genai
-from google.ai.generativelanguage_v1beta import types as glm_types
-from app.services.ai_service import get_gemini_model
+from app.services.ai_service import generate_with_search, generate, generate_stream, generate_with_search_stream, PRO_MODEL, FLASH_MODEL
 from app.config import get_settings
-import asyncio
 import json
 import re
 from datetime import datetime
-
-GOOGLE_SEARCH_TOOL = glm_types.Tool(google_search=glm_types.Tool.GoogleSearch())
 
 # Control messages that drive the lesson flow but are not real student input.
 # They must be excluded from note generation, quiz/recap context, and "did the
@@ -204,8 +199,6 @@ async def generate_curriculum(
 
     Returns: {title, description, units: [{unit_number, title, description, learning_objectives, level}]}
     """
-    model = get_gemini_model()
-
     context_section = ""
     if parent_context:
         context_section = f"""
@@ -286,8 +279,7 @@ WICHTIG:
 - Die Lektionsnamen sollen das THEMA beschreiben, nicht "Stunde 1" oder "Lektion 1"
 - Module (level 1) sind übergeordnete Themenbereiche, Lektionen (level 2) sind die konkreten Unterrichtseinheiten"""
 
-    response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
-    text = response.text.strip()
+    text = (await generate_with_search(prompt, model=PRO_MODEL)).strip()
 
     result = _extract_json(text)
     if result:
@@ -317,8 +309,6 @@ async def chat_with_teacher(
     The teacher explains concepts conversationally, answers questions,
     and guides the student through the lesson.
     """
-    model = get_gemini_model()
-
     objectives_str = "\n".join(f"  - {o}" for o in learning_objectives) if learning_objectives else "  (keine spezifischen Lernziele definiert)"
 
     prev_context = ""
@@ -387,8 +377,49 @@ Antworte auf Deutsch (oder in der Sprache, die der Student verwendet).
 Sei warmherzig aber sachlich. Kein Smalltalk — fokussiere dich auf den Lehrinhalt.
 WICHTIG: DUZE den Studenten IMMER. Verwende "du/dein/dir", NIEMALS "Sie/Ihr/Ihnen"."""
 
-    response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
-    return response.text.strip()
+    return (await generate_with_search(prompt, model=PRO_MODEL)).strip()
+
+
+async def chat_with_teacher_stream(
+    course_title: str,
+    unit_title: str,
+    unit_description: str,
+    learning_objectives: list[str],
+    chat_history: list[dict],
+    user_message: str,
+    previous_units_summary: str | None = None,
+    next_unit_title: str | None = None,
+    sections: list[dict] | None = None,
+    current_section: int = 0,
+):
+    """Streaming variant of chat_with_teacher. Yields SSE event dicts."""
+    objectives_str = "\n".join(f"  - {o}" for o in learning_objectives) if learning_objectives else ""
+    prev_context = f"\nBEREITS BEHANDELT:\n{previous_units_summary}\n" if previous_units_summary else ""
+    next_hint = f'\nNÄCHSTES THEMA: "{next_unit_title}"' if next_unit_title else ""
+    history_text = ""
+    for msg in chat_history[-20:]:
+        role_label = "Student" if msg["role"] == "user" else "Lehrer"
+        if msg["role"] != "note_generated":
+            history_text += f"\n{role_label}: {msg['content']}\n"
+    year = _current_year()
+    sections_block = _build_sections_block(sections, current_section)
+    sections_section = f"\n{sections_block}\n" if sections_block else ""
+
+    prompt = f"""Du bist ein freundlicher, kompetenter Universitätsprofessor ({year}). Du DUZT den Studenten IMMER.
+Kurs: "{course_title}" | Lektion: "{unit_title}"
+{unit_description}
+Lernziele: {objectives_str}
+{prev_context}{next_hint}{sections_section}
+GESPRÄCHSVERLAUF:{history_text}
+
+STUDENT: {user_message}
+
+Erkläre den aktuellen Abschnitt substantiell mit Beispiel (2-4 Absätze). Fokussiere auf dieses Teilkonzept.
+{FORMATTING_RULES}
+Antworte auf Deutsch. DUZE den Studenten."""
+
+    async for event in generate_with_search_stream(prompt, model=PRO_MODEL):
+        yield event
 
 
 async def generate_lesson_notes(
@@ -405,8 +436,6 @@ async def generate_lesson_notes(
 
     Returns a list of notes: [{title, content, suggested_tags, suggested_folder}]
     """
-    model = get_gemini_model()
-
     tags_str = ", ".join(existing_tags) if existing_tags else "(keine)"
 
     objectives_str = "\n".join(f"  - {o}" for o in learning_objectives) if learning_objectives else ""
@@ -489,8 +518,7 @@ Antworte NUR mit dem JSON, kein anderer Text:
     ]
 }}"""
 
-    response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
-    text = response.text.strip()
+    text = (await generate_with_search(prompt, model=PRO_MODEL)).strip()
 
     result = _extract_json(text)
     if result:
@@ -520,8 +548,6 @@ async def generate_term_note(
 
     Returns: {title, content, suggested_tags, suggested_folder}
     """
-    model = get_gemini_model()
-
     tags_str = ", ".join(existing_tags) if existing_tags else "(keine)"
 
     # Compress recent chat for context
@@ -554,8 +580,7 @@ Antworte NUR mit dem JSON, kein anderer Text:
     "suggested_folder": "Kurse/{course_title}"
 }}"""
 
-    response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
-    text = response.text.strip()
+    text = (await generate_with_search(prompt)).strip()
 
     result = _extract_json(text)
     if result:
@@ -583,8 +608,6 @@ async def generate_advanced_focus(
 
     Returns: [{title, description, topic}]
     """
-    model = get_gemini_model()
-
     prompt = f"""Du bist ein Studienberater und Lehrplanentwickler.
 Du DUZT den Studierenden.
 
@@ -612,8 +635,7 @@ Antworte NUR mit dem JSON:
     ]
 }}"""
 
-    response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
-    text = response.text.strip()
+    text = (await generate_with_search(prompt)).strip()
 
     result = _extract_json(text)
     if result:
@@ -624,8 +646,6 @@ Antworte NUR mit dem JSON:
 
 async def ai_edit_lesson_content(current_content: str, instruction: str) -> str:
     """Edit a lesson note based on user instruction."""
-    model = get_gemini_model()
-
     prompt = f"""Du bist ein Second Brain Assistent. Bearbeite die folgende Notiz basierend auf der Anweisung.
 
 AKTUELLE NOTIZ:
@@ -638,8 +658,7 @@ ANWEISUNG: {instruction}
 
 Gib NUR den neuen, vollständigen Notiz-Inhalt zurück (Markdown). Kein JSON, keine Erklärung, nur der Inhalt."""
 
-    response = await asyncio.to_thread(model.generate_content, prompt)
-    return response.text.strip()
+    return (await generate(prompt)).strip()
 
 
 # ── Lesson sections (break a lesson into walk-through steps) ──────────
@@ -659,7 +678,6 @@ async def generate_lesson_sections(
 
     Returns a list: [{"title": str, "focus": str}]
     """
-    model = get_gemini_model()
     objectives_str = "\n".join(f"  - {o}" for o in learning_objectives) if learning_objectives else "  (keine spezifischen Lernziele)"
 
     if kind == "book":
@@ -702,8 +720,7 @@ Antworte NUR mit dem JSON, kein anderer Text:
     ]
 }}"""
 
-    response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
-    text = response.text.strip()
+    text = (await generate_with_search(prompt)).strip()
 
     result = _extract_json(text)
     if result:
@@ -786,8 +803,6 @@ async def generate_quiz(
     Works for both lessons and book chapters. Returns a list of questions:
     [{question, options: [str, ...], correct_index: int, explanation}]
     """
-    model = get_gemini_model()
-
     subject = "des Buchkapitels" if kind == "book" else "der Lektion"
     objectives_str = "\n".join(f"  - {o}" for o in learning_objectives) if learning_objectives else ""
 
@@ -834,8 +849,7 @@ Antworte NUR mit dem JSON, kein anderer Text:
     ]
 }}"""
 
-    response = await asyncio.to_thread(model.generate_content, prompt)
-    text = response.text.strip()
+    text = (await generate(prompt)).strip()
 
     result = _extract_json(text)
     if result:
@@ -878,8 +892,6 @@ async def generate_recap(
 
     Returns: {summary_points: [str, ...], next_preview: str}
     """
-    model = get_gemini_model()
-
     subject = "des Buchkapitels" if kind == "book" else "der Lektion"
     objectives_str = "\n".join(f"  - {o}" for o in learning_objectives) if learning_objectives else ""
 
@@ -928,8 +940,7 @@ Regeln:
 - Beziehe dich konkret auf die Inhalte, nicht generisch
 - Schreibe auf Deutsch (oder in der Sprache des Gesprächs)"""
 
-    response = await asyncio.to_thread(model.generate_content, prompt)
-    text = response.text.strip()
+    text = (await generate(prompt)).strip()
 
     result = _extract_json(text)
     if result:
@@ -957,7 +968,6 @@ async def chat_about_book_chapter(
     current_section: int = 0,
 ) -> str:
     """Chat about a specific book chapter, explaining its content interactively."""
-    model = get_gemini_model()
     year = _current_year()
     authors_str = ", ".join(book_authors) if book_authors else "unbekannter Autor"
 
@@ -1022,8 +1032,48 @@ Antworte auf Deutsch (oder in der Sprache des Buches).
 Sei warmherzig aber sachlich. Fokussiere dich auf den Inhalt des Kapitels.
 WICHTIG: DUZE den Studenten IMMER. Verwende "du/dein/dir", NIEMALS "Sie/Ihr/Ihnen"."""
 
-    response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
-    return response.text.strip()
+    return (await generate_with_search(prompt, model=PRO_MODEL)).strip()
+
+
+async def chat_about_book_chapter_stream(
+    book_title: str,
+    book_authors: list[str],
+    chapter_number: str,
+    chapter_title: str,
+    chat_history: list[dict],
+    user_message: str,
+    previous_chapters_summary: str | None = None,
+    next_chapter_title: str | None = None,
+    sections: list[dict] | None = None,
+    current_section: int = 0,
+):
+    """Streaming variant of chat_about_book_chapter. Yields SSE event dicts."""
+    year = _current_year()
+    authors_str = ", ".join(book_authors) if book_authors else "unbekannter Autor"
+    prev_context = f"\nBEREITS BEHANDELT:\n{previous_chapters_summary}\n" if previous_chapters_summary else ""
+    next_hint = f'\nNÄCHSTES KAPITEL: "{next_chapter_title}"' if next_chapter_title else ""
+    history_text = ""
+    for msg in chat_history[-20:]:
+        role_label = "Student" if msg["role"] == "user" else "Tutor"
+        if msg["role"] != "note_generated":
+            history_text += f"\n{role_label}: {msg['content']}\n"
+    sections_block = _build_sections_block(sections, current_section)
+    sections_section = f"\n{sections_block}\n" if sections_block else ""
+
+    prompt = f"""Du bist ein kompetenter Tutor ({year}), der einem Studenten beim Durcharbeiten eines Buches hilft. Du DUZT den Studenten IMMER.
+BUCH: "{book_title}" von {authors_str}
+KAPITEL {chapter_number}: "{chapter_title}"
+{prev_context}{next_hint}{sections_section}
+GESPRÄCHSVERLAUF:{history_text}
+
+STUDENT: {user_message}
+
+Recherchiere den tatsächlichen Inhalt dieses Kapitels. Erkläre den aktuellen Abschnitt substantiell mit Beispiel (2-4 Absätze).
+{FORMATTING_RULES}
+Antworte auf Deutsch. DUZE den Studenten IMMER."""
+
+    async for event in generate_with_search_stream(prompt, model=PRO_MODEL):
+        yield event
 
 
 async def generate_book_chapter_notes(
@@ -1036,7 +1086,6 @@ async def generate_book_chapter_notes(
     existing_note_titles: list[str] | None = None,
 ) -> list[dict]:
     """Generate atomic notes for a book chapter based on the interactive discussion."""
-    model = get_gemini_model()
     authors_str = ", ".join(book_authors) if book_authors else "unbekannter Autor"
     tags_str = ", ".join(existing_tags) if existing_tags else "(keine)"
 
@@ -1115,8 +1164,7 @@ Antworte NUR mit dem JSON, kein anderer Text:
     ]
 }}"""
 
-    response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
-    text = response.text.strip()
+    text = (await generate_with_search(prompt, model=PRO_MODEL)).strip()
 
     result = _extract_json(text)
     if result:
@@ -1144,7 +1192,6 @@ async def generate_book_term_note(
     existing_tags: list[str] | None = None,
 ) -> dict:
     """Generate a single atomic note for a term from a book chapter context."""
-    model = get_gemini_model()
     authors_str = ", ".join(book_authors) if book_authors else "unbekannter Autor"
     tags_str = ", ".join(existing_tags) if existing_tags else "(keine)"
 
@@ -1177,8 +1224,7 @@ Antworte NUR mit dem JSON, kein anderer Text:
     "suggested_folder": "Bücher/{book_title}"
 }}"""
 
-    response = await asyncio.to_thread(model.generate_content, prompt, tools=[GOOGLE_SEARCH_TOOL])
-    text = response.text.strip()
+    text = (await generate_with_search(prompt, model=PRO_MODEL)).strip()
 
     result = _extract_json(text)
     if result:

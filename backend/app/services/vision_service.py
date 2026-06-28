@@ -1,23 +1,13 @@
 """
 Gemini Vision service — interprets images and generates text descriptions for RAG.
+Uses the new google-genai SDK.
 """
 import asyncio
-import google.generativeai as genai
 from pathlib import Path
-from app.config import get_settings
+from google.genai import types
+from app.services.ai_service import get_client, FLASH_MODEL
 
-settings = get_settings()
-_genai_configured = False
-
-
-def _ensure_genai():
-    global _genai_configured
-    if not _genai_configured:
-        genai.configure(api_key=settings.GEMINI_API_KEY)
-        _genai_configured = True
-
-
-VISION_MODEL = "gemini-3-flash-preview"
+VISION_MODEL = FLASH_MODEL
 
 DESCRIBE_PROMPT = """Analysiere dieses Bild detailliert und beschreibe es auf Deutsch.
 
@@ -47,21 +37,21 @@ async def describe_image(file_path: str, custom_prompt: str | None = None) -> st
     if not path.exists():
         raise FileNotFoundError(f"Image not found: {file_path}")
 
-    # Upload the file to Gemini
-    _ensure_genai()
-    uploaded = genai.upload_file(path)
-
-    model = genai.GenerativeModel(VISION_MODEL)
+    client = get_client()
     prompt = custom_prompt or DESCRIBE_PROMPT
 
-    response = await asyncio.to_thread(model.generate_content, [prompt, uploaded])
+    # Read file and determine mime type
+    mime_map = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
+    mime_type = mime_map.get(path.suffix.lower(), "image/png")
+    image_bytes = path.read_bytes()
 
-    # Clean up the uploaded file
-    try:
-        genai.delete_file(uploaded.name)
-    except Exception:
-        pass  # non-critical
-
+    response = await client.aio.models.generate_content(
+        model=VISION_MODEL,
+        contents=[
+            prompt,
+            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+        ],
+    )
     return response.text.strip()
 
 
@@ -73,14 +63,14 @@ async def describe_image_from_bytes(
     """
     Describe an image from raw bytes (useful for inline / pasted images).
     """
-    _ensure_genai()
-    model = genai.GenerativeModel(VISION_MODEL)
+    client = get_client()
     prompt = custom_prompt or DESCRIBE_PROMPT
 
-    image_part = {
-        "mime_type": content_type,
-        "data": image_bytes,
-    }
-
-    response = await asyncio.to_thread(model.generate_content, [prompt, image_part])
+    response = await client.aio.models.generate_content(
+        model=VISION_MODEL,
+        contents=[
+            prompt,
+            types.Part.from_bytes(data=image_bytes, mime_type=content_type),
+        ],
+    )
     return response.text.strip()

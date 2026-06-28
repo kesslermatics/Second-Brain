@@ -10,7 +10,8 @@ import {
 } from 'react-icons/fi';
 import ReactMarkdown from 'react-markdown';
 import { markdownComponents, remarkPlugins, rehypePlugins } from '@/lib/markdownComponents';
-import { runAgent, applyAgentProposals, createChatSession, getChatSession, deleteChatSession, updateChatSession, getNote } from '@/lib/api';
+import { runAgentStream, applyAgentProposals, createChatSession, getChatSession, deleteChatSession, updateChatSession, getNote } from '@/lib/api';
+import type { AgentStreamEvent } from '@/lib/api';
 import { useStore } from '@/lib/store';
 import FolderTreeComponent from './FolderTree';
 import type { AgentStep, AgentProposal, ChatMessage, ChatSessionDetail, Note } from '@/lib/types';
@@ -52,6 +53,9 @@ export default function AgentView() {
     const [loading, setLoading] = useState(false);
     const [autoAccept, setAutoAccept] = useState(false);
     const [parsedMessages, setParsedMessages] = useState<ParsedAgentMessage[]>([]);
+    const [streamingThought, setStreamingThought] = useState('');
+    const [streamingContent, setStreamingContent] = useState('');
+    const [streamingSteps, setStreamingSteps] = useState<AgentStep[]>([]);
     const [appliedProposals, setAppliedProposals] = useState<Set<string>>(new Set());
     const [rejectedProposals, setRejectedProposals] = useState<Set<string>>(new Set());
     const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
@@ -107,18 +111,75 @@ export default function AgentView() {
         const currentInput = input; setInput(''); setLoading(true);
         if (textareaRef.current) textareaRef.current.style.height = 'auto';
         setParsedMessages((p) => [...p, { id: `temp-${Date.now()}`, role: 'user', content: currentInput, created_at: new Date().toISOString() }]);
+        setStreamingThought('');
+        setStreamingContent('');
+        setStreamingSteps([]);
 
         try {
-            const result = await runAgent(session.id, currentInput, autoAccept, pendingImages.length > 0 ? pendingImages : undefined);
+            const msgId = `stream-${Date.now()}`;
+            let fullContent = '';
+            let fullThought = '';
+            const allSteps: AgentStep[] = [];
+            const allProposals: AgentProposal[] = [];
+
+            await runAgentStream(
+                session.id,
+                currentInput,
+                autoAccept,
+                pendingImages.length > 0 ? pendingImages : undefined,
+                (event: AgentStreamEvent) => {
+                    switch (event.type) {
+                        case 'thinking':
+                            fullThought += event.content;
+                            setStreamingThought(fullThought);
+                            break;
+                        case 'chunk':
+                            fullContent += event.content;
+                            setStreamingContent(fullContent);
+                            break;
+                        case 'tool_call':
+                            allSteps.push({ type: 'tool_call', content: event.content });
+                            setStreamingSteps([...allSteps]);
+                            break;
+                        case 'tool_result':
+                            allSteps.push({ type: 'tool_result', content: event.content });
+                            setStreamingSteps([...allSteps]);
+                            break;
+                        case 'proposal':
+                            allProposals.push(event.proposal);
+                            break;
+                        case 'done':
+                            // Final event — finalize the message
+                            break;
+                    }
+                },
+            );
+
             setPendingImages([]);
-            setParsedMessages((p) => [...p, { id: result.message.id, role: 'assistant', content: result.message.content, steps: result.steps, proposals: result.proposals, created_at: result.message.created_at }]);
-            if (autoAccept && result.proposals?.length > 0) {
-                const keys = result.proposals.map((_, i) => `${result.message.id}-${i}`);
+            setStreamingThought('');
+            setStreamingContent('');
+            setStreamingSteps([]);
+
+            // Add the final message to the list
+            setParsedMessages((p) => [...p, {
+                id: msgId,
+                role: 'assistant',
+                content: fullContent,
+                steps: allSteps.length > 0 ? allSteps : undefined,
+                proposals: allProposals.length > 0 ? allProposals : undefined,
+                created_at: new Date().toISOString(),
+            }]);
+
+            if (autoAccept && allProposals.length > 0) {
+                const keys = allProposals.map((_, i) => `${msgId}-${i}`);
                 setAppliedProposals((p) => { const n = new Set(p); keys.forEach(k => n.add(k)); return n; });
             }
             loadFolderTree(); await loadAgentSessions();
         } catch (e) {
             console.error(e);
+            setStreamingThought('');
+            setStreamingContent('');
+            setStreamingSteps([]);
             setParsedMessages((p) => [...p, { id: `err-${Date.now()}`, role: 'assistant', content: 'Fehler bei der Verarbeitung.', created_at: new Date().toISOString() }]);
         } finally { setLoading(false); }
     };
@@ -244,7 +305,40 @@ export default function AgentView() {
                                 onAcceptProposal={handleAcceptProposal} onRejectProposal={handleRejectProposal}
                                 onAcceptAll={handleAcceptAll} onOpenDiff={openDiffInLeft} onOpenNote={openNoteInLeft} />
                         ))}
-                        {loading && <ThinkingIndicator />}
+                        {loading && (streamingContent || streamingThought || streamingSteps.length > 0) && (
+                            <div className="flex gap-2">
+                                <div className="w-7 h-7 rounded-lg bg-rose-600/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+                                    <FiCpu className="w-3.5 h-3.5 text-rose-400" />
+                                </div>
+                                <div className="flex-1 min-w-0 space-y-2">
+                                    {streamingThought && (
+                                        <div className="text-xs text-dark-500 italic border-l-2 border-dark-700 pl-2 py-1 bg-dark-800/30 rounded-r">
+                                            <span className="text-dark-600 font-medium">💭 Denkt...</span>
+                                            <p className="mt-0.5 whitespace-pre-wrap">{streamingThought}</p>
+                                        </div>
+                                    )}
+                                    {streamingSteps.length > 0 && (
+                                        <div className="space-y-0.5">
+                                            {streamingSteps.map((step, i) => (
+                                                <div key={i} className="text-xs text-dark-400 flex items-center gap-1.5">
+                                                    {step.type === 'tool_call' ? <FiZap className="w-3 h-3 text-amber-400" /> : <FiCheckCircle className="w-3 h-3 text-green-400" />}
+                                                    <span>{step.content}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                    {streamingContent && (
+                                        <div className="prose prose-invert prose-sm max-w-none text-sm text-dark-200">
+                                            <ReactMarkdown components={markdownComponents} remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>
+                                                {streamingContent}
+                                            </ReactMarkdown>
+                                        </div>
+                                    )}
+                                    {!streamingContent && <span className="inline-block w-2 h-4 bg-rose-400/60 animate-pulse rounded-sm" />}
+                                </div>
+                            </div>
+                        )}
+                        {loading && !streamingContent && !streamingThought && streamingSteps.length === 0 && <ThinkingIndicator />}
                         <div ref={messagesEndRef} />
                     </div>
 
