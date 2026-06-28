@@ -378,3 +378,39 @@ export interface TeacherChatResponse {
   total_sections: number;
   is_last_section: boolean;
 }
+
+// ── Agent / Agentic Workspace ────────────────────────────────────────
+
+export interface AgentStep {
+  type: 'thinking' | 'tool_call' | 'tool_result' | 'done' | 'error';
+  content: string;
+}
+
+export interface AgentProposal {
+  type: 'create' | 'update' | 'delete';
+  // For create
+  folder_path?: string;
+  title?: string;
+  content?: string;
+  tags?: string[];
+  reason?: string;
+  // For update
+  note_id?: string;
+  new_title?: string;
+  new_content?: string;
+  // For delete (uses note_id + reason)
+}
+
+export interface AgentRunResult {
+  steps: AgentStep[];
+  proposals: AgentProposal[];
+  summary: string;
+  auto_accept: boolean;
+  apply_result?: {
+    applied: number;
+    errors: string[];
+    created_notes: { note_id: string; title: string; folder_path: string }[];
+    updated_notes: { note_id: string; title: string; folder_path: string }[];
+    deleted_notes: string[];
+  };
+}

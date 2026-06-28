@@ -29,6 +29,7 @@ from app.routes.image_routes import router as image_router
 from app.routes.book_routes import router as book_router
 from app.routes.state_routes import router as state_router
 from app.routes.teacher_routes import router as teacher_router
+from app.routes.agent_routes import router as agent_router
 
 settings = get_settings()
 
@@ -113,6 +114,7 @@ app.include_router(image_router, prefix="/api")
 app.include_router(book_router, prefix="/api")
 app.include_router(state_router, prefix="/api")
 app.include_router(teacher_router, prefix="/api")
+app.include_router(agent_router, prefix="/api")
 
 # Serve uploaded files statically
 UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "uploads"))

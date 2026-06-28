@@ -16,6 +16,7 @@ import SummaryView from '@/components/SummaryView';
 import ImageGallery from '@/components/ImageGallery';
 import BookPanel from '@/components/BookPanel';
 import TeacherPanel from '@/components/TeacherPanel';
+import AgentView from '@/components/AgentView';
 
 export default function DashboardPage() {
     const router = useRouter();
@@ -63,6 +64,7 @@ export default function DashboardPage() {
             case 'images': return <ImageGallery />;
             case 'books': return <BookPanel />;
             case 'teacher': return <TeacherPanel />;
+            case 'agent': return <AgentView />;
             default: return <ChatView />;
         }
     };

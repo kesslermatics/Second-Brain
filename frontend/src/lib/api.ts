@@ -8,6 +8,7 @@ import type {
   BookSearchResult, BookTocResult, BookChapter, BookChapterNoteResult,
   CourseListItem, CourseDetail, CourseMessage as CourseMsg, CourseNoteResult, AdvancedFocusSuggestion,
   BookSummariesResponse, QuizQuestion, LessonRecap, TeacherChatResponse,
+  AgentRunResult,
 } from './types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -540,3 +541,24 @@ export const generateChapterSummary = async (courseId: string, unitId: string) =
 };
 
 export default api;
+
+// ── Agentic Workspace ────────────────────────────────────────────────
+
+export const runAgent = async (instruction: string, autoAccept: boolean = false) => {
+  const { data } = await api.post<AgentRunResult>('/agent/run', {
+    instruction,
+    auto_accept: autoAccept,
+  });
+  return data;
+};
+
+export const applyAgentProposals = async (proposals: unknown[]) => {
+  const { data } = await api.post<{
+    applied: number;
+    errors: string[];
+    created_notes: { note_id: string; title: string; folder_path: string }[];
+    updated_notes: { note_id: string; title: string; folder_path: string }[];
+    deleted_notes: string[];
+  }>('/agent/apply', { proposals });
+  return data;
+};

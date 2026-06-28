@@ -7,6 +7,7 @@ import {
     FiMessageSquare, FiBookOpen, FiPlus, FiTrash2,
     FiChevronRight, FiChevronDown, FiLogOut, FiMenu, FiFile, FiSettings,
     FiSearch, FiGrid, FiShare2, FiRepeat, FiDownload, FiFileText, FiImage, FiEdit2, FiBook,
+    FiCpu,
 } from 'react-icons/fi';
 import { LuGraduationCap } from 'react-icons/lu';
 import { createChatSession, getChatSession, deleteChatSession, updateChatSession } from '@/lib/api';
@@ -278,6 +279,14 @@ export default function Sidebar() {
                     >
                         <LuGraduationCap className="w-3.5 h-3.5" />
                         Lehrer
+                    </button>
+                    <button
+                        onClick={() => { setActiveView('agent'); closeSidebarOnMobile(); }}
+                        className={`flex flex-col items-center gap-1 py-2 px-1 rounded-lg text-[10px] font-medium transition-colors ${activeView === 'agent' ? 'bg-rose-600/20 text-rose-400' : 'text-dark-500 hover:text-white hover:bg-dark-800'
+                            }`}
+                    >
+                        <FiCpu className="w-3.5 h-3.5" />
+                        Agent
                     </button>
                 </div>
 
