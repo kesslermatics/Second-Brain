@@ -24,6 +24,7 @@ interface ParsedAgentMessage {
     steps?: AgentStep[];
     proposals?: AgentProposal[];
     appliedIndices?: number[];
+    attachments?: { name: string; type: string; url?: string }[];
     created_at: string;
 }
 
@@ -126,9 +127,19 @@ export default function AgentView() {
         if (!session) { try { const ns = await createChatSession('agent', inputVal.slice(0, 50)); session = await getChatSession(ns.id); setActiveAgentSession(session); await loadAgentSessions(); } catch (e) { console.error(e); return; } }
 
         const currentInput = inputVal;
+        const currentFiles = [...pendingFiles];
+        setPendingFiles([]);
         if (textareaRef.current) { textareaRef.current.value = ''; textareaRef.current.style.height = 'auto'; }
         setLoading(true);
-        setParsedMessages((p) => [...p, { id: `temp-${Date.now()}`, role: 'user', content: currentInput, created_at: new Date().toISOString() }]);
+
+        // Build attachments preview for the user message
+        const attachments = currentFiles.map(f => ({
+            name: f.name,
+            type: f.type.startsWith('image/') ? 'image' : 'document',
+            url: f.type.startsWith('image/') ? URL.createObjectURL(f) : undefined,
+        }));
+
+        setParsedMessages((p) => [...p, { id: `temp-${Date.now()}`, role: 'user', content: currentInput, attachments: attachments.length > 0 ? attachments : undefined, created_at: new Date().toISOString() }]);
         setStreamingThought('');
         setStreamingContent('');
         setStreamingSteps([]);
@@ -144,7 +155,7 @@ export default function AgentView() {
                 session.id,
                 currentInput,
                 autoAccept,
-                pendingFiles.length > 0 ? pendingFiles : undefined,
+                currentFiles.length > 0 ? currentFiles : undefined,
                 (event: AgentStreamEvent) => {
                     switch (event.type) {
                         case 'thinking':
@@ -173,7 +184,6 @@ export default function AgentView() {
                 },
             );
 
-            setPendingFiles([]);
             setStreamingThought('');
             setStreamingContent('');
             setStreamingSteps([]);
@@ -465,7 +475,29 @@ interface MessageBubbleProps {
 
 const MessageBubble = memo(function MessageBubble({ msg, expandedSteps, setExpandedSteps, appliedProposals, rejectedProposals, onAcceptProposal, onRejectProposal, onAcceptAll, onOpenDiff, onOpenNote }: MessageBubbleProps) {
     if (msg.role === 'user') {
-        return (<div className="flex justify-end"><div className="max-w-[80%] bg-rose-900/30 border border-rose-800/30 rounded-2xl px-3 py-2"><p className="text-sm text-white whitespace-pre-wrap">{msg.content}</p></div></div>);
+        return (
+            <div className="flex justify-end">
+                <div className="max-w-[80%] space-y-1.5">
+                    {msg.attachments && msg.attachments.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 justify-end">
+                            {msg.attachments.map((att, i) => (
+                                <div key={i} className="flex items-center gap-1.5 px-2 py-1 bg-dark-800/80 border border-dark-700 rounded-lg">
+                                    {att.type === 'image' && att.url ? (
+                                        <img src={att.url} alt={att.name} className="w-8 h-8 object-cover rounded" />
+                                    ) : (
+                                        <span className="text-sm">📄</span>
+                                    )}
+                                    <span className="text-[11px] text-dark-300 max-w-[120px] truncate">{att.name}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                    <div className="bg-rose-900/30 border border-rose-800/30 rounded-2xl px-3 py-2">
+                        <p className="text-sm text-white whitespace-pre-wrap">{msg.content}</p>
+                    </div>
+                </div>
+            </div>
+        );
     }
 
     return (
