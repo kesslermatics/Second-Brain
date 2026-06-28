@@ -225,6 +225,21 @@ def _get_agent_tools() -> list:
         },
     )
 
+    web_search = types.FunctionDeclaration(
+        name="web_search",
+        description="Durchsuche das Internet nach aktuellen Informationen. Nutze dies für Fakten-Recherche, aktuelle Nachrichten, Produktinfos, Anleitungen, oder wenn der Benutzer etwas wissen will das nicht in seinen Notizen steht. Die Quellen-URLs werden dem Benutzer automatisch angezeigt.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Suchanfrage auf Deutsch oder Englisch",
+                },
+            },
+            "required": ["query"],
+        },
+    )
+
     return [
         types.Tool(function_declarations=[
             search_notes,
@@ -235,8 +250,8 @@ def _get_agent_tools() -> list:
             create_note,
             update_note,
             delete_note,
+            web_search,
         ]),
-        types.Tool(google_search=types.GoogleSearch()),
     ]
 
 
@@ -378,6 +393,39 @@ async def _execute_tool(name: str, args: dict, user_id: str, db: AsyncSession) -
                     "note_id": args.get("note_id", ""),
                 },
             }
+
+        elif name == "web_search":
+            # Execute a separate Gemini call with Google Search grounding
+            query = args.get("query", "")
+            try:
+                search_client = get_client()
+                search_response = await search_client.aio.models.generate_content(
+                    model="gemini-3-flash-preview",  # Use Flash for search (cheaper + faster)
+                    contents=f"Recherchiere: {query}\n\nGib eine präzise, faktenbasierte Zusammenfassung der wichtigsten Ergebnisse.",
+                    config=types.GenerateContentConfig(
+                        tools=[types.Tool(google_search=types.GoogleSearch())],
+                    ),
+                )
+                # Extract grounding sources
+                sources = []
+                if search_response.candidates:
+                    gm = getattr(search_response.candidates[0], 'grounding_metadata', None)
+                    if gm:
+                        chunks = getattr(gm, 'grounding_chunks', None) or []
+                        for gc in chunks:
+                            web = getattr(gc, 'web', None)
+                            if web:
+                                sources.append({
+                                    "title": getattr(web, 'title', '') or '',
+                                    "url": getattr(web, 'uri', '') or '',
+                                })
+
+                return {
+                    "answer": search_response.text or "",
+                    "sources": sources,
+                }
+            except Exception as e:
+                return {"error": f"Web-Suche fehlgeschlagen: {str(e)[:100]}"}
 
         else:
             return {"error": f"Unbekanntes Tool: {name}"}
@@ -521,7 +569,6 @@ async def run_agent_stream(
         else:
             # First round: stream the response for immediate UX feedback
             all_response_parts = []
-            last_candidate = None  # Track last candidate for grounding metadata
 
             async for chunk in await client.aio.models.generate_content_stream(
                 model=AGENT_MODEL,
@@ -531,7 +578,6 @@ async def run_agent_stream(
                 # Collect all parts for replay
                 if chunk.candidates:
                     for candidate in chunk.candidates:
-                        last_candidate = candidate  # Keep reference to last candidate
                         if candidate.content and candidate.content.parts:
                             for part in candidate.content.parts:
                                 all_response_parts.append(part)
@@ -555,32 +601,6 @@ async def run_agent_stream(
 
         # If no function calls, we're done — response already streamed
         if not function_calls:
-            # Extract grounding metadata (Google Search sources) if available
-            grounding_sources = []
-            try:
-                # Get the candidate to check for grounding
-                check_candidate = None
-                if round_num > 0 and response.candidates:
-                    check_candidate = response.candidates[0]
-                elif round_num == 0 and last_candidate:
-                    check_candidate = last_candidate
-
-                if check_candidate:
-                    gm = getattr(check_candidate, 'grounding_metadata', None)
-                    if gm:
-                        chunks = getattr(gm, 'grounding_chunks', None) or []
-                        for gc in chunks:
-                            web = getattr(gc, 'web', None)
-                            if web:
-                                grounding_sources.append({
-                                    "title": getattr(web, 'title', '') or '',
-                                    "url": getattr(web, 'uri', '') or '',
-                                })
-            except Exception:
-                pass
-
-            if grounding_sources:
-                yield {"type": "sources", "sources": grounding_sources}
             break
 
         # If we've exhausted rounds, break
@@ -606,6 +626,7 @@ async def run_agent_stream(
                 "create_note": "Erstelle Notiz",
                 "update_note": "Bearbeite Notiz",
                 "delete_note": "Lösche Notiz",
+                "web_search": "Web-Recherche",
             }
             label = step_labels.get(tool_name, tool_name)
             detail = ""
@@ -638,6 +659,10 @@ async def run_agent_stream(
             result_summary = _summarize_tool_result(tool_name, result)
             yield {"type": "tool_result", "content": result_summary}
             steps.append({"type": "tool_result", "content": result_summary})
+
+            # Emit sources from web_search
+            if tool_name == "web_search" and result.get("sources"):
+                yield {"type": "sources", "sources": result["sources"]}
 
             # Build function response part
             function_response_parts.append(
@@ -681,6 +706,9 @@ def _summarize_tool_result(tool_name: str, result: dict) -> str:
         return "Änderung vorgeschlagen"
     elif tool_name == "delete_note":
         return "Löschung vorgeschlagen"
+    elif tool_name == "web_search":
+        count = len(result.get("sources", []))
+        return f"Web-Recherche: {count} Quellen"
     else:
         return "Erledigt"
 

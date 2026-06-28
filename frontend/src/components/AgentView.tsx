@@ -193,7 +193,7 @@ export default function AgentView() {
                             allProposals.push(event.proposal);
                             break;
                         case 'sources':
-                            allSources = event.sources;
+                            allSources = [...allSources, ...event.sources];
                             break;
                         case 'done':
                             break;
