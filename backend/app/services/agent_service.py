@@ -467,24 +467,26 @@ async def run_agent_stream(
             contents=contents,
             config=config,
         ):
-            # Handle thinking (thought parts) and collect ALL parts
+            # Collect all parts from candidates for faithful multi-turn replay
             if chunk.candidates:
                 for candidate in chunk.candidates:
                     if candidate.content and candidate.content.parts:
                         for part in candidate.content.parts:
-                            # Collect every part for faithful replay
                             all_response_parts.append(part)
-                            # Stream thinking to UI
-                            if hasattr(part, 'thought') and part.thought:
-                                if part.text:
-                                    yield {"type": "thinking", "content": part.text}
-                            # Stream text to UI (only non-thought text parts)
-                            elif hasattr(part, 'text') and part.text and not hasattr(part, 'function_call'):
-                                full_text_parts.append(part.text)
-                                yield {"type": "chunk", "content": part.text}
-                            # Collect function calls
-                            elif hasattr(part, 'function_call') and part.function_call:
-                                function_calls.append(part.function_call)
+
+            # Use the chunk-level accessors for streaming UI
+            fc_list = chunk.function_calls
+            if fc_list:
+                function_calls.extend(fc_list)
+            else:
+                # Only try to get text when there are no function calls in this chunk
+                try:
+                    text = chunk.text
+                    if text:
+                        full_text_parts.append(text)
+                        yield {"type": "chunk", "content": text}
+                except Exception:
+                    pass
 
         # If no function calls, we're done
         if not function_calls:
@@ -495,7 +497,6 @@ async def run_agent_stream(
             break
 
         # Add the model's COMPLETE response to contents (preserves thought signatures)
-        # Use the collected parts directly — they contain all metadata the API needs
         if all_response_parts:
             contents.append(types.Content(role="model", parts=all_response_parts))
         else:
