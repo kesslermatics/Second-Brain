@@ -18,13 +18,14 @@ import type { ChatSession } from '@/lib/types';
 export default function Sidebar() {
     const {
         activeView, setActiveView, sidebarOpen, setSidebarOpen,
-        notesSessions, qaSessions, loadNotesSessions, loadQASessions,
-        setActiveNotesSession, setActiveQASession, loadFolderTree,
-        folderTree, logout,
+        notesSessions, qaSessions, agentSessions, loadNotesSessions, loadQASessions, loadAgentSessions,
+        setActiveNotesSession, setActiveQASession, setActiveAgentSession, activeAgentSession,
+        loadFolderTree, folderTree, logout,
     } = useStore();
 
     const [notesExpanded, setNotesExpanded] = useState(true);
     const [qaExpanded, setQAExpanded] = useState(true);
+    const [agentExpanded, setAgentExpanded] = useState(true);
     const [foldersExpanded, setFoldersExpanded] = useState(true);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [sidebarWidth, setSidebarWidth] = useState(288);
@@ -58,6 +59,7 @@ export default function Sidebar() {
     useEffect(() => {
         loadNotesSessions();
         loadQASessions();
+        loadAgentSessions();
         loadFolderTree();
 
         const mq = window.matchMedia('(min-width: 1024px)');
@@ -69,7 +71,7 @@ export default function Sidebar() {
         };
         mq.addEventListener('change', handler);
         return () => mq.removeEventListener('change', handler);
-    }, [loadNotesSessions, loadQASessions, loadFolderTree, setSidebarOpen]);
+    }, [loadNotesSessions, loadQASessions, loadAgentSessions, loadFolderTree, setSidebarOpen]);
 
     const handleNewNotesSession = async () => {
         try {
@@ -95,49 +97,69 @@ export default function Sidebar() {
         }
     };
 
+    const handleNewAgentSession = async () => {
+        try {
+            const session = await createChatSession('agent', 'Neuer Agent-Chat');
+            const detail = await getChatSession(session.id);
+            setActiveAgentSession(detail);
+            setActiveView('agent');
+            await loadAgentSessions();
+        } catch (e) {
+            console.error(e);
+        }
+    };
+
     const closeSidebarOnMobile = () => {
         if (window.innerWidth < 1024) setSidebarOpen(false);
     };
 
-    const handleSelectSession = async (session: ChatSession, type: 'notes' | 'qa') => {
+    const handleSelectSession = async (session: ChatSession, type: 'notes' | 'qa' | 'agent') => {
         try {
             const detail = await getChatSession(session.id);
             if (type === 'notes') {
                 setActiveNotesSession(detail);
-            } else {
+                setActiveView('chat');
+            } else if (type === 'qa') {
                 setActiveQASession(detail);
+                setActiveView('chat');
+            } else {
+                setActiveAgentSession(detail);
+                setActiveView('agent');
             }
-            setActiveView('chat');
             closeSidebarOnMobile();
         } catch (e) {
             console.error(e);
         }
     };
 
-    const handleDeleteSession = async (e: React.MouseEvent, sessionId: string, type: 'notes' | 'qa') => {
+    const handleDeleteSession = async (e: React.MouseEvent, sessionId: string, type: 'notes' | 'qa' | 'agent') => {
         e.stopPropagation();
         try {
             await deleteChatSession(sessionId);
             if (type === 'notes') {
                 await loadNotesSessions();
                 setActiveNotesSession(null);
-            } else {
+            } else if (type === 'qa') {
                 await loadQASessions();
                 setActiveQASession(null);
+            } else {
+                await loadAgentSessions();
+                setActiveAgentSession(null);
             }
         } catch (e) {
             console.error(e);
         }
     };
 
-    const handleRenameSession = async (sessionId: string, type: 'notes' | 'qa') => {
+    const handleRenameSession = async (sessionId: string, type: 'notes' | 'qa' | 'agent') => {
         if (!renameValue.trim()) { setRenamingSession(null); return; }
         try {
             await updateChatSession(sessionId, renameValue.trim());
             setRenamingSession(null);
             setRenameValue('');
             if (type === 'notes') await loadNotesSessions();
-            else await loadQASessions();
+            else if (type === 'qa') await loadQASessions();
+            else await loadAgentSessions();
         } catch (e) {
             console.error(e);
         }
@@ -405,6 +427,69 @@ export default function Sidebar() {
                                             </button>
                                             <button
                                                 onClick={(e) => handleDeleteSession(e, session.id, 'qa')}
+                                                className="p-1 hover:bg-dark-700 rounded transition-opacity"
+                                            >
+                                                <FiTrash2 className="w-3 h-3 text-dark-500 hover:text-red-400" />
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Agent Sessions */}
+                    <div>
+                        <button
+                            onClick={() => setAgentExpanded(!agentExpanded)}
+                            className="flex items-center gap-2 w-full text-left text-xs font-semibold text-dark-500 uppercase tracking-wider px-2 py-1.5 hover:text-dark-300"
+                        >
+                            {agentExpanded ? <FiChevronDown className="w-3.5 h-3.5" /> : <FiChevronRight className="w-3.5 h-3.5" />}
+                            <FiCpu className="w-3.5 h-3.5 text-rose-400" />
+                            Agent
+                            <button
+                                onClick={(e) => { e.stopPropagation(); handleNewAgentSession(); }}
+                                className="ml-auto p-1 hover:bg-dark-800 rounded"
+                                title="Neuer Agent-Chat"
+                            >
+                                <FiPlus className="w-3.5 h-3.5" />
+                            </button>
+                        </button>
+                        {agentExpanded && (
+                            <div className="space-y-0.5 mt-1">
+                                {agentSessions.map((session) => (
+                                    <div
+                                        key={session.id}
+                                        onClick={() => handleSelectSession(session, 'agent')}
+                                        className={`group flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-dark-400 hover:text-white hover:bg-dark-800 cursor-pointer transition-colors ${activeAgentSession?.id === session.id && activeView === 'agent' ? 'bg-rose-600/10 text-rose-300 border border-rose-600/20' : ''}`}
+                                    >
+                                        <FiCpu className="w-3.5 h-3.5 flex-shrink-0 text-rose-400" />
+                                        {renamingSession === session.id ? (
+                                            <input
+                                                type="text"
+                                                value={renameValue}
+                                                onChange={(e) => setRenameValue(e.target.value)}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter') handleRenameSession(session.id, 'agent');
+                                                    if (e.key === 'Escape') { setRenamingSession(null); setRenameValue(''); }
+                                                }}
+                                                onBlur={() => handleRenameSession(session.id, 'agent')}
+                                                onClick={(e) => e.stopPropagation()}
+                                                className="flex-1 px-1 py-0 text-sm bg-dark-950 border border-rose-500 rounded text-white focus:outline-none min-w-0"
+                                                autoFocus
+                                            />
+                                        ) : (
+                                            <span className="truncate flex-1">{session.title}</span>
+                                        )}
+                                        <div className="opacity-0 group-hover:opacity-100 flex gap-0.5">
+                                            <button
+                                                onClick={(e) => startRenameSession(e, session.id, session.title)}
+                                                className="p-1 hover:bg-dark-700 rounded transition-opacity"
+                                            >
+                                                <FiEdit2 className="w-3 h-3 text-dark-500 hover:text-blue-400" />
+                                            </button>
+                                            <button
+                                                onClick={(e) => handleDeleteSession(e, session.id, 'agent')}
                                                 className="p-1 hover:bg-dark-700 rounded transition-opacity"
                                             >
                                                 <FiTrash2 className="w-3 h-3 text-dark-500 hover:text-red-400" />

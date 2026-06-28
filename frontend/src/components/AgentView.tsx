@@ -5,12 +5,12 @@ import {
     FiSend, FiCheck, FiX, FiCheckCircle, FiCpu,
     FiChevronDown, FiChevronRight, FiZap, FiLoader,
     FiFilePlus, FiEdit3, FiTrash2, FiToggleLeft, FiToggleRight,
-    FiPlus, FiMessageSquare, FiEdit2, FiImage, FiEye, FiColumns,
+    FiEdit2, FiImage, FiEye, FiColumns,
     FiFile,
 } from 'react-icons/fi';
 import ReactMarkdown from 'react-markdown';
 import { markdownComponents, remarkPlugins, rehypePlugins } from '@/lib/markdownComponents';
-import { runAgentStream, applyAgentProposals, markProposalsApplied, createChatSession, getChatSession, deleteChatSession, updateChatSession, getNote } from '@/lib/api';
+import { runAgentStream, applyAgentProposals, markProposalsApplied, createChatSession, getChatSession, getNote } from '@/lib/api';
 import type { AgentStreamEvent } from '@/lib/api';
 import { useStore } from '@/lib/store';
 import type { AgentStep, AgentProposal, ChatMessage, ChatSessionDetail, Note } from '@/lib/types';
@@ -54,7 +54,7 @@ function parseAgentMessage(msg: ChatMessage): ParsedAgentMessage {
 // ── Main Component ───────────────────────────────────────────────────
 
 export default function AgentView() {
-    const { loadFolderTree, agentSessions, loadAgentSessions, activeAgentSession, setActiveAgentSession, agentViewingNote, setAgentViewingNote } = useStore();
+    const { loadFolderTree, loadAgentSessions, activeAgentSession, setActiveAgentSession, agentViewingNote, setAgentViewingNote } = useStore();
     const [loading, setLoading] = useState(false);
     const [autoAccept, setAutoAccept] = useState(false);
     const [parsedMessages, setParsedMessages] = useState<ParsedAgentMessage[]>([]);
@@ -64,8 +64,6 @@ export default function AgentView() {
     const [appliedProposals, setAppliedProposals] = useState<Set<string>>(new Set());
     const [rejectedProposals, setRejectedProposals] = useState<Set<string>>(new Set());
     const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
-    const [renamingSession, setRenamingSession] = useState<string | null>(null);
-    const [renameValue, setRenameValue] = useState('');
     const [pendingImages, setPendingImages] = useState<File[]>([]);
 
     // Left panel: note viewer
@@ -118,13 +116,6 @@ export default function AgentView() {
     };
 
     const handleDrop = (e: React.DragEvent) => { e.preventDefault(); const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/')); if (files.length > 0) setPendingImages((p) => [...p, ...files]); };
-
-    // ── Session management ───────────────────────────────────────
-
-    const handleNewSession = async () => { try { const s = await createChatSession('agent', 'Neuer Agent-Chat'); const d = await getChatSession(s.id); setActiveAgentSession(d); await loadAgentSessions(); } catch (e) { console.error(e); } };
-    const handleSelectSession = async (id: string) => { try { const d = await getChatSession(id); setActiveAgentSession(d); } catch (e) { console.error(e); } };
-    const handleDeleteSession = async (e: React.MouseEvent, id: string) => { e.stopPropagation(); try { await deleteChatSession(id); if (activeAgentSession?.id === id) setActiveAgentSession(null); await loadAgentSessions(); } catch (e) { console.error(e); } };
-    const handleRenameSession = async (id: string) => { if (!renameValue.trim()) { setRenamingSession(null); return; } try { await updateChatSession(id, renameValue.trim()); setRenamingSession(null); setRenameValue(''); await loadAgentSessions(); } catch (e) { console.error(e); } };
 
     // ── Send message ─────────────────────────────────────────────
 
@@ -262,9 +253,6 @@ export default function AgentView() {
                     <h1 className="text-base font-semibold text-white">Agent</h1>
                 </div>
                 <div className="flex items-center gap-2">
-                    <button onClick={handleNewSession} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-dark-800 text-dark-400 border border-dark-700 hover:text-white transition-colors">
-                        <FiPlus className="w-3 h-3" /> Neu
-                    </button>
                     <button onClick={() => setAutoAccept(!autoAccept)}
                         className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${autoAccept ? 'bg-green-600/20 text-green-400 border border-green-600/30' : 'bg-dark-800 text-dark-400 border border-dark-700 hover:text-white'}`}>
                         {autoAccept ? <FiToggleRight className="w-3.5 h-3.5" /> : <FiToggleLeft className="w-3.5 h-3.5" />} Auto
@@ -330,17 +318,6 @@ export default function AgentView() {
 
                 {/* RIGHT PANEL: Agent Chat */}
                 <div className="flex-1 flex flex-col overflow-hidden">
-                    {/* Session tabs */}
-                    <div className="flex items-center border-b border-dark-800 px-2 py-1.5 gap-1 overflow-x-auto flex-shrink-0">
-                        {agentSessions.slice(0, 8).map((s) => (
-                            <button key={s.id} onClick={() => handleSelectSession(s.id)}
-                                className={`group flex items-center gap-1 px-2.5 py-1 text-xs rounded-md whitespace-nowrap transition-colors ${activeAgentSession?.id === s.id ? 'bg-rose-600/10 text-rose-400 border border-rose-600/20' : 'text-dark-500 hover:text-white hover:bg-dark-800'}`}>
-                                <span className="truncate max-w-[100px]">{s.title}</span>
-                                <button onClick={(e) => handleDeleteSession(e, s.id)} className="opacity-0 group-hover:opacity-100 hover:text-red-400"><FiX className="w-2.5 h-2.5" /></button>
-                            </button>
-                        ))}
-                    </div>
-
                     {/* Chat messages */}
                     <div className="flex-1 overflow-y-auto p-3 space-y-3">
                         {parsedMessages.length === 0 && !loading && <EmptyState textareaRef={textareaRef} />}
@@ -363,8 +340,8 @@ export default function AgentView() {
                                         <div className="flex flex-wrap gap-1.5">
                                             {streamingSteps.map((step, i) => (
                                                 <span key={i} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${step.type === 'tool_call'
-                                                        ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                                                        : 'bg-green-500/10 text-green-400 border border-green-500/20'
+                                                    ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                                                    : 'bg-green-500/10 text-green-400 border border-green-500/20'
                                                     }`}>
                                                     {step.type === 'tool_call' ? '○' : '✓'} {step.content}
                                                 </span>
