@@ -4,7 +4,10 @@ Uses the existing ChatSession/ChatMessage models with session_type='agent'.
 """
 
 import json
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+import os
+import uuid as _uuid
+from pathlib import Path
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from uuid import UUID
@@ -13,13 +16,18 @@ from typing import Optional, List
 
 from app.database import get_db
 from app.auth import get_current_user
-from app.models import User, Note, Folder, Tag, NoteVersion, note_tags, ChatSession, ChatMessage
+from app.models import User, Note, Folder, Tag, NoteVersion, note_tags, ChatSession, ChatMessage, Image
 from app.schemas import ChatMessageResponse
 from app.services.agent_service import run_agent
 from app.services.ai_service import generate_chat_title
+from app.services.vision_service import describe_image, describe_image_from_bytes
 from app.services.vector_service import upsert_note_embedding, delete_note_embedding
+from app.config import get_settings
 
 router = APIRouter(prefix="/agent", tags=["agent"])
+
+UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", "uploads"))
+ALLOWED_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 
 
 class AgentMessageRequest(BaseModel):
@@ -31,18 +39,26 @@ class ProposalApplyRequest(BaseModel):
     proposals: list[dict]
 
 
+def _build_url(user_id: str, filename: str) -> str:
+    settings = get_settings()
+    backend_url = settings.BACKEND_URL or "http://localhost:8000"
+    return f"{backend_url}/uploads/{user_id}/{filename}"
+
+
 @router.post("/sessions/{session_id}/messages")
 async def agent_send_message(
     session_id: UUID,
-    request: AgentMessageRequest,
     background_tasks: BackgroundTasks,
+    content: str = Form(...),
+    auto_accept: bool = Form(False),
+    images: List[UploadFile] = File(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
     Send a message to the agent within a session.
-    The agent reads the full session history from the DB for context.
-    Returns the agent's response + optional proposals.
+    Supports multipart form data with optional image uploads.
+    Images are analyzed with Vision AI and their descriptions are added to context.
     """
     # Verify session
     session = await db.get(ChatSession, session_id)
@@ -51,11 +67,77 @@ async def agent_send_message(
     if session.session_type != "agent":
         raise HTTPException(status_code=400, detail="Not an agent session")
 
+    # Process images if uploaded
+    image_descriptions = []
+    image_urls = []
+    if images:
+        for img_file in images:
+            if not img_file.content_type or img_file.content_type not in ALLOWED_IMAGE_TYPES:
+                continue
+            img_bytes = await img_file.read()
+            if len(img_bytes) == 0:
+                continue
+
+            # Save to disk
+            user_dir = UPLOAD_DIR / str(current_user.id)
+            user_dir.mkdir(parents=True, exist_ok=True)
+            ext_map = {"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp"}
+            ext = ext_map.get(img_file.content_type, ".png")
+            unique_name = f"{_uuid.uuid4().hex}{ext}"
+            file_path = user_dir / unique_name
+            with open(file_path, "wb") as f:
+                f.write(img_bytes)
+
+            file_url = _build_url(str(current_user.id), unique_name)
+            image_urls.append(file_url)
+
+            # Save to DB
+            img_record = Image(
+                original_filename=img_file.filename or f"pasted{ext}",
+                stored_filename=unique_name,
+                content_type=img_file.content_type,
+                file_size=len(img_bytes),
+                file_path=str(file_path),
+                user_id=current_user.id,
+            )
+            db.add(img_record)
+            await db.flush()
+            await db.refresh(img_record)
+
+            # Analyze with Vision
+            try:
+                description = await describe_image_from_bytes(img_bytes, img_file.content_type)
+                img_record.description = description
+                img_record.embedded = True
+                image_descriptions.append({
+                    "filename": img_file.filename or unique_name,
+                    "url": file_url,
+                    "description": description,
+                    "image_id": str(img_record.id),
+                })
+            except Exception as e:
+                image_descriptions.append({
+                    "filename": img_file.filename or unique_name,
+                    "url": file_url,
+                    "description": f"(Bild konnte nicht analysiert werden: {str(e)[:100]})",
+                    "image_id": str(img_record.id),
+                })
+
+    # Build the user message content (include image info if present)
+    user_content = content
+    if image_descriptions:
+        img_context = "\n\n---\n**Angehängte Bilder:**\n"
+        for desc in image_descriptions:
+            img_context += f"\n📷 **{desc['filename']}**\n"
+            img_context += f"Beschreibung: {desc['description']}\n"
+            img_context += f"URL: {desc['url']}\n"
+        user_content += img_context
+
     # Save user message
     user_msg = ChatMessage(
         session_id=session_id,
         role="user",
-        content=request.content,
+        content=user_content,
     )
     db.add(user_msg)
     await db.flush()
@@ -71,27 +153,25 @@ async def agent_send_message(
 
     # Run agent with full history
     result = await run_agent(
-        instruction=request.content,
+        instruction=user_content,
         user_id=str(current_user.id),
         db=db,
-        chat_history=chat_history[:-1],  # exclude current message (it's the instruction)
-        auto_accept=request.auto_accept,
+        chat_history=chat_history[:-1],
+        auto_accept=auto_accept,
+        image_context=image_descriptions if image_descriptions else None,
     )
 
     # Build the assistant message content
-    # Store the full response + proposals as JSON metadata in the message
     agent_response = result.get("response", "")
     proposals = result.get("proposals", [])
     steps = result.get("steps", [])
 
-    # Encode proposals and steps into a hidden metadata block (like AI_NOTE_DATA pattern)
     metadata = {}
     if proposals:
         metadata["proposals"] = proposals
     if steps:
         metadata["steps"] = steps
 
-    # The stored content = response text + hidden metadata
     stored_content = agent_response
     if metadata:
         stored_content += f"\n\n<!-- AGENT_META\n{json.dumps(metadata, ensure_ascii=False)}\nAGENT_META -->"
@@ -108,7 +188,7 @@ async def agent_send_message(
 
     # Auto-accept proposals if enabled
     apply_result = None
-    if request.auto_accept and proposals:
+    if auto_accept and proposals:
         apply_result = await _apply_proposals(
             proposals=proposals,
             user_id=current_user.id,
@@ -123,10 +203,10 @@ async def agent_send_message(
     count = messages_count.scalar()
     if count <= 2:
         try:
-            ai_title = await generate_chat_title(request.content)
+            ai_title = await generate_chat_title(content)
             session.title = ai_title
         except Exception:
-            session.title = request.content[:50] + ("..." if len(request.content) > 50 else "")
+            session.title = content[:50] + ("..." if len(content) > 50 else "")
         await db.flush()
 
     await db.commit()
@@ -142,6 +222,7 @@ async def agent_send_message(
         "steps": steps,
         "proposals": proposals,
         "apply_result": apply_result,
+        "image_urls": image_urls,
     }
 
 

@@ -544,10 +544,17 @@ export default api;
 
 // ── Agentic Workspace ────────────────────────────────────────────────
 
-export const runAgent = async (sessionId: string, content: string, autoAccept: boolean = false) => {
-  const { data } = await api.post<AgentRunResult>(`/agent/sessions/${sessionId}/messages`, {
-    content,
-    auto_accept: autoAccept,
+export const runAgent = async (sessionId: string, content: string, autoAccept: boolean = false, images?: File[]) => {
+  const formData = new FormData();
+  formData.append('content', content);
+  formData.append('auto_accept', String(autoAccept));
+  if (images && images.length > 0) {
+    for (const img of images) {
+      formData.append('images', img);
+    }
+  }
+  const { data } = await api.post<AgentRunResult>(`/agent/sessions/${sessionId}/messages`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
   });
   return data;
 };
