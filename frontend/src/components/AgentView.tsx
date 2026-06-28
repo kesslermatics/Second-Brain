@@ -55,7 +55,6 @@ function parseAgentMessage(msg: ChatMessage): ParsedAgentMessage {
 
 export default function AgentView() {
     const { loadFolderTree, agentSessions, loadAgentSessions, activeAgentSession, setActiveAgentSession, agentViewingNote, setAgentViewingNote } = useStore();
-    const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
     const [autoAccept, setAutoAccept] = useState(false);
     const [parsedMessages, setParsedMessages] = useState<ParsedAgentMessage[]>([]);
@@ -130,12 +129,14 @@ export default function AgentView() {
     // ── Send message ─────────────────────────────────────────────
 
     const handleSend = async () => {
-        if ((!input.trim() && pendingImages.length === 0) || loading) return;
+        const inputVal = textareaRef.current?.value?.trim() || '';
+        if ((!inputVal && pendingImages.length === 0) || loading) return;
         let session = activeAgentSession;
-        if (!session) { try { const ns = await createChatSession('agent', input.slice(0, 50)); session = await getChatSession(ns.id); setActiveAgentSession(session); await loadAgentSessions(); } catch (e) { console.error(e); return; } }
+        if (!session) { try { const ns = await createChatSession('agent', inputVal.slice(0, 50)); session = await getChatSession(ns.id); setActiveAgentSession(session); await loadAgentSessions(); } catch (e) { console.error(e); return; } }
 
-        const currentInput = input; setInput(''); setLoading(true);
-        if (textareaRef.current) textareaRef.current.style.height = 'auto';
+        const currentInput = inputVal;
+        if (textareaRef.current) { textareaRef.current.value = ''; textareaRef.current.style.height = 'auto'; }
+        setLoading(true);
         setParsedMessages((p) => [...p, { id: `temp-${Date.now()}`, role: 'user', content: currentInput, created_at: new Date().toISOString() }]);
         setStreamingThought('');
         setStreamingContent('');
@@ -342,7 +343,7 @@ export default function AgentView() {
 
                     {/* Chat messages */}
                     <div className="flex-1 overflow-y-auto p-3 space-y-3">
-                        {parsedMessages.length === 0 && !loading && <EmptyState setInput={setInput} />}
+                        {parsedMessages.length === 0 && !loading && <EmptyState textareaRef={textareaRef} />}
 
                         {parsedMessages.map((msg) => (
                             <MessageBubble key={msg.id} msg={msg}
@@ -401,16 +402,16 @@ export default function AgentView() {
                             </div>
                         )}
                         <div className="flex items-end gap-2" onDrop={handleDrop} onDragOver={(e) => e.preventDefault()}>
-                            <textarea ref={textareaRef} value={input}
-                                onChange={(e) => { setInput(e.target.value); adjustTextarea(); }}
+                            <textarea ref={textareaRef}
+                                onChange={() => { adjustTextarea(); }}
                                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
                                 onPaste={handlePaste}
                                 placeholder="Schreib dem Agent..."
                                 className="flex-1 px-3 py-2 bg-dark-800 border border-dark-700 rounded-xl text-white text-sm placeholder-dark-600 focus:outline-none focus:border-rose-500 resize-none min-h-[40px] max-h-[140px]" rows={1} />
                             <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={(e) => { const f = Array.from(e.target.files || []); if (f.length) setPendingImages((p) => [...p, ...f]); e.target.value = ''; }} />
                             <button onClick={() => fileInputRef.current?.click()} className="p-2 rounded-xl bg-dark-800 border border-dark-700 text-dark-400 hover:text-white"><FiImage className="w-4 h-4" /></button>
-                            <button onClick={handleSend} disabled={(!input.trim() && pendingImages.length === 0) || loading}
-                                className={`p-2 rounded-xl ${(input.trim() || pendingImages.length > 0) && !loading ? 'bg-rose-600 hover:bg-rose-500 text-white' : 'bg-dark-800 text-dark-600 cursor-not-allowed'}`}>
+                            <button onClick={handleSend} disabled={loading}
+                                className={`p-2 rounded-xl ${!loading ? 'bg-rose-600 hover:bg-rose-500 text-white' : 'bg-dark-800 text-dark-600 cursor-not-allowed'}`}>
                                 <FiSend className="w-4 h-4" />
                             </button>
                         </div>
@@ -423,7 +424,8 @@ export default function AgentView() {
 
 // ── Sub-components ───────────────────────────────────────────────────
 
-function EmptyState({ setInput }: { setInput: (s: string) => void }) {
+function EmptyState({ textareaRef }: { textareaRef: React.RefObject<HTMLTextAreaElement | null> }) {
+    const setInput = (text: string) => { if (textareaRef.current) { textareaRef.current.value = text; textareaRef.current.focus(); } };
     return (
         <div className="h-full flex items-center justify-center">
             <div className="text-center max-w-sm">
