@@ -568,7 +568,11 @@ async def run_agent_stream(
                 proposal = result["proposal"]
                 proposals.append(proposal)
                 yield {"type": "proposal", "proposal": proposal}
-                result = {"status": "success", "message": f"Proposal erstellt: {proposal['type']} — wird dem Benutzer zur Bestätigung angezeigt."}
+                # IMPORTANT: Tell the model clearly that this is NOT yet applied
+                result = {
+                    "status": "pending_approval",
+                    "message": f"HINWEIS: Die Änderung ({proposal['type']}) wurde NICHT ausgeführt. Sie wurde als Vorschlag dem Benutzer zur Bestätigung vorgelegt. Sage dem Benutzer, dass du einen Vorschlag erstellt hast den er annehmen oder ablehnen kann. Sage NICHT dass du die Notiz bereits erstellt/geändert/gelöscht hast.",
+                }
 
             # Summarize result for streaming UI
             result_summary = _summarize_tool_result(tool_name, result)
