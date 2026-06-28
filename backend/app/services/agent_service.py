@@ -457,31 +457,34 @@ async def run_agent_stream(
     max_tool_rounds = 5  # prevent infinite loops
 
     for round_num in range(max_tool_rounds + 1):
-        # Stream the response
+        # Stream the response — collect ALL parts for thought signature preservation
         full_text_parts = []
         function_calls = []
+        all_response_parts = []  # Preserve complete parts including thought signatures
 
         async for chunk in await client.aio.models.generate_content_stream(
             model=AGENT_MODEL,
             contents=contents,
             config=config,
         ):
-            # Handle text chunks
-            if chunk.text:
-                full_text_parts.append(chunk.text)
-                yield {"type": "chunk", "content": chunk.text}
-
-            # Handle thinking (thought parts)
+            # Handle thinking (thought parts) and collect ALL parts
             if chunk.candidates:
                 for candidate in chunk.candidates:
                     if candidate.content and candidate.content.parts:
                         for part in candidate.content.parts:
+                            # Collect every part for faithful replay
+                            all_response_parts.append(part)
+                            # Stream thinking to UI
                             if hasattr(part, 'thought') and part.thought:
-                                yield {"type": "thinking", "content": part.text or ""}
-
-            # Collect function calls
-            if chunk.function_calls:
-                function_calls.extend(chunk.function_calls)
+                                if part.text:
+                                    yield {"type": "thinking", "content": part.text}
+                            # Stream text to UI (only non-thought text parts)
+                            elif hasattr(part, 'text') and part.text and not hasattr(part, 'function_call'):
+                                full_text_parts.append(part.text)
+                                yield {"type": "chunk", "content": part.text}
+                            # Collect function calls
+                            elif hasattr(part, 'function_call') and part.function_call:
+                                function_calls.append(part.function_call)
 
         # If no function calls, we're done
         if not function_calls:
@@ -491,17 +494,19 @@ async def run_agent_stream(
         if round_num >= max_tool_rounds:
             break
 
-        # Execute function calls
-        full_response_text = "".join(full_text_parts)
-
-        # Add the model's response (with function calls) to contents
-        model_parts = []
-        if full_response_text:
-            model_parts.append(types.Part.from_text(text=full_response_text))
-        for fc in function_calls:
-            model_parts.append(types.Part(function_call=fc))
-
-        contents.append(types.Content(role="model", parts=model_parts))
+        # Add the model's COMPLETE response to contents (preserves thought signatures)
+        # Use the collected parts directly — they contain all metadata the API needs
+        if all_response_parts:
+            contents.append(types.Content(role="model", parts=all_response_parts))
+        else:
+            # Fallback: manually build parts if streaming didn't yield them properly
+            model_parts = []
+            full_response_text = "".join(full_text_parts)
+            if full_response_text:
+                model_parts.append(types.Part.from_text(text=full_response_text))
+            for fc in function_calls:
+                model_parts.append(types.Part(function_call=fc))
+            contents.append(types.Content(role="model", parts=model_parts))
 
         # Execute each function call and build function responses
         function_response_parts = []

@@ -82,17 +82,16 @@ async def generate_stream(
         contents=prompt,
         config=config,
     ):
-        # Handle thinking (thought parts in candidates)
+        # Iterate parts directly for safety with thinking models
         if chunk.candidates:
             for candidate in chunk.candidates:
                 if candidate.content and candidate.content.parts:
                     for part in candidate.content.parts:
                         if hasattr(part, 'thought') and part.thought:
-                            yield {"type": "thinking", "content": part.text or ""}
-
-        # Handle text chunks
-        if chunk.text:
-            yield {"type": "chunk", "content": chunk.text}
+                            if part.text:
+                                yield {"type": "thinking", "content": part.text}
+                        elif hasattr(part, 'text') and part.text:
+                            yield {"type": "chunk", "content": part.text}
 
     yield {"type": "done"}
 
@@ -141,10 +140,10 @@ async def generate_with_search_stream(
                 if candidate.content and candidate.content.parts:
                     for part in candidate.content.parts:
                         if hasattr(part, 'thought') and part.thought:
-                            yield {"type": "thinking", "content": part.text or ""}
-
-        if chunk.text:
-            yield {"type": "chunk", "content": chunk.text}
+                            if part.text:
+                                yield {"type": "thinking", "content": part.text}
+                        elif hasattr(part, 'text') and part.text:
+                            yield {"type": "chunk", "content": part.text}
 
     yield {"type": "done"}
 
