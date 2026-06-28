@@ -1,10 +1,9 @@
 """
-Agent Routes — agentic workspace endpoint for multi-step AI operations on notes.
+Agent Routes — agentic workspace endpoint for conversational AI with note access.
 """
 
 import json
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
-from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from uuid import UUID
@@ -14,28 +13,25 @@ from typing import Optional, List
 from app.database import get_db
 from app.auth import get_current_user
 from app.models import User, Note, Folder, Tag, NoteVersion, note_tags
-from app.schemas import NoteResponse, TagResponse
 from app.services.agent_service import run_agent
 from app.services.vector_service import upsert_note_embedding, delete_note_embedding
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
 
+class AgentMessage(BaseModel):
+    role: str  # "user" or "assistant"
+    content: str
+
+
 class AgentRunRequest(BaseModel):
     instruction: str
+    chat_history: List[AgentMessage] = []
     auto_accept: bool = False
 
 
 class ProposalApplyRequest(BaseModel):
     proposals: list[dict]
-
-
-class ProposalApplyResult(BaseModel):
-    applied: int
-    errors: list[str]
-    created_notes: list[dict]
-    updated_notes: list[dict]
-    deleted_notes: list[str]
 
 
 @router.post("/run")
@@ -45,13 +41,16 @@ async def agent_run(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Run the agent with the given instruction. Returns steps + proposals.
-    If auto_accept is True, proposals are applied immediately.
+    Run the agent with the given instruction + conversation history.
+    Returns a conversational response + optional proposals.
     """
+    history = [{"role": m.role, "content": m.content} for m in request.chat_history]
+
     result = await run_agent(
         instruction=request.instruction,
         user_id=str(current_user.id),
         db=db,
+        chat_history=history,
         auto_accept=request.auto_accept,
     )
 
@@ -67,7 +66,7 @@ async def agent_run(
     return result
 
 
-@router.post("/apply", response_model=ProposalApplyResult)
+@router.post("/apply")
 async def agent_apply_proposals(
     request: ProposalApplyRequest,
     background_tasks: BackgroundTasks,
@@ -99,26 +98,21 @@ async def _apply_proposals(
 
     for p in proposals:
         ptype = p.get("type")
-
         try:
             if ptype == "create":
                 result = await _apply_create(p, user_id, db, background_tasks)
                 created_notes.append(result)
                 applied += 1
-
             elif ptype == "update":
                 result = await _apply_update(p, user_id, db, background_tasks)
                 updated_notes.append(result)
                 applied += 1
-
             elif ptype == "delete":
                 result = await _apply_delete(p, user_id, db, background_tasks)
                 deleted_notes.append(result)
                 applied += 1
-
             else:
                 errors.append(f"Unbekannter Proposal-Typ: {ptype}")
-
         except Exception as e:
             errors.append(f"Fehler bei {ptype}: {str(e)}")
 
@@ -140,10 +134,8 @@ async def _apply_create(p: dict, user_id: UUID, db: AsyncSession, background_tas
     content = p.get("content", "")
     tag_names = p.get("tags", [])
 
-    # Find or create folder
     folder = await _ensure_folder_path(folder_path, user_id, db)
 
-    # Create note
     note = Note(
         title=title,
         content=content,
@@ -155,13 +147,11 @@ async def _apply_create(p: dict, user_id: UUID, db: AsyncSession, background_tas
     await db.flush()
     await db.refresh(note)
 
-    # Attach tags
     for tag_name in tag_names:
         tag = await _get_or_create_tag(tag_name, user_id, db)
         note.tags.append(tag)
     await db.flush()
 
-    # Embed in background
     if background_tasks:
         background_tasks.add_task(
             upsert_note_embedding,
@@ -172,22 +162,18 @@ async def _apply_create(p: dict, user_id: UUID, db: AsyncSession, background_tas
             folder_path=folder.path,
         )
 
-    return {
-        "note_id": str(note.id),
-        "title": note.title,
-        "folder_path": folder.path,
-    }
+    return {"note_id": str(note.id), "title": note.title, "folder_path": folder.path}
 
 
 async def _apply_update(p: dict, user_id: UUID, db: AsyncSession, background_tasks=None) -> dict:
     """Update an existing note from a proposal."""
     note_id = p.get("note_id")
     if not note_id:
-        raise ValueError("note_id fehlt im Update-Proposal")
+        raise ValueError("note_id fehlt")
 
     note = await db.get(Note, UUID(note_id))
     if not note or note.user_id != user_id:
-        raise ValueError(f"Notiz {note_id} nicht gefunden oder kein Zugriff")
+        raise ValueError(f"Notiz nicht gefunden")
 
     # Save version before update
     max_ver_result = await db.execute(
@@ -203,17 +189,13 @@ async def _apply_update(p: dict, user_id: UUID, db: AsyncSession, background_tas
     )
     db.add(version)
 
-    # Apply changes
     if p.get("new_title"):
         note.title = p["new_title"]
     if p.get("new_content"):
         note.content = p["new_content"]
-
     await db.flush()
 
     folder = await db.get(Folder, note.folder_id)
-
-    # Re-embed in background
     if background_tasks:
         background_tasks.add_task(
             upsert_note_embedding,
@@ -224,22 +206,18 @@ async def _apply_update(p: dict, user_id: UUID, db: AsyncSession, background_tas
             folder_path=folder.path if folder else "",
         )
 
-    return {
-        "note_id": str(note.id),
-        "title": note.title,
-        "folder_path": folder.path if folder else "",
-    }
+    return {"note_id": str(note.id), "title": note.title, "folder_path": folder.path if folder else ""}
 
 
 async def _apply_delete(p: dict, user_id: UUID, db: AsyncSession, background_tasks=None) -> str:
     """Delete a note from a proposal."""
     note_id = p.get("note_id")
     if not note_id:
-        raise ValueError("note_id fehlt im Delete-Proposal")
+        raise ValueError("note_id fehlt")
 
     note = await db.get(Note, UUID(note_id))
     if not note or note.user_id != user_id:
-        raise ValueError(f"Notiz {note_id} nicht gefunden oder kein Zugriff")
+        raise ValueError(f"Notiz nicht gefunden")
 
     await db.delete(note)
     await db.flush()
@@ -255,7 +233,6 @@ async def _ensure_folder_path(path: str, user_id: UUID, db: AsyncSession) -> Fol
     if not path:
         path = "Allgemein"
 
-    # Check if folder exists
     result = await db.execute(
         select(Folder).where(Folder.path == path, Folder.user_id == user_id)
     )
@@ -263,7 +240,6 @@ async def _ensure_folder_path(path: str, user_id: UUID, db: AsyncSession) -> Fol
     if folder:
         return folder
 
-    # Create folder hierarchy
     parts = path.split("/")
     current_path = ""
     parent_id = None

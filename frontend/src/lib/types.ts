@@ -388,23 +388,20 @@ export interface AgentStep {
 
 export interface AgentProposal {
   type: 'create' | 'update' | 'delete';
-  // For create
   folder_path?: string;
   title?: string;
   content?: string;
   tags?: string[];
   reason?: string;
-  // For update
   note_id?: string;
   new_title?: string;
   new_content?: string;
-  // For delete (uses note_id + reason)
 }
 
 export interface AgentRunResult {
+  response: string;
   steps: AgentStep[];
   proposals: AgentProposal[];
-  summary: string;
   auto_accept: boolean;
   apply_result?: {
     applied: number;
