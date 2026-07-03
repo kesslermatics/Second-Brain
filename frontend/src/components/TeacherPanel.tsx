@@ -59,7 +59,6 @@ export default function TeacherPanel() {
     const [messages, setMessages] = useState<CourseMessage[]>([]);
     const [chatInput, setChatInput] = useState('');
     const [sendingChat, setSendingChat] = useState(false);
-    const [streamingContent, setStreamingContent] = useState('');
     const [streamingThought, setStreamingThought] = useState('');
 
     // Note generation
@@ -257,19 +256,21 @@ export default function TeacherPanel() {
             setMessages(msgs);
             if (msgs.length === 0) {
                 setSendingChat(true);
-                setStreamingContent('');
                 setStreamingThought('');
+                setToolSteps([]);
                 let fullContent = '';
                 const response = await sendTeacherChatStream(course.id, unit.id, '[START]', (event) => {
                     if (event.type === 'thinking') {
                         setStreamingThought((prev) => prev + event.content);
                     } else if (event.type === 'chunk') {
+                        // Accumulate only — the answer is rendered formatted once complete.
                         fullContent += event.content;
-                        setStreamingContent(fullContent);
+                    } else if (event.type === 'tool_call') {
+                        setToolSteps((prev) => [...prev, event.content]);
                     }
                 });
-                setStreamingContent('');
                 setStreamingThought('');
+                setToolSteps([]);
                 setMessages([
                     { id: 'start', role: 'user', content: '[START]', metadata: null, created_at: null },
                     response.message,
@@ -334,7 +335,6 @@ export default function TeacherPanel() {
         const msg = chatInput.trim();
         setChatInput('');
         setSendingChat(true);
-        setStreamingContent('');
         setStreamingThought('');
         setQuizSuggested(false);
         setToolSteps([]);
@@ -355,8 +355,8 @@ export default function TeacherPanel() {
                 if (event.type === 'thinking') {
                     setStreamingThought((prev) => prev + event.content);
                 } else if (event.type === 'chunk') {
+                    // Accumulate only — the answer is rendered formatted once complete.
                     fullContent += event.content;
-                    setStreamingContent(fullContent);
                 } else if (event.type === 'tool_call') {
                     setToolSteps((prev) => [...prev, event.content]);
                 } else if (event.type === 'note_proposal') {
@@ -369,7 +369,6 @@ export default function TeacherPanel() {
                     });
                 }
             });
-            setStreamingContent('');
             setStreamingThought('');
             setToolSteps([]);
             setMessages((prev) => [...prev.filter((m) => m.id !== tempId),
@@ -382,8 +381,8 @@ export default function TeacherPanel() {
         } catch {
             setError('Fehler beim Senden der Nachricht.');
             setMessages((prev) => prev.filter((m) => m.id !== tempId));
-            setStreamingContent('');
             setStreamingThought('');
+            setToolSteps([]);
         } finally {
             setSendingChat(false);
             chatInputRef.current?.focus();
@@ -396,7 +395,6 @@ export default function TeacherPanel() {
     const handleNextSection = async () => {
         if (view.kind !== 'lesson-chat' || sendingChat) return;
         setSendingChat(true);
-        setStreamingContent('');
         setStreamingThought('');
         setQuizSuggested(false);
         setToolSteps([]);
@@ -408,8 +406,8 @@ export default function TeacherPanel() {
                 if (event.type === 'thinking') {
                     setStreamingThought((prev) => prev + event.content);
                 } else if (event.type === 'chunk') {
+                    // Accumulate only — the answer is rendered formatted once complete.
                     fullContent += event.content;
-                    setStreamingContent(fullContent);
                 } else if (event.type === 'tool_call') {
                     setToolSteps((prev) => [...prev, event.content]);
                 } else if (event.type === 'note_proposal') {
@@ -422,7 +420,6 @@ export default function TeacherPanel() {
                     });
                 }
             });
-            setStreamingContent('');
             setStreamingThought('');
             setToolSteps([]);
             setMessages((prev) => [...prev, response.message]);
@@ -431,8 +428,8 @@ export default function TeacherPanel() {
             if (noteProposals.length > 0) setProposedNotes(noteProposals);
         } catch {
             setError('Fehler beim Laden des nächsten Abschnitts.');
-            setStreamingContent('');
             setStreamingThought('');
+            setToolSteps([]);
         } finally {
             setSendingChat(false);
         }
@@ -1253,22 +1250,16 @@ export default function TeacherPanel() {
                                         ))}
                                     </div>
                                 )}
-                                {streamingContent ? (
-                                    <div className="prose prose-invert prose-sm max-w-none text-sm">
-                                        <ReactMarkdown components={markdownComponents} remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>
-                                            {streamingContent}
-                                        </ReactMarkdown>
+                                {/* No live text streaming — the answer is unformatted while
+                                    streaming and just renders as one block once complete. */}
+                                <div className="flex items-center gap-2 text-xs text-dark-500">
+                                    <div className="flex gap-0.5">
+                                        <div className="w-1.5 h-1.5 bg-teal-400 rounded-full animate-pulse" />
+                                        <div className="w-1.5 h-1.5 bg-teal-400 rounded-full animate-pulse" style={{ animationDelay: '0.15s' }} />
+                                        <div className="w-1.5 h-1.5 bg-teal-400 rounded-full animate-pulse" style={{ animationDelay: '0.3s' }} />
                                     </div>
-                                ) : (
-                                    <div className="flex items-center gap-2 text-xs text-dark-500">
-                                        <div className="flex gap-0.5">
-                                            <div className="w-1.5 h-1.5 bg-teal-400 rounded-full animate-pulse" />
-                                            <div className="w-1.5 h-1.5 bg-teal-400 rounded-full animate-pulse" style={{ animationDelay: '0.15s' }} />
-                                            <div className="w-1.5 h-1.5 bg-teal-400 rounded-full animate-pulse" style={{ animationDelay: '0.3s' }} />
-                                        </div>
-                                        <span>{toolSteps.length > 0 ? 'Arbeitet...' : 'Formuliert Erklärung...'}</span>
-                                    </div>
-                                )}
+                                    <span>{toolSteps.length > 0 ? 'Arbeitet...' : 'Formuliert Erklärung...'}</span>
+                                </div>
                             </div>
                         </div>
                     )}
