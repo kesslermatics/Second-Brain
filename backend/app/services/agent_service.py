@@ -13,6 +13,8 @@ import json
 import re
 import asyncio
 import logging
+import os
+from pathlib import Path
 from typing import Optional, AsyncGenerator
 from uuid import UUID
 
@@ -25,6 +27,18 @@ from app.config import get_settings
 from app.models import Note, Folder, Tag, Image, note_tags
 from app.services.ai_service import get_client, PRO_MODEL
 from app.services.vector_service import hybrid_search
+
+# Supported image mime types the model can actually look at directly
+_VIEWABLE_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+# Documents Gemini can process natively as a byte part
+_NATIVE_DOC_TYPES = {
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",  # docx
+    "application/msword",  # doc
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",  # xlsx
+}
+# Plain-text documents we inline directly as text
+_TEXT_DOC_TYPES = {"text/plain", "text/markdown", "text/csv"}
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -77,6 +91,11 @@ Du hast Zugriff auf alle Notizen, Ordner und Bilder des Benutzers über Tools �
    - Frage NICHT ob du es speichern sollst — tu es proaktiv
 
 7. **Ordner kennen**: Nutze `list_folders` wenn du die aktuelle Ordnerstruktur brauchst (z.B. bevor du Notizen erstellst, verschiebst oder umstrukturierst). Die Struktur wird dir NICHT automatisch mitgegeben — hol sie dir bei Bedarf.
+
+8a. **Bilder & Dokumente wirklich ansehen**: `search_images` und die gespeicherten Datei-Beschreibungen liefern dir nur eine Text-Zusammenfassung. Wenn diese für die Frage des Benutzers nicht ausreicht:
+   - Bei Bildern: nutze `view_image` (mit image_id oder Dateiname), um das Originalbild WIRKLICH visuell zu sehen.
+   - Bei Dokumenten (PDF, DOCX, XLSX, TXT, ...): nutze `view_document` (mit file_id oder Dateiname), um den TATSÄCHLICHEN Inhalt neu einzulesen — z.B. eine bestimmte Textstelle, Tabelle, Zahl oder ein Detail auf einer Seite.
+   Rate nicht anhand der gespeicherten Zusammenfassung, wenn du die Originaldatei direkt prüfen kannst.
 
 8. **Web-Recherche + Wissensbasis VEREINEN**: Du hast `search_notes` (dein Second Brain) und `web_search` (Internet).
    - Bei Wissensfragen: Suche ZUERST in den eigenen Notizen (`search_notes`), dann bei Bedarf im Web (`web_search`).
@@ -168,7 +187,7 @@ def _get_agent_tools() -> list:
 
     search_images = types.FunctionDeclaration(
         name="search_images",
-        description="Suche Bilder anhand ihrer KI-generierten Beschreibungen oder Dateinamen.",
+        description="Suche hochgeladene Dateien (Bilder UND Dokumente wie PDFs) anhand ihrer KI-generierten Beschreibungen oder Dateinamen. Gibt Text-Beschreibungen + image_id/file_id zurück. Nutze danach view_image (Bilder) bzw. view_document (PDFs/Dokumente), wenn du die Originaldatei WIRKLICH ansehen/nachlesen musst.",
         parameters={
             "type": "object",
             "properties": {
@@ -178,6 +197,58 @@ def _get_agent_tools() -> list:
                 },
             },
             "required": ["query"],
+        },
+    )
+
+    view_image = types.FunctionDeclaration(
+        name="view_image",
+        description=(
+            "Sieh dir ein Bild WIRKLICH visuell an (nicht nur die gespeicherte Text-Beschreibung). "
+            "Nutze dies, wenn die vorhandene Beschreibung nicht ausreicht — z.B. für Details, Farben, "
+            "exaktes Layout, kleine Textstellen, Diagramm-Feinheiten, oder wenn der Benutzer eine genaue "
+            "Frage zum Bildinhalt stellt. Das Originalbild wird dir danach direkt gezeigt. "
+            "Übergib die image_id (aus search_images) ODER den Dateinamen."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "image_id": {
+                    "type": "string",
+                    "description": "UUID des Bildes (bevorzugt, aus search_images)",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Alternativ: Dateiname des Bildes",
+                },
+            },
+        },
+    )
+
+    view_document = types.FunctionDeclaration(
+        name="view_document",
+        description=(
+            "Öffne ein hochgeladenes Dokument (PDF, DOCX, XLSX, TXT, MD, CSV) und lies seinen "
+            "TATSÄCHLICHEN Inhalt neu ein — nicht nur die gespeicherte Zusammenfassung. "
+            "Nutze dies, wenn der Benutzer eine neue oder detaillierte Frage zu einem Dokument stellt, "
+            "die die vorhandene Kurz-Zusammenfassung nicht beantwortet (z.B. eine bestimmte Textstelle, "
+            "Tabelle, Zahl oder ein Detail auf einer bestimmten Seite). Übergib die file_id ODER den Dateinamen."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "file_id": {
+                    "type": "string",
+                    "description": "UUID des Dokuments (bevorzugt, aus search_images/Upload-Kontext)",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Alternativ: Dateiname des Dokuments",
+                },
+                "question": {
+                    "type": "string",
+                    "description": "Optional: worauf du im Dokument achten sollst (fokussiert das Nachlesen)",
+                },
+            },
         },
     )
 
@@ -375,6 +446,8 @@ def _get_agent_tools() -> list:
             list_folders,
             list_notes_in_folder,
             search_images,
+            view_image,
+            view_document,
             get_recent_notes,
             create_note,
             update_note,
@@ -518,12 +591,135 @@ async def _execute_tool(name: str, args: dict, user_id: str, db: AsyncSession) -
                 "images": [
                     {
                         "image_id": str(img.id),
+                        "file_id": str(img.id),
                         "filename": img.original_filename,
+                        "content_type": img.content_type,
+                        "is_document": img.content_type not in _VIEWABLE_IMAGE_TYPES,
                         "description": img.description[:500] if img.description else "",
                         "url": f"{backend_url}/uploads/{user_id}/{img.stored_filename}",
                     }
                     for img in images
                 ]
+            }
+
+        elif name == "view_image":
+            image_id = args.get("image_id", "")
+            filename = args.get("filename", "")
+            img = None
+            # Resolve by id first, then by filename
+            if image_id:
+                try:
+                    candidate = await db.get(Image, UUID(image_id))
+                    if candidate and str(candidate.user_id) == user_id:
+                        img = candidate
+                except (ValueError, TypeError):
+                    img = None
+            if img is None and filename:
+                res = await db.execute(
+                    select(Image).where(
+                        Image.user_id == UUID(user_id),
+                        or_(
+                            Image.original_filename == filename,
+                            Image.stored_filename == filename,
+                        ),
+                    ).limit(1)
+                )
+                img = res.scalar_one_or_none()
+
+            if img is None:
+                return {"error": "Bild nicht gefunden"}
+
+            if img.content_type not in _VIEWABLE_IMAGE_TYPES:
+                return {
+                    "error": f"Dieser Dateityp ({img.content_type}) kann nicht als Bild betrachtet werden.",
+                    "description": img.description or "",
+                }
+
+            # Load the original bytes from disk
+            try:
+                file_path = Path(img.file_path)
+                if not file_path.exists():
+                    return {"error": "Bilddatei nicht mehr auf dem Datenträger vorhanden.",
+                            "description": img.description or ""}
+                image_bytes = file_path.read_bytes()
+            except Exception as e:
+                return {"error": f"Bild konnte nicht geladen werden: {str(e)[:120]}",
+                        "description": img.description or ""}
+
+            # Signal to the loop that a real image part must be attached.
+            # (Bytes can't go into a JSON function_response, so the loop appends
+            #  the image as a separate user-content part right after.)
+            return {
+                "status": "image_loaded",
+                "filename": img.original_filename,
+                "content_type": img.content_type,
+                "_image_bytes": image_bytes,  # consumed by the loop, not sent as JSON
+                "message": "Das Originalbild wird dir jetzt direkt gezeigt.",
+            }
+
+        elif name == "view_document":
+            file_id = args.get("file_id", "")
+            filename = args.get("filename", "")
+            rec = None
+            if file_id:
+                try:
+                    candidate = await db.get(Image, UUID(file_id))
+                    if candidate and str(candidate.user_id) == user_id:
+                        rec = candidate
+                except (ValueError, TypeError):
+                    rec = None
+            if rec is None and filename:
+                res = await db.execute(
+                    select(Image).where(
+                        Image.user_id == UUID(user_id),
+                        or_(
+                            Image.original_filename == filename,
+                            Image.stored_filename == filename,
+                        ),
+                    ).limit(1)
+                )
+                rec = res.scalar_one_or_none()
+
+            if rec is None:
+                return {"error": "Dokument nicht gefunden"}
+
+            ctype = rec.content_type
+            if ctype not in _NATIVE_DOC_TYPES and ctype not in _TEXT_DOC_TYPES:
+                return {
+                    "error": f"Dieser Dateityp ({ctype}) kann nicht als Dokument gelesen werden.",
+                    "description": rec.description or "",
+                }
+
+            try:
+                file_path = Path(rec.file_path)
+                if not file_path.exists():
+                    return {"error": "Dokumentdatei nicht mehr auf dem Datenträger vorhanden.",
+                            "description": rec.description or ""}
+                doc_bytes = file_path.read_bytes()
+            except Exception as e:
+                return {"error": f"Dokument konnte nicht geladen werden: {str(e)[:120]}",
+                        "description": rec.description or ""}
+
+            # Plain-text docs: inline the text directly in the tool response
+            if ctype in _TEXT_DOC_TYPES:
+                try:
+                    text_content = doc_bytes.decode("utf-8")
+                except UnicodeDecodeError:
+                    text_content = doc_bytes.decode("latin-1", errors="replace")
+                return {
+                    "status": "document_text",
+                    "filename": rec.original_filename,
+                    "content": text_content[:50000],
+                }
+
+            # PDF / Office docs: attach as a real byte part so Gemini reads it natively
+            return {
+                "status": "document_loaded",
+                "filename": rec.original_filename,
+                "content_type": ctype,
+                "_doc_bytes": doc_bytes,  # consumed by the loop, not sent as JSON
+                "question": args.get("question", ""),
+                "message": "Das Originaldokument wird dir jetzt direkt zum Nachlesen gezeigt.",
             }
 
         elif name == "create_note":
@@ -935,6 +1131,7 @@ async def run_agent_stream(
 
         # Execute each function call and build function responses
         function_response_parts = []
+        pending_images_to_show = []  # real image bytes to show the model after the tool turn
         for fc in function_calls:
             tool_name = fc.name
             tool_args = dict(fc.args) if fc.args else {}
@@ -946,6 +1143,8 @@ async def run_agent_stream(
                 "list_folders": "Ordner laden",
                 "list_notes_in_folder": "Notizen laden",
                 "search_images": "Bilder suchen",
+                "view_image": "Bild ansehen",
+                "view_document": "Dokument lesen",
                 "get_recent_notes": "Neueste Notizen",
                 "create_note": "Erstelle Notiz",
                 "update_note": "Bearbeite Notiz",
@@ -988,6 +1187,27 @@ async def run_agent_stream(
                     "message": f"HINWEIS: Die Änderung ({proposal['type']}) wurde NICHT ausgeführt. Sie wurde als Vorschlag dem Benutzer zur Bestätigung vorgelegt. Sage dem Benutzer, dass du einen Vorschlag erstellt hast den er annehmen oder ablehnen kann. Sage NICHT dass du die Notiz bereits erstellt/geändert/gelöscht hast.",
                 }
 
+            # ── view_image / view_document: pull out raw bytes to attach as a real part ──
+            pending_image = None
+            if result.get("status") == "image_loaded" and result.get("_image_bytes"):
+                pending_image = {
+                    "bytes": result.pop("_image_bytes"),
+                    "mime": result.get("content_type", "image/png"),
+                    "filename": result.get("filename", "Bild"),
+                    "kind": "image",
+                }
+            elif result.get("status") == "document_loaded" and result.get("_doc_bytes"):
+                pending_image = {
+                    "bytes": result.pop("_doc_bytes"),
+                    "mime": result.get("content_type", "application/pdf"),
+                    "filename": result.get("filename", "Dokument"),
+                    "kind": "document",
+                }
+            else:
+                # Ensure no stray bytes ever end up in the JSON response
+                result.pop("_image_bytes", None)
+                result.pop("_doc_bytes", None)
+
             # Summarize result for streaming UI
             result_summary = _summarize_tool_result(tool_name, result)
             yield {"type": "tool_result", "content": result_summary}
@@ -1005,8 +1225,30 @@ async def run_agent_stream(
                 )
             )
 
+            # If an image was loaded, remember it to append after the tool turn
+            if pending_image:
+                pending_images_to_show.append(pending_image)
+
         # Add function responses to contents
         contents.append(types.Content(role="tool", parts=function_response_parts))
+
+        # Attach any actual images/documents the model asked to view, as real
+        # user-content parts so the multimodal model can genuinely SEE/READ them.
+        if pending_images_to_show:
+            media_parts = []
+            for pi in pending_images_to_show:
+                if pi.get("kind") == "document":
+                    label = f"[Originaldokument: {pi['filename']} — lies es dir jetzt genau durch]"
+                else:
+                    label = f"[Originalbild: {pi['filename']} — sieh es dir jetzt genau an]"
+                media_parts.append(types.Part.from_text(text=label))
+                try:
+                    media_parts.append(types.Part.from_bytes(data=pi["bytes"], mime_type=pi["mime"]))
+                except Exception as e:
+                    logger.warning(f"Could not attach media bytes ({pi.get('kind')}): {e}")
+            if media_parts:
+                contents.append(types.Content(role="user", parts=media_parts))
+            pending_images_to_show = []
 
         # Continue the loop — model will generate a follow-up response
 
@@ -1033,6 +1275,14 @@ def _summarize_tool_result(tool_name: str, result: dict) -> str:
     elif tool_name == "search_images":
         count = len(result.get("images", []))
         return f"{count} Bilder gefunden"
+    elif tool_name == "view_image":
+        if result.get("status") == "image_loaded":
+            return f'Bild „{result.get("filename", "?")}" angesehen'
+        return "Bild konnte nicht geladen werden"
+    elif tool_name == "view_document":
+        if result.get("status") in ("document_loaded", "document_text"):
+            return f'Dokument „{result.get("filename", "?")}" gelesen'
+        return "Dokument konnte nicht geladen werden"
     elif tool_name == "get_recent_notes":
         count = len(result.get("notes", []))
         return f"{count} Notizen geladen"
