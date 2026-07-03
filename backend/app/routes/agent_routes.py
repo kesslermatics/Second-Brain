@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from uuid import UUID
 from pydantic import BaseModel
 from typing import Optional, List
@@ -520,6 +520,23 @@ async def _apply_proposals(
                 result = await _apply_delete(p, user_id, db, background_tasks)
                 deleted_notes.append(result)
                 applied += 1
+            elif ptype == "rename_note":
+                result = await _apply_rename_note(p, user_id, db, background_tasks)
+                updated_notes.append(result)
+                applied += 1
+            elif ptype == "move_note":
+                result = await _apply_move_note(p, user_id, db, background_tasks)
+                updated_notes.append(result)
+                applied += 1
+            elif ptype == "create_folder":
+                await _apply_create_folder(p, user_id, db)
+                applied += 1
+            elif ptype == "rename_folder":
+                await _apply_rename_folder(p, user_id, db, background_tasks)
+                applied += 1
+            elif ptype == "delete_folder":
+                await _apply_delete_folder(p, user_id, db, background_tasks)
+                applied += 1
             else:
                 errors.append(f"Unbekannter Proposal-Typ: {ptype}")
         except Exception as e:
@@ -610,6 +627,172 @@ async def _apply_delete(p: dict, user_id: UUID, db: AsyncSession, background_tas
     if background_tasks:
         background_tasks.add_task(delete_note_embedding, note_id)
     return note_id
+
+
+async def _apply_rename_note(p: dict, user_id: UUID, db: AsyncSession, background_tasks=None) -> dict:
+    note_id = p.get("note_id")
+    new_title = p.get("new_title")
+    if not note_id:
+        raise ValueError("note_id fehlt")
+    if not new_title:
+        raise ValueError("new_title fehlt")
+    note = await db.get(Note, UUID(note_id))
+    if not note or note.user_id != user_id:
+        raise ValueError("Notiz nicht gefunden")
+    note.title = new_title
+    await db.flush()
+    folder = await db.get(Folder, note.folder_id)
+    if background_tasks:
+        background_tasks.add_task(upsert_note_embedding, str(note.id), str(user_id), note.title, note.content, folder.path if folder else "")
+    return {"note_id": str(note.id), "title": note.title, "folder_path": folder.path if folder else ""}
+
+
+async def _apply_move_note(p: dict, user_id: UUID, db: AsyncSession, background_tasks=None) -> dict:
+    note_id = p.get("note_id")
+    target_path = p.get("target_folder_path", "")
+    if not note_id:
+        raise ValueError("note_id fehlt")
+    note = await db.get(Note, UUID(note_id))
+    if not note or note.user_id != user_id:
+        raise ValueError("Notiz nicht gefunden")
+    folder = await _ensure_folder_path(target_path, user_id, db)
+    note.folder_id = folder.id
+    await db.flush()
+    if background_tasks:
+        background_tasks.add_task(upsert_note_embedding, str(note.id), str(user_id), note.title, note.content, folder.path)
+    return {"note_id": str(note.id), "title": note.title, "folder_path": folder.path}
+
+
+async def _apply_create_folder(p: dict, user_id: UUID, db: AsyncSession) -> dict:
+    folder_path = p.get("folder_path", "")
+    if not folder_path:
+        raise ValueError("folder_path fehlt")
+    folder = await _ensure_folder_path(folder_path, user_id, db)
+    return {"folder_id": str(folder.id), "path": folder.path}
+
+
+async def _apply_rename_folder(p: dict, user_id: UUID, db: AsyncSession, background_tasks=None) -> dict:
+    folder_path = p.get("folder_path", "")
+    new_name = p.get("new_name", "")
+    if not folder_path or not new_name:
+        raise ValueError("folder_path und new_name erforderlich")
+
+    result = await db.execute(
+        select(Folder).where(Folder.path == folder_path, Folder.user_id == user_id)
+    )
+    folder = result.scalar_one_or_none()
+    if not folder:
+        raise ValueError(f"Ordner '{folder_path}' nicht gefunden")
+
+    old_path = folder.path
+    # Compute new path (keep parent prefix, swap the leaf name)
+    if "/" in old_path:
+        prefix = old_path.rsplit("/", 1)[0]
+        new_path = f"{prefix}/{new_name}"
+    else:
+        new_path = new_name
+
+    folder.name = new_name
+    folder.path = new_path
+
+    # Update descendant paths + re-embed affected notes
+    affected_note_ids = await _repath_descendants(old_path, new_path, user_id, db)
+    await db.flush()
+
+    if background_tasks:
+        for nid in affected_note_ids:
+            note = await db.get(Note, nid)
+            if note:
+                f = await db.get(Folder, note.folder_id)
+                background_tasks.add_task(upsert_note_embedding, str(note.id), str(user_id), note.title, note.content, f.path if f else "")
+
+    return {"folder_id": str(folder.id), "path": new_path}
+
+
+async def _apply_delete_folder(p: dict, user_id: UUID, db: AsyncSession, background_tasks=None) -> dict:
+    from sqlalchemy import delete as sa_delete, or_ as sa_or
+    from app.models import NoteLink
+
+    folder_path = p.get("folder_path", "")
+    if not folder_path:
+        raise ValueError("folder_path fehlt")
+
+    result = await db.execute(
+        select(Folder).where(Folder.path == folder_path, Folder.user_id == user_id)
+    )
+    folder = result.scalar_one_or_none()
+    if not folder:
+        raise ValueError(f"Ordner '{folder_path}' nicht gefunden")
+
+    # Collect this folder + all descendants (by path prefix)
+    desc_result = await db.execute(
+        select(Folder).where(
+            Folder.user_id == user_id,
+            or_(Folder.path == folder_path, Folder.path.like(f"{folder_path}/%")),
+        )
+    )
+    folders_to_delete = desc_result.scalars().all()
+    folder_ids = [f.id for f in folders_to_delete]
+
+    # Find all notes in these folders
+    notes_result = await db.execute(
+        select(Note.id).where(Note.folder_id.in_(folder_ids))
+    )
+    note_ids = [nid for (nid,) in notes_result.all()]
+
+    if note_ids:
+        await db.execute(
+            sa_delete(NoteLink).where(
+                sa_or(
+                    NoteLink.source_note_id.in_(note_ids),
+                    NoteLink.target_note_id.in_(note_ids),
+                )
+            )
+        )
+        await db.execute(sa_delete(note_tags).where(note_tags.c.note_id.in_(note_ids)))
+        await db.execute(sa_delete(NoteVersion).where(NoteVersion.note_id.in_(note_ids)))
+        await db.execute(sa_delete(Note).where(Note.id.in_(note_ids)))
+        if background_tasks:
+            for nid in note_ids:
+                background_tasks.add_task(delete_note_embedding, str(nid))
+
+    # Delete folders deepest-first
+    for f in sorted(folders_to_delete, key=lambda x: len(x.path), reverse=True):
+        await db.delete(f)
+    await db.flush()
+
+    return {"deleted_folder": folder_path, "deleted_notes": len(note_ids)}
+
+
+async def _repath_descendants(old_path: str, new_path: str, user_id: UUID, db: AsyncSession) -> list:
+    """Update the path of all descendant folders after a rename/move. Returns affected note IDs."""
+    result = await db.execute(
+        select(Folder).where(
+            Folder.user_id == user_id,
+            Folder.path.like(f"{old_path}/%"),
+        )
+    )
+    descendants = result.scalars().all()
+    affected_folder_ids = []
+    for child in descendants:
+        child.path = new_path + child.path[len(old_path):]
+        affected_folder_ids.append(child.id)
+
+    # Also include the renamed folder itself for note re-embedding
+    root_result = await db.execute(
+        select(Folder).where(Folder.path == new_path, Folder.user_id == user_id)
+    )
+    root = root_result.scalar_one_or_none()
+    if root:
+        affected_folder_ids.append(root.id)
+
+    if not affected_folder_ids:
+        return []
+
+    notes_result = await db.execute(
+        select(Note.id).where(Note.folder_id.in_(affected_folder_ids))
+    )
+    return [nid for (nid,) in notes_result.all()]
 
 
 async def _ensure_folder_path(path: str, user_id: UUID, db: AsyncSession) -> Folder:

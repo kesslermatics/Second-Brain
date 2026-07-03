@@ -386,8 +386,18 @@ export interface AgentStep {
   content: string;
 }
 
+export type AgentProposalType =
+  | 'create'
+  | 'update'
+  | 'delete'
+  | 'rename_note'
+  | 'move_note'
+  | 'create_folder'
+  | 'rename_folder'
+  | 'delete_folder';
+
 export interface AgentProposal {
-  type: 'create' | 'update' | 'delete';
+  type: AgentProposalType;
   folder_path?: string;
   title?: string;
   content?: string;
@@ -396,6 +406,9 @@ export interface AgentProposal {
   note_id?: string;
   new_title?: string;
   new_content?: string;
+  // Folder / move operations
+  target_folder_path?: string;
+  new_name?: string;
 }
 
 export interface AgentRunResult {

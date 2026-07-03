@@ -21,6 +21,7 @@ interface ParsedAgentMessage {
     id: string;
     role: 'user' | 'assistant';
     content: string;
+    thought?: string;
     steps?: AgentStep[];
     proposals?: AgentProposal[];
     appliedIndices?: number[];
@@ -210,6 +211,7 @@ export default function AgentView() {
                 id: msgId,
                 role: 'assistant',
                 content: fullContent,
+                thought: fullThought || undefined,
                 steps: allSteps.length > 0 ? allSteps : undefined,
                 proposals: allProposals.length > 0 ? allProposals : undefined,
                 sources: allSources.length > 0 ? allSources : undefined,
@@ -379,6 +381,10 @@ export default function AgentView() {
                                     <FiCpu className="w-3.5 h-3.5 text-rose-400 animate-pulse" />
                                 </div>
                                 <div className="flex-1 min-w-0 space-y-2">
+                                    {/* Live thinking / reasoning */}
+                                    {streamingThought && (
+                                        <ThinkingBox thought={streamingThought} live />
+                                    )}
                                     {/* Steps: clean timeline */}
                                     {streamingSteps.length > 0 && (
                                         <div className="flex flex-wrap gap-1.5">
@@ -493,6 +499,28 @@ function ThinkingIndicator() {
     );
 }
 
+function ThinkingBox({ thought, live = false }: { thought: string; live?: boolean }) {
+    const [expanded, setExpanded] = useState(live);
+    useEffect(() => { if (live) setExpanded(true); }, [live]);
+    return (
+        <div className="bg-dark-800/30 border border-dark-700/50 rounded-xl overflow-hidden">
+            <button onClick={() => setExpanded((e) => !e)}
+                className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-dark-400 hover:text-white">
+                {expanded ? <FiChevronDown className="w-3 h-3" /> : <FiChevronRight className="w-3 h-3" />}
+                <span className={live ? 'text-rose-400' : 'text-purple-400'}>🧠</span>
+                <span>{live ? 'Denkt nach…' : 'Gedankengang'}</span>
+            </button>
+            {expanded && (
+                <div className="px-3 pb-2.5 pt-0.5">
+                    <div className="text-xs text-dark-400 italic whitespace-pre-wrap border-l-2 border-dark-700 pl-2.5 max-h-64 overflow-y-auto">
+                        {thought}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
 interface MessageBubbleProps {
     msg: ParsedAgentMessage;
     expandedSteps: Set<string>;
@@ -536,6 +564,7 @@ const MessageBubble = memo(function MessageBubble({ msg, expandedSteps, setExpan
     return (
         <div className="flex justify-start">
             <div className="max-w-[95%] space-y-2">
+                {msg.thought && <ThinkingBox thought={msg.thought} />}
                 {msg.steps && msg.steps.length > 0 && (
                     <div className="bg-dark-800/30 border border-dark-700/50 rounded-xl overflow-hidden">
                         <button onClick={() => setExpandedSteps((p) => { const n = new Set(p); n.has(msg.id) ? n.delete(msg.id) : n.add(msg.id); return n; })}
@@ -583,31 +612,86 @@ const MessageBubble = memo(function MessageBubble({ msg, expandedSteps, setExpan
     );
 });
 
+const PROPOSAL_CONFIG: Record<string, { icon: typeof FiFilePlus; color: string; bg: string; label: string }> = {
+    create: { icon: FiFilePlus, color: 'text-green-400', bg: 'bg-green-600/10 border-green-600/20', label: 'Neue Notiz' },
+    update: { icon: FiEdit3, color: 'text-blue-400', bg: 'bg-blue-600/10 border-blue-600/20', label: 'Notiz bearbeiten' },
+    delete: { icon: FiTrash2, color: 'text-red-400', bg: 'bg-red-600/10 border-red-600/20', label: 'Notiz löschen' },
+    rename_note: { icon: FiEdit2, color: 'text-blue-400', bg: 'bg-blue-600/10 border-blue-600/20', label: 'Notiz umbenennen' },
+    move_note: { icon: FiFile, color: 'text-cyan-400', bg: 'bg-cyan-600/10 border-cyan-600/20', label: 'Notiz verschieben' },
+    create_folder: { icon: FiFilePlus, color: 'text-yellow-400', bg: 'bg-yellow-600/10 border-yellow-600/20', label: 'Ordner erstellen' },
+    rename_folder: { icon: FiEdit2, color: 'text-yellow-400', bg: 'bg-yellow-600/10 border-yellow-600/20', label: 'Ordner umbenennen' },
+    delete_folder: { icon: FiTrash2, color: 'text-red-400', bg: 'bg-red-600/10 border-red-600/20', label: 'Ordner löschen' },
+};
+
 function ProposalCard({ proposal, msgId, index, isApplied, isRejected, onAccept, onReject, onOpenDiff, onOpenNote }: {
     proposal: AgentProposal; msgId: string; index: number; isApplied: boolean; isRejected: boolean;
     onAccept: () => void; onReject: () => void; onOpenDiff: () => void; onOpenNote?: () => void;
 }) {
-    const cfg = { create: { icon: FiFilePlus, color: 'text-green-400', bg: 'bg-green-600/10 border-green-600/20' }, update: { icon: FiEdit3, color: 'text-blue-400', bg: 'bg-blue-600/10 border-blue-600/20' }, delete: { icon: FiTrash2, color: 'text-red-400', bg: 'bg-red-600/10 border-red-600/20' } }[proposal.type];
+    const [expanded, setExpanded] = useState(false);
+    const cfg = PROPOSAL_CONFIG[proposal.type] || PROPOSAL_CONFIG.update;
     const Icon = cfg.icon;
 
+    const noteBody = proposal.content || proposal.new_content || '';
+    const hasBody = !!noteBody;
+    // Folder ops and rename/move have a short structured description instead of a body
+    const isStructural = ['rename_note', 'move_note', 'create_folder', 'rename_folder', 'delete_folder'].includes(proposal.type);
+
+    const displayTitle = proposal.title || proposal.new_title || proposal.folder_path || '';
+
     return (
-        <div
-            onClick={onOpenDiff}
-            className={`border rounded-lg overflow-hidden cursor-pointer transition-colors hover:border-amber-500/40 ${isApplied ? 'border-green-600/30 bg-green-900/10' : isRejected ? 'border-dark-700 opacity-40' : cfg.bg}`}
-        >
+        <div className={`border rounded-lg overflow-hidden transition-colors ${isApplied ? 'border-green-600/30 bg-green-900/10' : isRejected ? 'border-dark-700 opacity-40' : cfg.bg}`}>
             <div className="flex items-center gap-2 px-2.5 py-1.5">
                 <Icon className={`w-3.5 h-3.5 flex-shrink-0 ${cfg.color}`} />
                 <div className="flex-1 min-w-0">
-                    <span className="text-xs font-medium text-white truncate block">{proposal.title || proposal.new_title || ''}</span>
-                    {proposal.folder_path && <span className="text-[10px] text-dark-500">📁 {proposal.folder_path}</span>}
+                    <div className="flex items-center gap-1.5">
+                        <span className={`text-[9px] uppercase font-semibold tracking-wide ${cfg.color}`}>{cfg.label}</span>
+                    </div>
+                    <span className="text-xs font-medium text-white truncate block">{displayTitle}</span>
+                    {proposal.type === 'move_note' && <span className="text-[10px] text-dark-500">→ 📁 {proposal.target_folder_path}</span>}
+                    {proposal.type === 'rename_note' && <span className="text-[10px] text-dark-500">„{proposal.title}" → „{proposal.new_title}"</span>}
+                    {proposal.type === 'rename_folder' && <span className="text-[10px] text-dark-500">→ „{proposal.new_name}"</span>}
+                    {proposal.folder_path && proposal.type !== 'move_note' && proposal.type !== 'create_folder' && proposal.type !== 'rename_folder' && proposal.type !== 'delete_folder' && <span className="text-[10px] text-dark-500">📁 {proposal.folder_path}</span>}
                 </div>
-                <div className="flex items-center gap-1 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
-                    {onOpenNote && <button onClick={onOpenNote} className="p-1 hover:bg-dark-700 rounded text-dark-400 hover:text-brain-400" title="Notiz anzeigen"><FiEye className="w-3 h-3" /></button>}
+                <div className="flex items-center gap-1 flex-shrink-0">
+                    {(hasBody || isStructural) && (
+                        <button onClick={() => setExpanded((e) => !e)} className="p-1 hover:bg-dark-700 rounded text-dark-400 hover:text-white" title="Vorschau anzeigen">
+                            {expanded ? <FiChevronDown className="w-3 h-3" /> : <FiChevronRight className="w-3 h-3" />}
+                        </button>
+                    )}
+                    {onOpenNote && <button onClick={onOpenNote} className="p-1 hover:bg-dark-700 rounded text-dark-400 hover:text-brain-400 hidden lg:inline-flex" title="Im Seitenpanel öffnen"><FiEye className="w-3 h-3" /></button>}
                     {isApplied ? <span className="text-[10px] text-green-400 font-medium">✓ Angewendet</span> : isRejected ? <span className="text-[10px] text-dark-500">—</span> : (
                         <><button onClick={onAccept} className="p-1 bg-green-600 hover:bg-green-500 text-white rounded" title="Annehmen"><FiCheck className="w-3 h-3" /></button><button onClick={onReject} className="p-1 bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded" title="Ablehnen"><FiX className="w-3 h-3" /></button></>
                     )}
                 </div>
             </div>
+
+            {/* Inline preview — full note content right in the chat */}
+            {expanded && (
+                <div className="border-t border-dark-700/60 bg-dark-950/40 px-3 py-2.5 max-h-80 overflow-y-auto">
+                    {proposal.tags && proposal.tags.length > 0 && (
+                        <div className="flex gap-1 flex-wrap mb-2">
+                            {proposal.tags.map((t) => <span key={t} className="px-1.5 py-0.5 text-[10px] bg-dark-700 text-dark-300 rounded-full">#{t}</span>)}
+                        </div>
+                    )}
+                    {hasBody ? (
+                        <div className="markdown-content text-xs text-dark-200">
+                            <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>{noteBody}</ReactMarkdown>
+                        </div>
+                    ) : proposal.type === 'delete' ? (
+                        <p className="text-xs text-red-400">Diese Notiz wird gelöscht.</p>
+                    ) : proposal.type === 'delete_folder' ? (
+                        <p className="text-xs text-red-400">Ordner „{proposal.folder_path}" und sein gesamter Inhalt werden gelöscht.</p>
+                    ) : proposal.type === 'create_folder' ? (
+                        <p className="text-xs text-dark-300">Neuer Ordner: <span className="text-white">{proposal.folder_path}</span></p>
+                    ) : proposal.type === 'move_note' ? (
+                        <p className="text-xs text-dark-300">Notiz wird verschoben nach: <span className="text-white">📁 {proposal.target_folder_path}</span></p>
+                    ) : proposal.type === 'rename_note' ? (
+                        <p className="text-xs text-dark-300">Titel: „{proposal.title}" → <span className="text-white">„{proposal.new_title}"</span></p>
+                    ) : proposal.type === 'rename_folder' ? (
+                        <p className="text-xs text-dark-300">Ordner „{proposal.folder_path}" → <span className="text-white">„{proposal.new_name}"</span></p>
+                    ) : null}
+                </div>
+            )}
         </div>
     );
 }

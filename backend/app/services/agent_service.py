@@ -37,7 +37,7 @@ AGENT_MODEL = PRO_MODEL  # gemini-3.1-pro-preview — thinking model
 
 AGENT_SYSTEM_INSTRUCTION = """Du bist ein intelligenter, eloquenter Assistent für ein persönliches Second Brain / Notiz-System.
 Du kannst mit dem Benutzer brainstormen, planen, Fragen stellen und Ideen entwickeln.
-Du hast Zugriff auf alle Notizen und Bilder des Benutzers über Tools.
+Du hast Zugriff auf alle Notizen, Ordner und Bilder des Benutzers über Tools — und kannst die Wissensbasis aktiv verwalten und umstrukturieren.
 
 ## Verhalten:
 
@@ -45,26 +45,46 @@ Du hast Zugriff auf alle Notizen und Bilder des Benutzers über Tools.
 
 2. **Ausführlich antworten**: Gib substanzielle, ausführliche Antworten. Erkläre Zusammenhänge, gib Beispiele, strukturiere deine Gedanken mit Markdown. Kurze Ein-Satz-Antworten sind NICHT erwünscht — antworte so wie ein kluger Gesprächspartner der sich wirklich Mühe gibt. Mindestens 3-5 Absätze bei inhaltlichen Fragen. Bei einfachen Rückfragen reichen 1-2 Sätze.
 
-3. **Notizen nur wenn sinnvoll**: Erstelle/bearbeite Notizen NUR wenn der Benutzer es explizit wünscht oder es klar Sinn macht. Beim ersten Kontakt zu einem Thema: brainstorme, frage, diskutiere — erstelle NICHT sofort Notizen.
+3. **Standardmodus ist GESPRÄCH, nicht Notizen erstellen**: Dein Normalzustand ist reden, brainstormen, mitdenken, Fragen stellen. Notizen sind die AUSNAHME, nicht die Regel.
+   - Erstelle oder bearbeite eine Notiz NUR wenn EINES davon zutrifft:
+     (a) der Benutzer bittet dich AUSDRÜCKLICH darum ("speichere das", "mach eine Notiz", "halt das fest"), ODER
+     (b) es wurde eine Datei hochgeladen (dann proaktiv ablegen), ODER
+     (c) ein Gespräch ist zu einem klaren, abgeschlossenen Ergebnis gekommen, das der Benutzer sichtbar behalten will — und selbst dann FRAGST du zuerst kurz nach ("Soll ich das als Notiz festhalten?").
+   - Beim Brainstormen, Ideen sammeln, Nachdenken, Rückfragen beantworten, Pläne durchsprechen: erstelle KEINE Notiz. Das ist einfach nur Gespräch. Auch wenn das Gespräch inhaltlich stark ist — nicht jeder gute Gedanke muss sofort abgespeichert werden.
+   - Falls du denkst, dass sich etwas zum Festhalten lohnt, biete es am Ende deiner Antwort in EINEM Satz an ("Wenn du willst, fasse ich das als Notiz zusammen.") statt es einfach zu tun.
+   - Lieber ein Gespräch zu wenig verschriftlicht als der Chat voller ungewollter Notiz-Vorschläge. Zurückhaltung ist erwünscht.
 
-4. **WICHTIG — Keine Duplikate**: Bevor du eine neue Notiz erstellst, suche IMMER zuerst mit `search_notes` ob es schon eine Notiz zum gleichen Thema gibt. Wenn ja:
-   - Nutze `update_note` mit der existierenden `note_id` um sie zu AKTUALISIEREN
-   - Erstelle KEINE neue Notiz wenn eine zum gleichen Thema bereits existiert
-   - Ergänze/aktualisiere den bestehenden Inhalt statt einen neuen Eintrag zu machen
-   - Nur wenn es wirklich ein NEUES, eigenständiges Thema ist: `create_note`
+4. **BEARBEITEN STATT NEU ANLEGEN — sehr wichtig**: Dein Standardverhalten ist, bestehende Notizen zu ERWEITERN und zu PFLEGEN, nicht ständig neue anzulegen.
+   - Bevor du eine neue Notiz erstellst, suche IMMER zuerst mit `search_notes` (großzügig!) ob es schon eine Notiz zum gleichen oder einem eng verwandten Thema gibt.
+   - Wenn eine passende Notiz existiert: Lies sie mit `read_note`, dann nutze `update_note` um sie zu erweitern/verbessern. Du darfst die Notiz komplett neu schreiben — aber übernimm dabei ALLE bestehenden wertvollen Inhalte und ergänze das Neue sinnvoll integriert. Nichts Wichtiges darf verloren gehen.
+   - Nutze deine bestehenden Notizen aktiv als Wissensquelle: Wenn du etwas erklärst oder planst, beziehe dich auf das was der Benutzer bereits notiert hat.
+   - Erstelle nur dann eine NEUE Notiz, wenn es wirklich ein eigenständiges, neues Thema ist, das in keine bestehende Notiz passt.
+   - WICHTIG: `update_note` ohne vorheriges `read_note` ist verboten — du würdest sonst bestehende Inhalte blind überschreiben. Lies immer zuerst.
 
-4. **Dateien proaktiv ablegen**: Wenn Dateien (PDFs, Bilder, Dokumente) hochgeladen werden:
+5. **Wissensbasis aktiv verwalten**: Du kannst die Struktur des Second Brain aktiv organisieren — wie in einer IDE.
+   - `create_folder`: neue Ordner anlegen
+   - `rename_folder`: Ordner umbenennen
+   - `move_note`: Notiz in einen anderen Ordner verschieben
+   - `rename_note`: Notiz umbenennen (Titel ändern, ohne Inhalt anzufassen)
+   - `delete_folder`: leere oder nicht mehr benötigte Ordner entfernen
+   - Wenn der Benutzer bittet aufzuräumen oder umzustrukturieren, plane die Änderungen und schlage sie als konkrete Schritte vor.
+
+6. **Dateien proaktiv ablegen**: Wenn Dateien (PDFs, Bilder, Dokumente) hochgeladen werden:
    - Erstelle eine Notiz im passenden Ordner
    - Bette die Datei ein: `![Beschreibung](URL)` für Bilder, `[📄 Dateiname](URL)` für PDFs/Dokumente
    - Verknüpfe die Datei über `attach_file_ids` damit sie im Ordner gespeichert wird
    - Füge eine Zusammenfassung/Beschreibung des Inhalts hinzu
    - Frage NICHT ob du es speichern sollst — tu es proaktiv
 
-5. **Immer informiert**: Nutze die Suchtools proaktiv um relevante bestehende Notizen zu finden. Halte dich thematisch STRIKT an das was gefragt wird.
+7. **Ordner kennen**: Nutze `list_folders` wenn du die aktuelle Ordnerstruktur brauchst (z.B. bevor du Notizen erstellst, verschiebst oder umstrukturierst). Die Struktur wird dir NICHT automatisch mitgegeben — hol sie dir bei Bedarf.
 
-6. **Web-Recherche**: Du hast Zugriff auf Google Search. Nutze es wenn der Benutzer nach aktuellen Informationen fragt, etwas recherchiert haben will, oder du Fakten verifizieren möchtest. Die Quellen werden dem Benutzer automatisch angezeigt.
-
-6. **Ordnerstruktur-Intelligenz**: Analysiere die bestehende Struktur genau. Erstelle sinnvolle Unterordner. Nutze bestehende Ordner wenn sie passen.
+8. **Web-Recherche + Wissensbasis VEREINEN**: Du hast `search_notes` (dein Second Brain) und `web_search` (Internet).
+   - Bei Wissensfragen: Suche ZUERST in den eigenen Notizen (`search_notes`), dann bei Bedarf im Web (`web_search`).
+   - Verbinde beide Quellen in deiner Antwort und mache klar erkennbar, WAS WOHER kommt. Struktur zum Beispiel:
+     - **Aus deinen Notizen:** was der Benutzer dazu bereits gespeichert hat (mit Verweis auf die Notiz-Titel)
+     - **Neu aus dem Web:** was er noch nicht hatte, ergänzende/aktuelle Infos (mit Quellen)
+     - **Fazit/Synthese:** wie beides zusammenpasst, was neu ist, was er ergänzen sollte
+   - Wenn zu einem Thema noch nichts in den Notizen steht, sag das ehrlich und biete an, eine Notiz daraus zu erstellen.
 
 ## Antwortformat:
 - Nutze Markdown: **Fettdruck** für Kernbegriffe, Aufzählungen, Überschriften (##) wo sinnvoll
@@ -72,12 +92,9 @@ Du hast Zugriff auf alle Notizen und Bilder des Benutzers über Tools.
 - Bei Brainstorming: Liste Ideen auf, diskutiere Pro/Contra, schlage nächste Schritte vor
 - Bei Fragen zu Notizen: Fasse zusammen, verknüpfe, gib Kontext
 
-## Proposals (Notiz-Änderungen):
+## Proposals (Änderungen an der Wissensbasis):
 
-Wenn du Notizen erstellen/ändern/löschen willst, nutze die entsprechenden Tools:
-- `create_note`: Neue Notiz erstellen
-- `update_note`: Bestehende Notiz bearbeiten
-- `delete_note`: Notiz löschen
+Alle verändernden Aktionen (Notizen erstellen/ändern/löschen, Ordner anlegen/umbenennen/verschieben) werden dem Benutzer als VORSCHLÄGE vorgelegt — sie werden erst ausgeführt, wenn er sie annimmt. Sage NIE, dass du etwas bereits getan hast; sage, dass du es vorschlägst.
 
 Schreibe Notiz-Inhalte immer in gut formatiertem Markdown mit Headings, Listen, Callouts.
 
@@ -93,13 +110,17 @@ def _get_agent_tools() -> list:
     # We use manual FunctionDeclarations for more control over descriptions
     search_notes = types.FunctionDeclaration(
         name="search_notes",
-        description="Semantische und Volltextsuche über alle Notizen und Bilder des Benutzers. Nutze dies proaktiv um relevanten Kontext zu finden.",
+        description="Semantische und Volltextsuche über alle Notizen und Bilder des Benutzers. Nutze dies proaktiv um relevanten Kontext zu finden. Gibt standardmäßig bis zu 30 Treffer zurück.",
         parameters={
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
                     "description": "Suchanfrage (semantisch + Volltext)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximale Anzahl Treffer (Standard 30, max 60). Nutze einen hohen Wert wenn du einen umfassenden Überblick über ein Thema brauchst.",
                 },
             },
             "required": ["query"],
@@ -231,6 +252,107 @@ def _get_agent_tools() -> list:
         },
     )
 
+    rename_note = types.FunctionDeclaration(
+        name="rename_note",
+        description="Benenne eine Notiz um (ändert NUR den Titel, nicht den Inhalt). Nutze dies statt update_note wenn du nur den Titel ändern willst.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "note_id": {
+                    "type": "string",
+                    "description": "UUID der Notiz",
+                },
+                "new_title": {
+                    "type": "string",
+                    "description": "Neuer Titel der Notiz",
+                },
+            },
+            "required": ["note_id", "new_title"],
+        },
+    )
+
+    move_note = types.FunctionDeclaration(
+        name="move_note",
+        description="Verschiebe eine Notiz in einen anderen Ordner. Der Zielordner wird bei Bedarf automatisch erstellt.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "note_id": {
+                    "type": "string",
+                    "description": "UUID der zu verschiebenden Notiz",
+                },
+                "target_folder_path": {
+                    "type": "string",
+                    "description": "Zielordner-Pfad, z.B. 'Projekte/Umzug'",
+                },
+            },
+            "required": ["note_id", "target_folder_path"],
+        },
+    )
+
+    create_folder = types.FunctionDeclaration(
+        name="create_folder",
+        description="Erstelle einen neuen (auch verschachtelten) Ordner. Übergeordnete Ordner im Pfad werden bei Bedarf automatisch mit erstellt.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "folder_path": {
+                    "type": "string",
+                    "description": "Vollständiger Pfad des neuen Ordners, z.B. 'Projekte/2026/Umzug'",
+                },
+            },
+            "required": ["folder_path"],
+        },
+    )
+
+    rename_folder = types.FunctionDeclaration(
+        name="rename_folder",
+        description="Benenne einen bestehenden Ordner um. Alle Pfade von Unterordnern und Notizen werden automatisch mit aktualisiert.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "folder_path": {
+                    "type": "string",
+                    "description": "Aktueller Pfad des Ordners, z.B. 'Projekte/Alt'",
+                },
+                "new_name": {
+                    "type": "string",
+                    "description": "Neuer Name des Ordners (nur der Name, nicht der ganze Pfad)",
+                },
+            },
+            "required": ["folder_path", "new_name"],
+        },
+    )
+
+    delete_folder = types.FunctionDeclaration(
+        name="delete_folder",
+        description="Lösche einen Ordner. ACHTUNG: löscht auch alle enthaltenen Notizen und Unterordner. Nutze dies nur wenn der Benutzer es explizit wünscht oder der Ordner leer ist.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "folder_path": {
+                    "type": "string",
+                    "description": "Pfad des zu löschenden Ordners",
+                },
+            },
+            "required": ["folder_path"],
+        },
+    )
+
+    get_recent_notes = types.FunctionDeclaration(
+        name="get_recent_notes",
+        description="Hole die zuletzt bearbeiteten Notizen (chronologisch). Nützlich für Fragen wie 'Was habe ich zuletzt notiert?'.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Anzahl der Notizen (Standard 15, max 50)",
+                },
+            },
+        },
+    )
+
     web_search = types.FunctionDeclaration(
         name="web_search",
         description="Durchsuche das Internet nach aktuellen Informationen. Nutze dies für Fakten-Recherche, aktuelle Nachrichten, Produktinfos, Anleitungen, oder wenn der Benutzer etwas wissen will das nicht in seinen Notizen steht. Die Quellen-URLs werden dem Benutzer automatisch angezeigt.",
@@ -253,9 +375,15 @@ def _get_agent_tools() -> list:
             list_folders,
             list_notes_in_folder,
             search_images,
+            get_recent_notes,
             create_note,
             update_note,
             delete_note,
+            rename_note,
+            move_note,
+            create_folder,
+            rename_folder,
+            delete_folder,
             web_search,
         ]),
     ]
@@ -267,11 +395,16 @@ async def _execute_tool(name: str, args: dict, user_id: str, db: AsyncSession) -
     """Execute a tool call and return the result as a dict."""
     try:
         if name == "search_notes":
+            try:
+                limit = int(args.get("limit") or 30)
+            except (ValueError, TypeError):
+                limit = 30
+            limit = max(1, min(limit, 60))
             results = await hybrid_search(
                 query=args.get("query", ""),
                 user_id=user_id,
                 db=db,
-                limit=10,
+                limit=limit,
             )
             return {
                 "results": [
@@ -283,6 +416,33 @@ async def _execute_tool(name: str, args: dict, user_id: str, db: AsyncSession) -
                         "score": r["score"],
                     }
                     for r in results
+                ]
+            }
+
+        elif name == "get_recent_notes":
+            try:
+                limit = int(args.get("limit") or 15)
+            except (ValueError, TypeError):
+                limit = 15
+            limit = max(1, min(limit, 50))
+            result = await db.execute(
+                select(Note, Folder.path)
+                .join(Folder, Note.folder_id == Folder.id)
+                .where(Note.user_id == UUID(user_id))
+                .order_by(Note.updated_at.desc())
+                .limit(limit)
+            )
+            rows = result.all()
+            return {
+                "notes": [
+                    {
+                        "note_id": str(n.id),
+                        "title": n.title,
+                        "folder_path": path,
+                        "preview": n.content[:300],
+                        "updated_at": n.updated_at.isoformat() if n.updated_at else None,
+                    }
+                    for n, path in rows
                 ]
             }
 
@@ -400,6 +560,71 @@ async def _execute_tool(name: str, args: dict, user_id: str, db: AsyncSession) -
                 },
             }
 
+        elif name == "rename_note":
+            # Resolve current title for a nicer proposal preview
+            current_title = ""
+            try:
+                note = await db.get(Note, UUID(args.get("note_id", "")))
+                if note and str(note.user_id) == user_id:
+                    current_title = note.title
+            except (ValueError, TypeError):
+                pass
+            return {
+                "status": "proposal_created",
+                "proposal": {
+                    "type": "rename_note",
+                    "note_id": args.get("note_id", ""),
+                    "title": current_title,
+                    "new_title": args.get("new_title", ""),
+                },
+            }
+
+        elif name == "move_note":
+            current_title = ""
+            try:
+                note = await db.get(Note, UUID(args.get("note_id", "")))
+                if note and str(note.user_id) == user_id:
+                    current_title = note.title
+            except (ValueError, TypeError):
+                pass
+            return {
+                "status": "proposal_created",
+                "proposal": {
+                    "type": "move_note",
+                    "note_id": args.get("note_id", ""),
+                    "title": current_title,
+                    "target_folder_path": args.get("target_folder_path", ""),
+                },
+            }
+
+        elif name == "create_folder":
+            return {
+                "status": "proposal_created",
+                "proposal": {
+                    "type": "create_folder",
+                    "folder_path": args.get("folder_path", ""),
+                },
+            }
+
+        elif name == "rename_folder":
+            return {
+                "status": "proposal_created",
+                "proposal": {
+                    "type": "rename_folder",
+                    "folder_path": args.get("folder_path", ""),
+                    "new_name": args.get("new_name", ""),
+                },
+            }
+
+        elif name == "delete_folder":
+            return {
+                "status": "proposal_created",
+                "proposal": {
+                    "type": "delete_folder",
+                    "folder_path": args.get("folder_path", ""),
+                },
+            }
+
         elif name == "web_search":
             # Execute a separate Gemini call with Google Search grounding
             query = args.get("query", "")
@@ -482,27 +707,69 @@ async def _execute_tool(name: str, args: dict, user_id: str, db: AsyncSession) -
 
 # ── Build multi-turn contents from chat history ───────────────────────
 
+# History truncation limits — keep recent turns verbatim, summarize the rest.
+MAX_HISTORY_MESSAGES = 20        # how many recent messages to keep in full
+MAX_MSG_CHARS = 6000             # cap on a single message's length
+
+
 def _build_contents(chat_history: list[dict], image_context: list[dict] | None = None) -> list[types.Content]:
-    """Convert DB chat history into proper multi-turn contents for the API."""
-    contents = []
+    """Convert DB chat history into proper multi-turn contents for the API.
 
-    for msg in chat_history:
-        role = msg["role"]
-        content_text = msg["content"]
+    Long histories are truncated: only the most recent MAX_HISTORY_MESSAGES are
+    kept verbatim. Older messages are condensed into a single summary turn so the
+    context window stays manageable over very long sessions.
+    """
+    history = chat_history or []
 
-        # Strip hidden agent metadata from stored assistant messages
-        content_text = re.sub(r'<!-- AGENT_META[\s\S]*?AGENT_META -->', '', content_text).strip()
+    # Clean + normalize all messages first
+    cleaned: list[dict] = []
+    for msg in history:
+        role = msg.get("role")
+        if role not in ("user", "assistant"):
+            continue
+        text = re.sub(r'<!-- AGENT_META[\s\S]*?AGENT_META -->', '', msg.get("content", "")).strip()
+        if not text:
+            continue
+        # Cap individual message length to avoid a single huge note dominating context
+        if len(text) > MAX_MSG_CHARS:
+            text = text[:MAX_MSG_CHARS] + "\n… (gekürzt)"
+        cleaned.append({"role": role, "text": text})
 
-        if role == "user":
-            contents.append(types.Content(
-                role="user",
-                parts=[types.Part.from_text(text=content_text)],
-            ))
-        elif role == "assistant":
-            contents.append(types.Content(
-                role="model",
-                parts=[types.Part.from_text(text=content_text)],
-            ))
+    contents: list[types.Content] = []
+
+    # If the history is long, condense everything except the last N messages
+    if len(cleaned) > MAX_HISTORY_MESSAGES:
+        older = cleaned[:-MAX_HISTORY_MESSAGES]
+        recent = cleaned[-MAX_HISTORY_MESSAGES:]
+
+        summary_lines = []
+        for m in older:
+            label = "Benutzer" if m["role"] == "user" else "Assistent"
+            snippet = m["text"].replace("\n", " ")
+            if len(snippet) > 200:
+                snippet = snippet[:200] + "…"
+            summary_lines.append(f"- {label}: {snippet}")
+        summary_text = (
+            "[Zusammenfassung des bisherigen Gesprächsverlaufs (ältere Nachrichten, gekürzt)]\n"
+            + "\n".join(summary_lines)
+        )
+        contents.append(types.Content(
+            role="user",
+            parts=[types.Part.from_text(text=summary_text)],
+        ))
+        # Acknowledge so the summary sits in a valid user→model turn structure
+        contents.append(types.Content(
+            role="model",
+            parts=[types.Part.from_text(text="Verstanden, ich habe den bisherigen Kontext.")],
+        ))
+    else:
+        recent = cleaned
+
+    for m in recent:
+        contents.append(types.Content(
+            role="user" if m["role"] == "user" else "model",
+            parts=[types.Part.from_text(text=m["text"])],
+        ))
 
     return contents
 
@@ -528,14 +795,7 @@ async def run_agent_stream(
     """
     client = get_client()
 
-    # Build the folder context as part of the user message
-    folders_result = await db.execute(
-        select(Folder).where(Folder.user_id == UUID(user_id)).order_by(Folder.path)
-    )
-    folders = folders_result.scalars().all()
-    folder_tree = "\n".join(f"  📁 {f.path}" for f in folders) or "(keine Ordner)"
-
-    # Build multi-turn conversation
+    # Build multi-turn conversation (with truncation of long histories)
     contents = _build_contents(chat_history or [], image_context)
 
     # Augment the current user message with context
@@ -557,26 +817,32 @@ async def run_agent_stream(
     else:
         user_message_parts.append(instruction)
 
-    # Add folder context as system-level info in the user turn
-    context_suffix = f"\n\n[Aktuelle Ordnerstruktur:\n{folder_tree}]"
-    user_message_parts[0] += context_suffix
+    # NOTE: The folder structure is no longer appended to every message.
+    # The agent fetches it on demand via the `list_folders` tool, which keeps
+    # the context lean over long sessions.
 
     contents.append(types.Content(
         role="user",
         parts=[types.Part.from_text(text=user_message_parts[0])],
     ))
 
-    # Agent config
+    # Agent config — enable thought summaries so the UI can surface the reasoning
+    try:
+        thinking_config = types.ThinkingConfig(include_thoughts=True)
+    except Exception:
+        thinking_config = None
+
     config = types.GenerateContentConfig(
         system_instruction=AGENT_SYSTEM_INSTRUCTION,
         tools=_get_agent_tools(),
         temperature=0.8,
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+        **({"thinking_config": thinking_config} if thinking_config else {}),
     )
 
     proposals = []
     steps = []
-    max_tool_rounds = 5  # prevent infinite loops
+    max_tool_rounds = 15  # allow deeper multi-step reasoning for complex tasks
 
     for round_num in range(max_tool_rounds + 1):
         # For tool rounds (not the last), use non-streaming to avoid thought_signature issues
@@ -603,7 +869,9 @@ async def run_agent_stream(
                     if hasattr(part, 'function_call') and part.function_call:
                         function_calls.append(part.function_call)
                     elif hasattr(part, 'text') and part.text:
-                        if not (hasattr(part, 'thought') and part.thought):
+                        if hasattr(part, 'thought') and part.thought:
+                            yield {"type": "thinking", "content": part.text}
+                        else:
                             full_text_parts.append(part.text)
 
             # Stream text that was generated
@@ -620,18 +888,28 @@ async def run_agent_stream(
                 contents=contents,
                 config=config,
             ):
-                # Collect all parts for replay
+                # Collect all parts for replay + separate thoughts from answer text
+                emitted_via_parts = False
                 if chunk.candidates:
                     for candidate in chunk.candidates:
                         if candidate.content and candidate.content.parts:
                             for part in candidate.content.parts:
                                 all_response_parts.append(part)
+                                # Thought summary parts → stream as "thinking"
+                                if getattr(part, 'thought', False) and getattr(part, 'text', None):
+                                    emitted_via_parts = True
+                                    yield {"type": "thinking", "content": part.text}
+                                elif getattr(part, 'text', None) and not getattr(part, 'function_call', None):
+                                    emitted_via_parts = True
+                                    full_text_parts.append(part.text)
+                                    yield {"type": "chunk", "content": part.text}
 
-                # Stream text to UI
+                # Capture function calls
                 fc_list = chunk.function_calls
                 if fc_list:
                     function_calls.extend(fc_list)
-                else:
+                elif not emitted_via_parts:
+                    # Fallback for chunks whose parts weren't iterable above
                     try:
                         text = chunk.text
                         if text:
@@ -668,15 +946,25 @@ async def run_agent_stream(
                 "list_folders": "Ordner laden",
                 "list_notes_in_folder": "Notizen laden",
                 "search_images": "Bilder suchen",
+                "get_recent_notes": "Neueste Notizen",
                 "create_note": "Erstelle Notiz",
                 "update_note": "Bearbeite Notiz",
                 "delete_note": "Lösche Notiz",
+                "rename_note": "Benenne Notiz um",
+                "move_note": "Verschiebe Notiz",
+                "create_folder": "Erstelle Ordner",
+                "rename_folder": "Benenne Ordner um",
+                "delete_folder": "Lösche Ordner",
                 "web_search": "Web-Recherche",
             }
             label = step_labels.get(tool_name, tool_name)
             detail = ""
             if tool_args.get("query"):
                 detail = f' „{tool_args["query"]}"'
+            elif tool_args.get("new_name"):
+                detail = f' → „{tool_args["new_name"]}"'
+            elif tool_args.get("target_folder_path"):
+                detail = f' → {tool_args["target_folder_path"]}'
             elif tool_args.get("title"):
                 detail = f' „{tool_args["title"]}"'
             elif tool_args.get("folder_path"):
@@ -745,12 +1033,25 @@ def _summarize_tool_result(tool_name: str, result: dict) -> str:
     elif tool_name == "search_images":
         count = len(result.get("images", []))
         return f"{count} Bilder gefunden"
+    elif tool_name == "get_recent_notes":
+        count = len(result.get("notes", []))
+        return f"{count} Notizen geladen"
     elif tool_name == "create_note":
         return "Vorschlag erstellt"
     elif tool_name == "update_note":
         return "Änderung vorgeschlagen"
     elif tool_name == "delete_note":
         return "Löschung vorgeschlagen"
+    elif tool_name == "rename_note":
+        return "Umbenennung vorgeschlagen"
+    elif tool_name == "move_note":
+        return "Verschiebung vorgeschlagen"
+    elif tool_name == "create_folder":
+        return "Ordner-Erstellung vorgeschlagen"
+    elif tool_name == "rename_folder":
+        return "Ordner-Umbenennung vorgeschlagen"
+    elif tool_name == "delete_folder":
+        return "Ordner-Löschung vorgeschlagen"
     elif tool_name == "web_search":
         count = len(result.get("sources", []))
         return f"Web-Recherche: {count} Quellen"
