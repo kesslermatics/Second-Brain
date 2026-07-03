@@ -32,6 +32,7 @@ from app.services.teacher_service import (
     get_existing_note_titles,
 )
 from app.services.book_service import generate_chapter_summary
+from app.services.teacher_agent import run_teacher_agent
 
 router = APIRouter(prefix="/teacher", tags=["teacher"])
 
@@ -711,88 +712,99 @@ async def unit_chat_stream(
     total_sections = len(sections_list) if sections_list else 0
     is_last_section = total_sections == 0 or current_section_idx >= total_sections - 1
 
+    is_book = (course.kind or "teacher") == "book"
+    if is_book:
+        authors_str = ", ".join(course.book_authors or []) or "unbekannter Autor"
+        subject_block = (
+            f'BUCH: "{course.title}" von {authors_str}\n'
+            f'KAPITEL {unit.unit_number}: "{unit.title}"'
+        )
+        if previous_summary:
+            subject_block += f"\nBEREITS BEHANDELT:\n{previous_summary}"
+        if next_title:
+            subject_block += f'\nNÄCHSTES KAPITEL: "{next_title}"'
+    else:
+        objectives = "\n".join(f"  - {o}" for o in (unit.learning_objectives or []))
+        subject_block = (
+            f'KURS: "{course.title}"\n'
+            f'LEKTION: "{unit.title}"\n{unit.description or ""}\n'
+            f'LERNZIELE:\n{objectives}'
+        )
+        if previous_summary:
+            subject_block += f"\nBEREITS BEHANDELT:\n{previous_summary}"
+        if next_title:
+            subject_block += f'\nNÄCHSTES THEMA: "{next_title}"'
+
     async def event_stream():
         full_response_parts = []
-        is_book = (course.kind or "teacher") == "book"
+        agent_advanced = False
+        collected_final: dict = {}
 
-        if is_book:
-            stream_gen = chat_about_book_chapter_stream(
-                book_title=course.title,
-                book_authors=course.book_authors or [],
-                chapter_number=unit.unit_number,
-                chapter_title=unit.title,
-                chat_history=chat_history,
-                user_message=user_message,
-                previous_chapters_summary=previous_summary,
-                next_chapter_title=next_title,
-                sections=sections_list,
-                current_section=current_section_idx,
-                knowledge_hits=knowledge_hits,
-            )
-        else:
-            stream_gen = chat_with_teacher_stream(
-                course_title=course.title,
-                unit_title=unit.title,
-                unit_description=unit.description or "",
-                learning_objectives=unit.learning_objectives or [],
-                chat_history=chat_history,
-                user_message=user_message,
-                previous_units_summary=previous_summary,
-                next_unit_title=next_title,
-                sections=sections_list,
-                current_section=current_section_idx,
-                knowledge_hits=knowledge_hits,
-            )
-
-        # Marker the tutor may append to signal it wants to offer a quick quiz.
-        QUIZ_MARKER = "[QUIZ_VORSCHLAG]"
-        pending = ""  # buffer to catch the marker even if split across chunks
-
-        async for event in stream_gen:
-            if event["type"] == "thinking":
+        async for event in run_teacher_agent(
+            user_id=str(current_user.id),
+            db=db,
+            subject_block=subject_block,
+            sections=sections_list,
+            current_section=current_section_idx,
+            chat_history=chat_history,
+            user_message=user_message,
+        ):
+            etype = event.get("type")
+            if etype == "thinking":
                 yield f"data: {json.dumps({'type': 'thinking', 'content': event['content']}, ensure_ascii=False)}\n\n"
-            elif event["type"] == "chunk":
+            elif etype == "chunk":
                 full_response_parts.append(event["content"])
-                # Buffer recent output so we can strip the marker before it reaches the UI
-                pending += event["content"]
-                # Only emit text that cannot contain a partial marker at the tail
-                safe_len = max(0, len(pending) - len(QUIZ_MARKER))
-                emit, pending = pending[:safe_len], pending[safe_len:]
-                if emit:
-                    clean = emit.replace(QUIZ_MARKER, "")
-                    if clean:
-                        yield f"data: {json.dumps({'type': 'chunk', 'content': clean}, ensure_ascii=False)}\n\n"
-            elif event["type"] == "done":
-                pass
+                yield f"data: {json.dumps({'type': 'chunk', 'content': event['content']}, ensure_ascii=False)}\n\n"
+            elif etype == "tool_call":
+                yield f"data: {json.dumps({'type': 'tool_call', 'content': event['content']}, ensure_ascii=False)}\n\n"
+            elif etype == "quiz_suggested":
+                yield f"data: {json.dumps({'type': 'quiz_suggested'}, ensure_ascii=False)}\n\n"
+            elif etype == "note_proposal":
+                yield f"data: {json.dumps({'type': 'note_proposal', 'note': event['note']}, ensure_ascii=False)}\n\n"
+            elif etype == "difficulty":
+                yield f"data: {json.dumps({'type': 'difficulty', 'level': event.get('level')}, ensure_ascii=False)}\n\n"
+            elif etype == "understanding":
+                yield f"data: {json.dumps({'type': 'understanding', 'concept': event.get('concept'), 'status': event.get('status')}, ensure_ascii=False)}\n\n"
+            elif etype == "advance_section":
+                agent_advanced = True
+            elif etype == "done":
+                collected_final = event
 
-        # Flush remaining buffered text (minus the marker)
-        if pending:
-            clean_tail = pending.replace(QUIZ_MARKER, "")
-            if clean_tail:
-                yield f"data: {json.dumps({'type': 'chunk', 'content': clean_tail}, ensure_ascii=False)}\n\n"
+        full_text = "".join(full_response_parts).strip()
+        quiz_suggested = bool(collected_final.get("quiz_suggested"))
+        note_proposals = collected_final.get("note_proposals", [])
 
-        # Detect + strip the quiz marker from the full stored text
-        full_text_raw = "".join(full_response_parts)
-        quiz_suggested = QUIZ_MARKER in full_text_raw
-        full_text = full_text_raw.replace(QUIZ_MARKER, "").strip()
-
+        # Persist: assistant message + advance section if the model chose to
+        new_section_idx = current_section_idx
         async with async_session() as save_db:
             assistant_msg = CourseMessage(
                 course_id=course.id, unit_id=unit.id, role="assistant", content=full_text,
             )
             save_db.add(assistant_msg)
+
+            if agent_advanced and sections_list and current_section_idx < len(sections_list) - 1:
+                fresh_unit = await save_db.get(CourseUnit, unit.id)
+                if fresh_unit:
+                    new_section_idx = (fresh_unit.current_section or 0) + 1
+                    if new_section_idx > len(sections_list) - 1:
+                        new_section_idx = len(sections_list) - 1
+                    fresh_unit.current_section = new_section_idx
+
             await save_db.commit()
             msg_id = str(assistant_msg.id)
 
-        # Final event with metadata
+        total = len(sections_list) if sections_list else 0
+        is_last = total == 0 or new_section_idx >= total - 1
+
         done_data = json.dumps({
             "type": "done",
             "message_id": msg_id,
             "sections": sections_list or [],
-            "current_section": current_section_idx,
-            "total_sections": total_sections,
-            "is_last_section": is_last_section,
+            "current_section": new_section_idx,
+            "total_sections": total,
+            "is_last_section": is_last,
             "quiz_suggested": quiz_suggested,
+            "note_proposals": note_proposals,
         }, ensure_ascii=False)
         yield f"data: {done_data}\n\n"
 

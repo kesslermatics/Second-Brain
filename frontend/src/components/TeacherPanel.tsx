@@ -73,6 +73,9 @@ export default function TeacherPanel() {
     // Quiz / recap / learning path
     const [quizSuggested, setQuizSuggested] = useState(false);
     const [generatingQuiz, setGeneratingQuiz] = useState(false);
+    // Agentic teacher: live tool steps + notes the tutor proposes to save
+    const [toolSteps, setToolSteps] = useState<string[]>([]);
+    const [proposedNotes, setProposedNotes] = useState<CourseNoteResult[]>([]);
     const [recap, setRecap] = useState<LessonRecap | null>(null);
     const [loadingRecap, setLoadingRecap] = useState(false);
     const [showPath, setShowPath] = useState(false);
@@ -334,6 +337,8 @@ export default function TeacherPanel() {
         setStreamingContent('');
         setStreamingThought('');
         setQuizSuggested(false);
+        setToolSteps([]);
+        setProposedNotes([]);
         userSentMessageRef.current = true;  // invalidate prefetched notes
 
         // Optimistic add user message
@@ -345,22 +350,35 @@ export default function TeacherPanel() {
 
         try {
             let fullContent = '';
+            const noteProposals: CourseNoteResult[] = [];
             const response = await sendTeacherChatStream(view.course.id, view.unit.id, msg, (event) => {
                 if (event.type === 'thinking') {
                     setStreamingThought((prev) => prev + event.content);
                 } else if (event.type === 'chunk') {
                     fullContent += event.content;
                     setStreamingContent(fullContent);
+                } else if (event.type === 'tool_call') {
+                    setToolSteps((prev) => [...prev, event.content]);
+                } else if (event.type === 'note_proposal') {
+                    noteProposals.push({
+                        title: event.note.title,
+                        content: event.note.content,
+                        folder: `Kurse/${view.course.title}`,
+                        tag_ids: [],
+                        tag_names: event.note.tags || [],
+                    });
                 }
             });
             setStreamingContent('');
             setStreamingThought('');
+            setToolSteps([]);
             setMessages((prev) => [...prev.filter((m) => m.id !== tempId),
             { id: tempId, role: 'user', content: msg, metadata: null, created_at: new Date().toISOString() },
             response.message
             ]);
             setSection({ current: response.current_section, total: response.total_sections });
             setQuizSuggested(!!response.quiz_suggested);
+            if (noteProposals.length > 0) setProposedNotes(noteProposals);
         } catch {
             setError('Fehler beim Senden der Nachricht.');
             setMessages((prev) => prev.filter((m) => m.id !== tempId));
@@ -381,22 +399,36 @@ export default function TeacherPanel() {
         setStreamingContent('');
         setStreamingThought('');
         setQuizSuggested(false);
+        setToolSteps([]);
         userSentMessageRef.current = true;
         try {
             let fullContent = '';
+            const noteProposals: CourseNoteResult[] = [];
             const response = await sendTeacherChatStream(view.course.id, view.unit.id, '[ABSCHNITT_WEITER]', (event) => {
                 if (event.type === 'thinking') {
                     setStreamingThought((prev) => prev + event.content);
                 } else if (event.type === 'chunk') {
                     fullContent += event.content;
                     setStreamingContent(fullContent);
+                } else if (event.type === 'tool_call') {
+                    setToolSteps((prev) => [...prev, event.content]);
+                } else if (event.type === 'note_proposal') {
+                    noteProposals.push({
+                        title: event.note.title,
+                        content: event.note.content,
+                        folder: `Kurse/${view.course.title}`,
+                        tag_ids: [],
+                        tag_names: event.note.tags || [],
+                    });
                 }
             });
             setStreamingContent('');
             setStreamingThought('');
+            setToolSteps([]);
             setMessages((prev) => [...prev, response.message]);
             setSection({ current: response.current_section, total: response.total_sections });
             setQuizSuggested(!!response.quiz_suggested);
+            if (noteProposals.length > 0) setProposedNotes(noteProposals);
         } catch {
             setError('Fehler beim Laden des nächsten Abschnitts.');
             setStreamingContent('');
@@ -1210,7 +1242,17 @@ export default function TeacherPanel() {
 
                     {sendingChat && (
                         <div className="flex justify-start">
-                            <div className="bg-dark-800 border border-dark-700 rounded-2xl rounded-bl-md px-4 py-3 max-w-[85%]">
+                            <div className="bg-dark-800 border border-dark-700 rounded-2xl rounded-bl-md px-4 py-3 max-w-[85%] space-y-2">
+                                {/* Live tool steps — the tutor acting autonomously */}
+                                {toolSteps.length > 0 && (
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {toolSteps.map((step, i) => (
+                                            <span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-teal-500/10 text-teal-300 border border-teal-500/20">
+                                                ⚙ {step}
+                                            </span>
+                                        ))}
+                                    </div>
+                                )}
                                 {streamingContent ? (
                                     <div className="prose prose-invert prose-sm max-w-none text-sm">
                                         <ReactMarkdown components={markdownComponents} remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>
@@ -1224,7 +1266,7 @@ export default function TeacherPanel() {
                                             <div className="w-1.5 h-1.5 bg-teal-400 rounded-full animate-pulse" style={{ animationDelay: '0.15s' }} />
                                             <div className="w-1.5 h-1.5 bg-teal-400 rounded-full animate-pulse" style={{ animationDelay: '0.3s' }} />
                                         </div>
-                                        <span>Formuliert Erklärung...</span>
+                                        <span>{toolSteps.length > 0 ? 'Arbeitet...' : 'Formuliert Erklärung...'}</span>
                                     </div>
                                 )}
                             </div>
@@ -1241,6 +1283,33 @@ export default function TeacherPanel() {
                     onGenerate={handleGenerateTermNote}
                     generating={generatingTerm}
                 />
+
+                {/* Notes the tutor proposed on its own — offer to review & save */}
+                {proposedNotes.length > 0 && !sendingChat && view.kind === 'lesson-chat' && (
+                    <div className="mx-3 mb-1 mt-2 flex items-center gap-2 px-3 py-2 bg-green-600/15 border border-green-500/30 rounded-xl">
+                        <FiCheck className="w-4 h-4 text-green-300 flex-shrink-0" />
+                        <span className="text-xs text-green-200 flex-1">
+                            Der Tutor schlägt {proposedNotes.length} Notiz{proposedNotes.length > 1 ? 'en' : ''} zum Speichern vor.
+                        </span>
+                        <button
+                            onClick={() => {
+                                if (view.kind !== 'lesson-chat') return;
+                                setView({ kind: 'note-review', course: view.course, unit: view.unit, notes: proposedNotes, currentIdx: 0 });
+                                setProposedNotes([]);
+                            }}
+                            className="flex items-center gap-1.5 px-3 py-1 bg-green-600 hover:bg-green-500 text-white text-xs font-medium rounded-lg transition-colors"
+                        >
+                            <FiCheck className="w-3.5 h-3.5" /> Ansehen & speichern
+                        </button>
+                        <button
+                            onClick={() => setProposedNotes([])}
+                            className="p-1 text-green-300/60 hover:text-green-200"
+                            title="Verwerfen"
+                        >
+                            <FiX className="w-3.5 h-3.5" />
+                        </button>
+                    </div>
+                )}
 
                 {/* Quiz suggestion — the tutor decided a quick check makes sense here */}
                 {quizSuggested && !sendingChat && (

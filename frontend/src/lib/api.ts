@@ -464,10 +464,21 @@ export const sendTeacherChat = async (courseId: string, unitId: string, message:
   return data;
 };
 
+export interface TeacherNoteProposal {
+  title: string;
+  content: string;
+  tags?: string[];
+}
+
 export type TeacherStreamEvent =
   | { type: 'thinking'; content: string }
   | { type: 'chunk'; content: string }
-  | { type: 'done'; message_id: string; sections: unknown[]; current_section: number; total_sections: number; is_last_section: boolean; quiz_suggested?: boolean };
+  | { type: 'tool_call'; content: string }
+  | { type: 'quiz_suggested' }
+  | { type: 'note_proposal'; note: TeacherNoteProposal }
+  | { type: 'difficulty'; level: string }
+  | { type: 'understanding'; concept: string; status: string }
+  | { type: 'done'; message_id: string; sections: unknown[]; current_section: number; total_sections: number; is_last_section: boolean; quiz_suggested?: boolean; note_proposals?: TeacherNoteProposal[] };
 
 export const sendTeacherChatStream = async (
   courseId: string,
@@ -535,6 +546,7 @@ export const sendTeacherChatStream = async (
     total_sections: done?.total_sections ?? 0,
     is_last_section: done?.is_last_section ?? false,
     quiz_suggested: done?.quiz_suggested ?? false,
+    note_proposals: done?.note_proposals ?? [],
   };
 };
 

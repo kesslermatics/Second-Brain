@@ -378,6 +378,7 @@ export interface TeacherChatResponse {
   total_sections: number;
   is_last_section: boolean;
   quiz_suggested?: boolean;
+  note_proposals?: { title: string; content: string; tags?: string[] }[];
 }
 
 // ── Agent / Agentic Workspace ────────────────────────────────────────
