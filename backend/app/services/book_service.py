@@ -1,11 +1,54 @@
 """Book processing service — search, TOC extraction, chapter note generation, topic deep-dive."""
 
-from app.services.ai_service import generate_with_search, generate, generate_stream, generate_with_search_stream, PRO_MODEL, FLASH_MODEL, DEFAULT_NOTE_PROMPT
+from app.services.ai_service import (
+    generate_with_search, generate, generate_stream, generate_with_search_stream,
+    generate_json, generate_with_search_sources, PRO_MODEL, FLASH_MODEL, DEFAULT_NOTE_PROMPT,
+)
 from app.config import get_settings
 import json
 import re
 
 settings = get_settings()
+
+
+# ── Structured output schemas ─────────────────────────────────────────
+
+BOOK_SEARCH_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "found": {"type": "boolean"},
+        "title": {"type": "string"},
+        "authors": {"type": "array", "items": {"type": "string"}},
+        "year": {"type": "integer"},
+        "publisher": {"type": "string"},
+        "isbn": {"type": "string"},
+        "language": {"type": "string"},
+        "pages": {"type": "integer"},
+        "description": {"type": "string"},
+        "suggestion": {"type": "string"},
+    },
+    "required": ["found"],
+}
+
+BOOK_TOC_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "chapters": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "chapter_number": {"type": "string"},
+                    "title": {"type": "string"},
+                    "level": {"type": "integer"},
+                },
+                "required": ["chapter_number", "title", "level"],
+            },
+        },
+        "total_chapters": {"type": "integer"},
+    },
+    "required": ["chapters"],
+}
 
 
 async def search_book(query: str) -> dict:
@@ -34,8 +77,21 @@ Wenn kein passendes Buch gefunden wird:
     "suggestion": "Meintest du vielleicht...?"
 }}"""
 
-    text = (await generate_with_search(prompt, model=PRO_MODEL)).strip()
+    # Ground the lookup in a real web search first, then structure it.
+    research, _sources = await generate_with_search_sources(
+        f"Finde bibliografische Daten (Titel, Autoren, Jahr, Verlag, ISBN, Seitenzahl, Kurzbeschreibung) zum Buch: {query}",
+        model=PRO_MODEL,
+    )
+    structured_prompt = prompt
+    if research:
+        structured_prompt += f"\n\nRECHERCHE-ERGEBNIS:\n{research[:2500]}"
 
+    result = await generate_json(structured_prompt, BOOK_SEARCH_SCHEMA, model=PRO_MODEL, temperature=0.2)
+    if result and isinstance(result, dict):
+        return result
+
+    # Fallback: legacy free-text + regex
+    text = (await generate_with_search(prompt, model=PRO_MODEL)).strip()
     json_match = re.search(r'\{[\s\S]*\}', text)
     if json_match:
         try:
@@ -84,8 +140,23 @@ Lasse folgende Einträge KOMPLETT WEG (sie haben keinen inhaltlichen Mehrwert):
 
 Nur inhaltliche Kapitel mit echtem Lerninhalt sollen aufgelistet werden."""
 
-    text = (await generate_with_search(prompt, model=PRO_MODEL)).strip()
+    # Ground the TOC in real search, then structure it strictly.
+    research, _sources = await generate_with_search_sources(
+        f"Suche das vollständige, exakte Inhaltsverzeichnis (alle Kapitel und Unterkapitel mit Nummern) "
+        f"des Buches \"{book_title}\" von {authors_str}.",
+        model=PRO_MODEL,
+    )
+    structured_prompt = prompt
+    if research:
+        structured_prompt += f"\n\nRECHERCHIERTES INHALTSVERZEICHNIS:\n{research[:6000]}"
 
+    result = await generate_json(structured_prompt, BOOK_TOC_SCHEMA, model=PRO_MODEL, temperature=0.2)
+    if result and isinstance(result, dict) and result.get("chapters"):
+        result.setdefault("total_chapters", len(result["chapters"]))
+        return result
+
+    # Fallback: legacy free-text + regex
+    text = (await generate_with_search(prompt, model=PRO_MODEL)).strip()
     json_match = re.search(r'\{[\s\S]*\}', text)
     if json_match:
         try:

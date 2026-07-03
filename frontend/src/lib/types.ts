@@ -377,6 +377,7 @@ export interface TeacherChatResponse {
   current_section: number;
   total_sections: number;
   is_last_section: boolean;
+  quiz_suggested?: boolean;
 }
 
 // ── Agent / Agentic Workspace ────────────────────────────────────────

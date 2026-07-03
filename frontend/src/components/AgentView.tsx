@@ -62,7 +62,6 @@ export default function AgentView() {
     const [autoAccept, setAutoAccept] = useState(true);
     const [parsedMessages, setParsedMessages] = useState<ParsedAgentMessage[]>([]);
     const [streamingThought, setStreamingThought] = useState('');
-    const [streamingContent, setStreamingContent] = useState('');
     const [streamingSteps, setStreamingSteps] = useState<AgentStep[]>([]);
     const [appliedProposals, setAppliedProposals] = useState(new Set<string>());
     const [rejectedProposals, setRejectedProposals] = useState(new Set<string>());
@@ -74,6 +73,7 @@ export default function AgentView() {
     const [leftMode, setLeftMode] = useState<'note' | 'diff'>('note');
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const lastAssistantRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -107,7 +107,17 @@ export default function AgentView() {
         setRejectedProposals(new Set());
     }, [activeAgentSession]);
 
-    useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [parsedMessages, loading]);
+    useEffect(() => {
+        // When the newest message is from the assistant, scroll to its TOP so the
+        // user starts reading from the beginning of the answer. Otherwise (a new
+        // user message or while loading) keep the latest content in view at the bottom.
+        const last = parsedMessages[parsedMessages.length - 1];
+        if (!loading && last?.role === 'assistant' && lastAssistantRef.current) {
+            lastAssistantRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } else {
+            messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }
+    }, [parsedMessages, loading]);
 
     const adjustTextarea = () => { const ta = textareaRef.current; if (ta) { ta.style.height = 'auto'; ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`; } };
 
@@ -156,7 +166,6 @@ export default function AgentView() {
 
         setParsedMessages((p) => [...p, { id: `temp-${Date.now()}`, role: 'user', content: currentInput, attachments: attachments.length > 0 ? attachments : undefined, created_at: new Date().toISOString() }]);
         setStreamingThought('');
-        setStreamingContent('');
         setStreamingSteps([]);
 
         try {
@@ -179,8 +188,10 @@ export default function AgentView() {
                             setStreamingThought(fullThought);
                             break;
                         case 'chunk':
+                            // Accumulate only — we do NOT render the answer live.
+                            // Streamed text is unformatted; the final message is
+                            // rendered formatted once the response is complete.
                             fullContent += event.content;
-                            setStreamingContent(fullContent);
                             break;
                         case 'tool_call':
                             allSteps.push({ type: 'tool_call', content: event.content });
@@ -203,7 +214,6 @@ export default function AgentView() {
             );
 
             setStreamingThought('');
-            setStreamingContent('');
             setStreamingSteps([]);
 
             // Add the final message to the list
@@ -226,7 +236,6 @@ export default function AgentView() {
         } catch (e) {
             console.error(e);
             setStreamingThought('');
-            setStreamingContent('');
             setStreamingSteps([]);
             setParsedMessages((p) => [...p, { id: `err-${Date.now()}`, role: 'assistant', content: 'Fehler bei der Verarbeitung.', created_at: new Date().toISOString() }]);
         } finally { setLoading(false); }
@@ -368,14 +377,19 @@ export default function AgentView() {
                     <div className="flex-1 overflow-y-auto p-3 space-y-3">
                         {parsedMessages.length === 0 && !loading && <EmptyState textareaRef={textareaRef} />}
 
-                        {parsedMessages.map((msg) => (
-                            <MessageBubble key={msg.id} msg={msg}
-                                expandedSteps={expandedSteps} setExpandedSteps={setExpandedSteps}
-                                appliedProposals={appliedProposals} rejectedProposals={rejectedProposals}
-                                onAcceptProposal={handleAcceptProposal} onRejectProposal={handleRejectProposal}
-                                onAcceptAll={handleAcceptAll} onOpenDiff={openDiffInLeft} onOpenNote={openNoteInLeft} />
-                        ))}
-                        {loading && (streamingContent || streamingThought || streamingSteps.length > 0) && (
+                        {parsedMessages.map((msg, idx) => {
+                            const isLast = idx === parsedMessages.length - 1;
+                            return (
+                                <div key={msg.id} ref={isLast && msg.role === 'assistant' ? lastAssistantRef : undefined}>
+                                    <MessageBubble msg={msg}
+                                        expandedSteps={expandedSteps} setExpandedSteps={setExpandedSteps}
+                                        appliedProposals={appliedProposals} rejectedProposals={rejectedProposals}
+                                        onAcceptProposal={handleAcceptProposal} onRejectProposal={handleRejectProposal}
+                                        onAcceptAll={handleAcceptAll} onOpenDiff={openDiffInLeft} onOpenNote={openNoteInLeft} />
+                                </div>
+                            );
+                        })}
+                        {loading && (streamingThought || streamingSteps.length > 0) && (
                             <div className="flex gap-2">
                                 <div className="w-7 h-7 rounded-lg bg-rose-600/20 flex items-center justify-center flex-shrink-0 mt-0.5">
                                     <FiCpu className="w-3.5 h-3.5 text-rose-400 animate-pulse" />
@@ -398,31 +412,20 @@ export default function AgentView() {
                                             ))}
                                         </div>
                                     )}
-                                    {/* Streaming response text */}
-                                    {streamingContent && (
-                                        <div className="bg-dark-800/50 border border-dark-700 rounded-2xl px-3 py-2.5">
-                                            <div className="prose prose-invert prose-sm max-w-none text-sm text-dark-200">
-                                                <ReactMarkdown components={markdownComponents} remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>
-                                                    {streamingContent}
-                                                </ReactMarkdown>
-                                            </div>
+                                    {/* Progress indicator — the answer itself is rendered
+                                        formatted only once complete (no live text streaming) */}
+                                    <div className="flex items-center gap-2 text-xs text-dark-500">
+                                        <div className="flex gap-0.5">
+                                            <div className="w-1.5 h-1.5 bg-rose-400 rounded-full animate-pulse" />
+                                            <div className="w-1.5 h-1.5 bg-rose-400 rounded-full animate-pulse" style={{ animationDelay: '0.15s' }} />
+                                            <div className="w-1.5 h-1.5 bg-rose-400 rounded-full animate-pulse" style={{ animationDelay: '0.3s' }} />
                                         </div>
-                                    )}
-                                    {/* Thinking indicator (subtle, no raw text) */}
-                                    {!streamingContent && (
-                                        <div className="flex items-center gap-2 text-xs text-dark-500">
-                                            <div className="flex gap-0.5">
-                                                <div className="w-1.5 h-1.5 bg-rose-400 rounded-full animate-pulse" />
-                                                <div className="w-1.5 h-1.5 bg-rose-400 rounded-full animate-pulse" style={{ animationDelay: '0.15s' }} />
-                                                <div className="w-1.5 h-1.5 bg-rose-400 rounded-full animate-pulse" style={{ animationDelay: '0.3s' }} />
-                                            </div>
-                                            <span>{streamingSteps.length > 0 ? 'Formuliere Antwort...' : 'Denkt nach...'}</span>
-                                        </div>
-                                    )}
+                                        <span>{streamingSteps.length > 0 ? 'Formuliere Antwort...' : 'Denkt nach...'}</span>
+                                    </div>
                                 </div>
                             </div>
                         )}
-                        {loading && !streamingContent && !streamingThought && streamingSteps.length === 0 && <ThinkingIndicator />}
+                        {loading && !streamingThought && streamingSteps.length === 0 && <ThinkingIndicator />}
                         <div ref={messagesEndRef} />
                     </div>
 

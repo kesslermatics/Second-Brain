@@ -71,6 +71,7 @@ export default function TeacherPanel() {
     const [generatingTerm, setGeneratingTerm] = useState(false);
 
     // Quiz / recap / learning path
+    const [quizSuggested, setQuizSuggested] = useState(false);
     const [generatingQuiz, setGeneratingQuiz] = useState(false);
     const [recap, setRecap] = useState<LessonRecap | null>(null);
     const [loadingRecap, setLoadingRecap] = useState(false);
@@ -332,6 +333,7 @@ export default function TeacherPanel() {
         setSendingChat(true);
         setStreamingContent('');
         setStreamingThought('');
+        setQuizSuggested(false);
         userSentMessageRef.current = true;  // invalidate prefetched notes
 
         // Optimistic add user message
@@ -358,6 +360,7 @@ export default function TeacherPanel() {
             response.message
             ]);
             setSection({ current: response.current_section, total: response.total_sections });
+            setQuizSuggested(!!response.quiz_suggested);
         } catch {
             setError('Fehler beim Senden der Nachricht.');
             setMessages((prev) => prev.filter((m) => m.id !== tempId));
@@ -377,6 +380,7 @@ export default function TeacherPanel() {
         setSendingChat(true);
         setStreamingContent('');
         setStreamingThought('');
+        setQuizSuggested(false);
         userSentMessageRef.current = true;
         try {
             let fullContent = '';
@@ -392,6 +396,7 @@ export default function TeacherPanel() {
             setStreamingThought('');
             setMessages((prev) => [...prev, response.message]);
             setSection({ current: response.current_section, total: response.total_sections });
+            setQuizSuggested(!!response.quiz_suggested);
         } catch {
             setError('Fehler beim Laden des nächsten Abschnitts.');
             setStreamingContent('');
@@ -572,6 +577,7 @@ export default function TeacherPanel() {
     // ── Start quiz ───────────────────────────────────────────────────
     const handleStartQuiz = async () => {
         if (view.kind !== 'lesson-chat' || generatingQuiz) return;
+        setQuizSuggested(false);
         setGeneratingQuiz(true);
         setError(null);
         try {
@@ -1235,6 +1241,35 @@ export default function TeacherPanel() {
                     onGenerate={handleGenerateTermNote}
                     generating={generatingTerm}
                 />
+
+                {/* Quiz suggestion — the tutor decided a quick check makes sense here */}
+                {quizSuggested && !sendingChat && (
+                    <div className="mx-3 mb-1 mt-2 flex items-center gap-2 px-3 py-2 bg-purple-600/15 border border-purple-500/30 rounded-xl">
+                        <LuListChecks className="w-4 h-4 text-purple-300 flex-shrink-0" />
+                        <span className="text-xs text-purple-200 flex-1">
+                            Wie wär's mit einem kurzen Quiz, um das eben Gelernte zu festigen?
+                        </span>
+                        <button
+                            onClick={handleStartQuiz}
+                            disabled={generatingQuiz}
+                            className="flex items-center gap-1.5 px-3 py-1 bg-purple-600 hover:bg-purple-500 text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-50"
+                        >
+                            {generatingQuiz ? (
+                                <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                            ) : (
+                                <LuListChecks className="w-3.5 h-3.5" />
+                            )}
+                            Quiz starten
+                        </button>
+                        <button
+                            onClick={() => setQuizSuggested(false)}
+                            className="p-1 text-purple-300/60 hover:text-purple-200"
+                            title="Später"
+                        >
+                            <FiX className="w-3.5 h-3.5" />
+                        </button>
+                    </div>
+                )}
 
                 {/* Chat input */}
                 <div className="p-3 border-t border-dark-800 bg-dark-900/50">

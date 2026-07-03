@@ -467,7 +467,7 @@ export const sendTeacherChat = async (courseId: string, unitId: string, message:
 export type TeacherStreamEvent =
   | { type: 'thinking'; content: string }
   | { type: 'chunk'; content: string }
-  | { type: 'done'; message_id: string; sections: unknown[]; current_section: number; total_sections: number; is_last_section: boolean };
+  | { type: 'done'; message_id: string; sections: unknown[]; current_section: number; total_sections: number; is_last_section: boolean; quiz_suggested?: boolean };
 
 export const sendTeacherChatStream = async (
   courseId: string,
@@ -534,6 +534,7 @@ export const sendTeacherChatStream = async (
     current_section: done?.current_section ?? 0,
     total_sections: done?.total_sections ?? 0,
     is_last_section: done?.is_last_section ?? false,
+    quiz_suggested: done?.quiz_suggested ?? false,
   };
 };
 

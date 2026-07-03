@@ -53,6 +53,120 @@ async def generate(prompt: str, model: str = None, system_instruction: str = Non
     return response.text
 
 
+# ── Structured JSON output (native schema — no regex extraction needed) ──
+
+async def generate_json(
+    prompt: str,
+    schema: dict,
+    model: str = None,
+    system_instruction: str = None,
+    temperature: float = None,
+) -> dict | list | None:
+    """Generate content constrained to a JSON schema using native structured output.
+
+    `schema` is a JSON-schema dict (google.genai accepts this directly for
+    response_schema). Returns the parsed object/list, or None on failure.
+    This eliminates the whole class of "LLM returned broken JSON" errors.
+    """
+    client = get_client()
+    model_name = model or FLASH_MODEL
+
+    config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema=schema,
+    )
+    if system_instruction:
+        config.system_instruction = system_instruction
+    if temperature is not None:
+        config.temperature = temperature
+
+    try:
+        response = await client.aio.models.generate_content(
+            model=model_name,
+            contents=prompt,
+            config=config,
+        )
+        # SDK exposes .parsed for schema-constrained responses; fall back to json.loads
+        parsed = getattr(response, "parsed", None)
+        if parsed is not None:
+            return parsed
+        text = (response.text or "").strip()
+        if text:
+            return json.loads(text)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"generate_json failed: {e}")
+    return None
+
+
+def _extract_grounding_sources(response) -> list[dict]:
+    """Extract web sources from a grounded Gemini response. Shared by all services."""
+    sources: list[dict] = []
+    try:
+        if not response.candidates:
+            return sources
+        candidate = response.candidates[0]
+        gm = getattr(candidate, "grounding_metadata", None)
+        if not gm:
+            return sources
+
+        chunks = getattr(gm, "grounding_chunks", None)
+        if chunks:
+            for gc in chunks:
+                web = getattr(gc, "web", None)
+                if web:
+                    url = getattr(web, "uri", "") or getattr(web, "url", "") or ""
+                    title = getattr(web, "title", "") or ""
+                    if url:
+                        sources.append({"title": title, "url": url})
+
+        if not sources:
+            sep = getattr(gm, "search_entry_point", None)
+            if sep:
+                rendered = getattr(sep, "rendered_content", "") or ""
+                for url in re.findall(r'href="(https?://[^"]+)"', rendered)[:5]:
+                    domain = url.split("/")[2] if "/" in url else url
+                    sources.append({"title": domain, "url": url})
+
+        # Deduplicate
+        seen, unique = set(), []
+        for s in sources:
+            if s["url"] and s["url"] not in seen:
+                seen.add(s["url"])
+                unique.append(s)
+        sources = unique[:8]
+    except Exception:
+        pass
+    return sources
+
+
+async def generate_with_search_sources(
+    prompt: str,
+    model: str = None,
+    system_instruction: str = None,
+) -> tuple[str, list[dict]]:
+    """Generate with Google Search grounding AND return the source URLs.
+
+    Unlike generate_with_search (which discards sources), this returns
+    (text, sources) so callers can show the user what was actually used.
+    """
+    client = get_client()
+    model_name = model or FLASH_MODEL
+
+    config = types.GenerateContentConfig(
+        tools=[types.Tool(google_search=types.GoogleSearch())],
+    )
+    if system_instruction:
+        config.system_instruction = system_instruction
+
+    response = await client.aio.models.generate_content(
+        model=model_name,
+        contents=prompt,
+        config=config,
+    )
+    return (response.text or ""), _extract_grounding_sources(response)
+
+
 async def generate_stream(
     prompt: str,
     model: str = None,

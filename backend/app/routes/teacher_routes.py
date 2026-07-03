@@ -28,6 +28,8 @@ from app.services.teacher_service import (
     generate_quiz,
     generate_recap,
     generate_lesson_sections,
+    get_relevant_knowledge,
+    get_existing_note_titles,
 )
 from app.services.book_service import generate_chapter_summary
 
@@ -265,11 +267,13 @@ async def teacher_generate_curriculum(
 
             parent_context = "\n".join(ctx_lines)
 
-    # Generate curriculum via LLM
+    # Generate curriculum via LLM (knowledge-aware: builds on the user's existing notes)
     curriculum = await generate_curriculum(
         topic, parent_context, custom_focus,
         focus_description=focus_description,
         num_lessons=num_lessons,
+        user_id=str(current_user.id),
+        db=db,
     )
 
     if not curriculum.get("units"):
@@ -404,15 +408,18 @@ async def update_unit(
 
     await db.commit()
 
-    # Auto-generate chapter summary when a book chapter is completed
+    # On completion: auto-generate chapter summary (books) + auto-save notes
     if data.get("status") == "completed":
-        # Check if this is a book course
         course_result = await db.execute(
             select(Course).where(Course.id == course_id)
         )
         course = course_result.scalars().first()
         if course and (course.kind or "teacher") == "book" and not unit.summary:
             asyncio.create_task(_auto_generate_summary(course_id, unit_id))
+        # Auto-generate + save notes for the finished unit (unless already done),
+        # so the student doesn't have to manually save after every step.
+        if data.get("auto_notes", True):
+            asyncio.create_task(_auto_generate_and_save_notes(course_id, unit_id, str(current_user.id)))
 
     return {"ok": True, "status": unit.status, "enabled": unit.enabled}
 
@@ -663,6 +670,11 @@ async def unit_chat_stream(
     previous_summary = _build_previous_units_summary(list(course.units), unit.order_index)
     next_title = _get_next_unit_title(list(course.units), unit.order_index)
 
+    # Knowledge-base awareness: what does the student already have on this topic?
+    knowledge_hits = await get_relevant_knowledge(
+        f"{unit.title} {unit.description or ''}", str(current_user.id), db, limit=6
+    )
+
     # Sections
     if not unit.sections:
         try:
@@ -715,6 +727,7 @@ async def unit_chat_stream(
                 next_chapter_title=next_title,
                 sections=sections_list,
                 current_section=current_section_idx,
+                knowledge_hits=knowledge_hits,
             )
         else:
             stream_gen = chat_with_teacher_stream(
@@ -728,19 +741,41 @@ async def unit_chat_stream(
                 next_unit_title=next_title,
                 sections=sections_list,
                 current_section=current_section_idx,
+                knowledge_hits=knowledge_hits,
             )
+
+        # Marker the tutor may append to signal it wants to offer a quick quiz.
+        QUIZ_MARKER = "[QUIZ_VORSCHLAG]"
+        pending = ""  # buffer to catch the marker even if split across chunks
 
         async for event in stream_gen:
             if event["type"] == "thinking":
                 yield f"data: {json.dumps({'type': 'thinking', 'content': event['content']}, ensure_ascii=False)}\n\n"
             elif event["type"] == "chunk":
                 full_response_parts.append(event["content"])
-                yield f"data: {json.dumps({'type': 'chunk', 'content': event['content']}, ensure_ascii=False)}\n\n"
+                # Buffer recent output so we can strip the marker before it reaches the UI
+                pending += event["content"]
+                # Only emit text that cannot contain a partial marker at the tail
+                safe_len = max(0, len(pending) - len(QUIZ_MARKER))
+                emit, pending = pending[:safe_len], pending[safe_len:]
+                if emit:
+                    clean = emit.replace(QUIZ_MARKER, "")
+                    if clean:
+                        yield f"data: {json.dumps({'type': 'chunk', 'content': clean}, ensure_ascii=False)}\n\n"
             elif event["type"] == "done":
                 pass
 
-        # Save assistant message
-        full_text = "".join(full_response_parts)
+        # Flush remaining buffered text (minus the marker)
+        if pending:
+            clean_tail = pending.replace(QUIZ_MARKER, "")
+            if clean_tail:
+                yield f"data: {json.dumps({'type': 'chunk', 'content': clean_tail}, ensure_ascii=False)}\n\n"
+
+        # Detect + strip the quiz marker from the full stored text
+        full_text_raw = "".join(full_response_parts)
+        quiz_suggested = QUIZ_MARKER in full_text_raw
+        full_text = full_text_raw.replace(QUIZ_MARKER, "").strip()
+
         async with async_session() as save_db:
             assistant_msg = CourseMessage(
                 course_id=course.id, unit_id=unit.id, role="assistant", content=full_text,
@@ -757,6 +792,7 @@ async def unit_chat_stream(
             "current_section": current_section_idx,
             "total_sections": total_sections,
             "is_last_section": is_last_section,
+            "quiz_suggested": quiz_suggested,
         }, ensure_ascii=False)
         yield f"data: {done_data}\n\n"
 
@@ -844,6 +880,20 @@ async def unit_generate_notes(
             )
         )
         existing_note_titles = [row[0] for row in notes_result.all()]
+
+    # Cross-course deduplication: also consider semantically related notes from
+    # ANYWHERE in the user's brain (not just this course's folder), so overlapping
+    # topics across different courses/books don't produce duplicates.
+    related_hits = await get_relevant_knowledge(
+        f"{unit.title} {unit.description or ''}", str(current_user.id), db, limit=12
+    )
+    related_titles = [h["title"] for h in related_hits if h.get("title")]
+    # Merge, preserving order and uniqueness
+    seen = set(existing_note_titles)
+    for t in related_titles:
+        if t not in seen:
+            existing_note_titles.append(t)
+            seen.add(t)
 
     # Generate notes — dispatch by course kind
     if (course.kind or "teacher") == "book":
@@ -1149,6 +1199,171 @@ async def _auto_generate_summary(course_id: str, unit_id: str):
             await db.commit()
     except Exception:
         pass  # Silently fail — user can regenerate manually
+
+
+async def _ensure_folder_path_local(path: str, user_id, db) -> Folder:
+    """Create all folders in a path if missing; return the leaf folder."""
+    from uuid import UUID as _UUID
+    if not path:
+        path = "Allgemein"
+    uid = user_id if not isinstance(user_id, str) else _UUID(user_id)
+    result = await db.execute(select(Folder).where(Folder.path == path, Folder.user_id == uid))
+    folder = result.scalar_one_or_none()
+    if folder:
+        return folder
+    parts = path.split("/")
+    current_path = ""
+    parent_id = None
+    for part in parts:
+        current_path = f"{current_path}/{part}" if current_path else part
+        result = await db.execute(select(Folder).where(Folder.path == current_path, Folder.user_id == uid))
+        existing = result.scalar_one_or_none()
+        if existing:
+            parent_id = existing.id
+            folder = existing
+            continue
+        new_folder = Folder(name=part, path=current_path, parent_id=parent_id, user_id=uid)
+        db.add(new_folder)
+        await db.flush()
+        await db.refresh(new_folder)
+        parent_id = new_folder.id
+        folder = new_folder
+    return folder
+
+
+async def _auto_generate_and_save_notes(course_id: str, unit_id: str, user_id: str):
+    """Background task: generate + save notes for a finished unit automatically.
+
+    Runs on unit completion so the student doesn't have to manually save after
+    every step. Skips if notes were already generated for the current context.
+    Deduplicates across the whole knowledge base.
+    """
+    from uuid import UUID as _UUID
+    from app.services.vector_service import upsert_note_embedding
+    try:
+        async with async_session() as db:
+            course_result = await db.execute(
+                select(Course).options(selectinload(Course.units))
+                .where(Course.id == course_id, Course.user_id == _UUID(user_id))
+            )
+            course = course_result.scalars().first()
+            if not course:
+                return
+            unit = next((u for u in course.units if str(u.id) == unit_id), None)
+            if not unit:
+                return
+
+            # Chat history for this unit
+            msg_result = await db.execute(
+                select(CourseMessage)
+                .where(CourseMessage.course_id == course_id, CourseMessage.unit_id == unit_id)
+                .order_by(CourseMessage.created_at)
+            )
+            messages = msg_result.scalars().all()
+            chat_history = [{"role": m.role, "content": m.content} for m in messages]
+
+            # Skip if notes were already generated after the last real content
+            last_marker = -1
+            last_content = -1
+            for i, m in enumerate(chat_history):
+                if m["role"] == "note_generated":
+                    last_marker = i
+                if m["role"] == "user" and m["content"] not in ("[START]", "[NOTIZEN_ERSTELLT]"):
+                    last_content = i
+            if last_marker >= 0 and last_marker > last_content:
+                return  # already have up-to-date notes
+
+            # Tags
+            tag_result = await db.execute(
+                select(Tag).where(Tag.user_id == _UUID(user_id)).order_by(Tag.name)
+            )
+            all_tags = list(tag_result.scalars().all())
+            existing_tag_names = [t.name for t in all_tags]
+
+            # Cross-course dedup: related titles from the whole brain
+            is_book = (course.kind or "teacher") == "book"
+            related_hits = await get_relevant_knowledge(
+                f"{unit.title} {unit.description or ''}", user_id, db, limit=12
+            )
+            existing_note_titles = [h["title"] for h in related_hits if h.get("title")]
+
+            if is_book:
+                notes = await generate_book_chapter_notes(
+                    book_title=course.title,
+                    book_authors=course.book_authors or [],
+                    chapter_number=unit.unit_number,
+                    chapter_title=unit.title,
+                    chat_history=chat_history,
+                    existing_tags=existing_tag_names,
+                    existing_note_titles=existing_note_titles,
+                )
+            else:
+                notes = await generate_lesson_notes(
+                    course_title=course.title,
+                    unit_title=unit.title,
+                    unit_number=unit.unit_number,
+                    unit_description=unit.description or "",
+                    learning_objectives=unit.learning_objectives or [],
+                    chat_history=chat_history,
+                    existing_tags=existing_tag_names,
+                    existing_note_titles=existing_note_titles,
+                )
+
+            if not notes:
+                return
+
+            async def _resolve_tags_uid(names: list[str]) -> list[Tag]:
+                resolved = []
+                for tag_name in names or []:
+                    tl = tag_name.strip().lower()
+                    if not tl:
+                        continue
+                    found = next((t for t in all_tags if t.name_lower == tl), None)
+                    if not found:
+                        found = Tag(name=tag_name.strip(), name_lower=tl,
+                                    color=random.choice(TAG_COLORS), user_id=_UUID(user_id))
+                        db.add(found)
+                        await db.flush()
+                        await db.refresh(found)
+                        all_tags.append(found)
+                    resolved.append(found)
+                return resolved
+
+            saved_titles = []
+            for note in notes:
+                tags = await _resolve_tags_uid(note.get("suggested_tags", []))
+                folder_path = note.get("suggested_folder") or (
+                    f"Bücher/{course.title}" if is_book else f"Kurse/{course.title}"
+                )
+                folder = await _ensure_folder_path_local(folder_path, user_id, db)
+                new_note = Note(
+                    title=note.get("title", "Notiz"),
+                    content=note.get("content", ""),
+                    note_type="text",
+                    folder_id=folder.id,
+                    user_id=_UUID(user_id),
+                )
+                db.add(new_note)
+                await db.flush()
+                await db.refresh(new_note)
+                for tag in tags:
+                    new_note.tags.append(tag)
+                saved_titles.append(new_note.title)
+                try:
+                    upsert_note_embedding(str(new_note.id), user_id, new_note.title, new_note.content, folder.path)
+                except Exception:
+                    pass
+
+            # Record a marker so we don't regenerate the same notes again
+            marker = CourseMessage(
+                course_id=course.id, unit_id=unit.id, role="note_generated",
+                content=f"Notizen automatisch generiert: {', '.join(saved_titles)}",
+                metadata_={"note_titles": saved_titles, "auto": True},
+            )
+            db.add(marker)
+            await db.commit()
+    except Exception:
+        pass  # Silently fail — user can still generate notes manually
 
 
 # ── AI Edit ───────────────────────────────────────────────────────────

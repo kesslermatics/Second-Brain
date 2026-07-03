@@ -1,10 +1,86 @@
-"""Infinite Teacher service — curriculum generation, interactive teaching chat, note generation."""
+"""Infinite Teacher service — curriculum generation, interactive teaching chat, note generation.
 
-from app.services.ai_service import generate_with_search, generate, generate_stream, generate_with_search_stream, PRO_MODEL, FLASH_MODEL
+Knowledge-aware: the teacher inspects the user's existing Second Brain notes and
+builds lessons, curricula and notes on top of what the student already has.
+Uses native structured JSON output instead of regex extraction where possible.
+"""
+
+from app.services.ai_service import (
+    generate_with_search, generate, generate_stream, generate_with_search_stream,
+    generate_json, generate_with_search_sources, PRO_MODEL, FLASH_MODEL,
+)
 from app.config import get_settings
 import json
 import re
+import logging
 from datetime import datetime
+
+
+# ── Knowledge-base awareness ──────────────────────────────────────────
+
+async def get_relevant_knowledge(
+    query: str,
+    user_id: str,
+    db,
+    limit: int = 8,
+) -> list[dict]:
+    """Search the user's existing notes for a topic. Returns lightweight hits.
+
+    Used to make the teacher build on what the student already has instead of
+    starting every lesson from scratch. Fails soft — returns [] on any error.
+    """
+    if not user_id or db is None:
+        return []
+    try:
+        from app.services.vector_service import hybrid_search
+        results = await hybrid_search(query=query, user_id=str(user_id), db=db, limit=limit)
+        return [
+            {
+                "note_id": r["note_id"],
+                "title": r["title"],
+                "folder_path": r.get("folder_path", ""),
+                "preview": (r.get("content_preview") or "")[:400],
+            }
+            for r in results
+        ]
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"get_relevant_knowledge failed: {e}")
+        return []
+
+
+def _format_knowledge_block(hits: list[dict], label: str = "BEREITS VORHANDENES WISSEN DES STUDENTEN") -> str:
+    """Render knowledge-base hits into a prompt block. Empty string when no hits."""
+    if not hits:
+        return ""
+    lines = [f"\n{label} (aus seinem Second Brain — baue darauf auf, wiederhole es nicht stumpf):"]
+    for h in hits:
+        loc = f" [{h['folder_path']}]" if h.get("folder_path") else ""
+        preview = (h.get("preview") or "").replace("\n", " ")
+        if len(preview) > 220:
+            preview = preview[:220] + "…"
+        lines.append(f"- „{h['title']}\"{loc}: {preview}")
+    lines.append(
+        "Beziehe dieses Vorwissen aktiv ein: knüpfe daran an, verweise darauf, vertiefe es — "
+        "aber wiederhole Bekanntes nicht ausführlich, sondern baue darauf auf."
+    )
+    return "\n".join(lines)
+
+
+async def get_existing_note_titles(user_id: str, db, limit: int = 400) -> list[str]:
+    """Return ALL note titles of the user (across courses) for cross-course dedup."""
+    if not user_id or db is None:
+        return []
+    try:
+        from sqlalchemy import select
+        from app.models import Note
+        from uuid import UUID
+        result = await db.execute(
+            select(Note.title).where(Note.user_id == UUID(str(user_id))).limit(limit)
+        )
+        return [row[0] for row in result.all()]
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"get_existing_note_titles failed: {e}")
+        return []
 
 # Control messages that drive the lesson flow but are not real student input.
 # They must be excluded from note generation, quiz/recap context, and "did the
@@ -181,14 +257,44 @@ Folge dem Prinzip der ATOMIC NOTES:
 """
 
 
+CURRICULUM_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string"},
+        "description": {"type": "string"},
+        "units": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "unit_number": {"type": "string"},
+                    "title": {"type": "string"},
+                    "description": {"type": "string"},
+                    "learning_objectives": {"type": "array", "items": {"type": "string"}},
+                    "level": {"type": "integer"},
+                    "builds_on_existing": {"type": "boolean"},
+                },
+                "required": ["unit_number", "title", "level"],
+            },
+        },
+    },
+    "required": ["title", "description", "units"],
+}
+
+
 async def generate_curriculum(
     topic: str,
     parent_context: str | None = None,
     custom_focus: str | None = None,
     focus_description: str | None = None,
     num_lessons: int | None = None,
+    user_id: str | None = None,
+    db=None,
 ) -> dict:
     """Generate a full curriculum / study plan for a topic.
+
+    Knowledge-aware: inspects the student's existing notes and tailors the plan
+    so it builds on what they already know instead of restarting from zero.
 
     Args:
         topic: The course topic.
@@ -196,9 +302,20 @@ async def generate_curriculum(
         custom_focus: Short focus term (used by advanced-focus deepening).
         focus_description: Free-text description of what the student wants to emphasise / deepen.
         num_lessons: Desired number of lessons (level-2 units). When None the AI decides.
+        user_id / db: enable knowledge-base awareness.
 
     Returns: {title, description, units: [{unit_number, title, description, learning_objectives, level}]}
     """
+    # Knowledge-base awareness: what does the student already have on this topic?
+    knowledge_hits = await get_relevant_knowledge(topic, user_id, db, limit=10) if user_id else []
+    knowledge_block = _format_knowledge_block(knowledge_hits)
+    if knowledge_block:
+        knowledge_block += (
+            "\n\nWICHTIG für den Lehrplan: Markiere Lektionen, die vorhandenes Wissen vertiefen, "
+            "mit \"builds_on_existing\": true. Setze früh im Kurs dort an, wo der Student noch Lücken hat, "
+            "und behandle bereits Gemeistertes kompakter."
+        )
+
     context_section = ""
     if parent_context:
         context_section = f"""
@@ -251,42 +368,43 @@ Der Lehrplan soll:
 - Lernziele pro Lektion definieren (was der Student danach können/wissen soll)
 - Praxisrelevant und tiefgehend sein, wie ein guter Universitätskurs
 
-Antworte NUR mit dem JSON, kein anderer Text:
-{{
-    "title": "Kurstitel — kurz und prägnant",
-    "description": "Kurze Beschreibung des Kurses in 2-3 Sätzen",
-    "units": [
-        {{
-            "unit_number": "1",
-            "title": "Modulname",
-            "description": "Was in diesem Modul behandelt wird",
-            "learning_objectives": [],
-            "level": 1
-        }},
-        {{
-            "unit_number": "1.1",
-            "title": "Lektionsname — das konkrete Thema",
-            "description": "Was genau in dieser Lektion gelehrt wird",
-            "learning_objectives": ["Ziel 1", "Ziel 2"],
-            "level": 2
-        }}
-    ]
-}}
-
 WICHTIG:
 {lessons_instruction}
 - Jede Lektion hat klare, messbare Lernziele
 - Die Lektionsnamen sollen das THEMA beschreiben, nicht "Stunde 1" oder "Lektion 1"
-- Module (level 1) sind übergeordnete Themenbereiche, Lektionen (level 2) sind die konkreten Unterrichtseinheiten"""
+- Module (level 1) sind übergeordnete Themenbereiche, Lektionen (level 2) sind die konkreten Unterrichtseinheiten
+- unit_number als String: Module "1", "2", ...; Lektionen "1.1", "1.2", ...
+- Bei Lektionen die vorhandenes Wissen des Studenten vertiefen: "builds_on_existing": true"""
 
-    text = (await generate_with_search(prompt, model=PRO_MODEL)).strip()
+    # Add knowledge-base awareness to the prompt
+    if knowledge_block:
+        prompt += "\n" + knowledge_block
 
-    result = _extract_json(text)
-    if result:
+    # Grounded research first (up-to-date facts), then structure into strict JSON.
+    research, _sources = await generate_with_search_sources(
+        f"Recherchiere Kernthemen, typische Curriculum-Struktur und aktuelle Entwicklungen zu: {topic}. "
+        f"Gib eine kompakte, faktenbasierte Stoffsammlung als Grundlage für einen Lehrplan.",
+        model=PRO_MODEL,
+    )
+    if research:
+        prompt += f"\n\nRECHERCHE-GRUNDLAGE (aktuell recherchiert):\n{research[:4000]}"
+
+    result = await generate_json(prompt, CURRICULUM_SCHEMA, model=PRO_MODEL, temperature=0.6)
+    if result and isinstance(result, dict) and result.get("units"):
         return {
             "title": result.get("title", topic),
             "description": result.get("description", ""),
             "units": result.get("units", []),
+        }
+
+    # Fallback: legacy free-text + regex extraction
+    text = (await generate_with_search(prompt, model=PRO_MODEL)).strip()
+    parsed = _extract_json(text)
+    if parsed:
+        return {
+            "title": parsed.get("title", topic),
+            "description": parsed.get("description", ""),
+            "units": parsed.get("units", []),
         }
 
     return {"title": topic, "description": "", "units": []}
@@ -380,6 +498,18 @@ WICHTIG: DUZE den Studenten IMMER. Verwende "du/dein/dir", NIEMALS "Sie/Ihr/Ihne
     return (await generate_with_search(prompt, model=PRO_MODEL)).strip()
 
 
+# Guidance that turns the tutor into a proactive, adaptive teacher who decides
+# on their own when a quick knowledge check makes sense.
+ADAPTIVE_TEACHING_RULES = """
+ADAPTIVES UNTERRICHTEN — verhalte dich wie ein echter, kluger Lehrer:
+- Greife auf, was der Student schon kann (siehe Vorwissen) und hole ihn dort ab. Wiederhole Bekanntes nicht stumpf, sondern knüpfe daran an.
+- Beobachte das Verständnis: Wenn der Student sichtlich Schwierigkeiten hat, erkläre einfacher, mit mehr Beispielen und langsamer. Wenn er schnell versteht, erhöhe das Tempo und die Tiefe.
+- Wenn ein sinnvoller Wissensbaustein abgeschlossen ist (z.B. ein Abschnitt sitzt, oder mehrere Konzepte behandelt wurden), kannst du EIGENSTÄNDIG ein kurzes Verständnis-Quiz vorschlagen. Setze dazu GANZ AM ENDE deiner Nachricht in einer eigenen Zeile den Marker: [QUIZ_VORSCHLAG]
+  - Nutze das mit Fingerspitzengefühl — nicht nach jeder Nachricht, sondern wenn es didaktisch Sinn ergibt (nach einem abgeschlossenen Thema, vor dem Übergang zum nächsten Abschnitt).
+  - Erwähne den Marker NICHT im Fließtext; er wird technisch ausgewertet und dem Studenten als Button angeboten.
+- Passe die Schwierigkeit des kommenden Stoffs an das bisher gezeigte Niveau an."""
+
+
 async def chat_with_teacher_stream(
     course_title: str,
     unit_title: str,
@@ -391,11 +521,13 @@ async def chat_with_teacher_stream(
     next_unit_title: str | None = None,
     sections: list[dict] | None = None,
     current_section: int = 0,
+    knowledge_hits: list[dict] | None = None,
 ):
     """Streaming variant of chat_with_teacher. Yields SSE event dicts."""
     objectives_str = "\n".join(f"  - {o}" for o in learning_objectives) if learning_objectives else ""
     prev_context = f"\nBEREITS BEHANDELT:\n{previous_units_summary}\n" if previous_units_summary else ""
     next_hint = f'\nNÄCHSTES THEMA: "{next_unit_title}"' if next_unit_title else ""
+    knowledge_block = _format_knowledge_block(knowledge_hits) if knowledge_hits else ""
     history_text = ""
     for msg in chat_history[-20:]:
         role_label = "Student" if msg["role"] == "user" else "Lehrer"
@@ -409,12 +541,13 @@ async def chat_with_teacher_stream(
 Kurs: "{course_title}" | Lektion: "{unit_title}"
 {unit_description}
 Lernziele: {objectives_str}
-{prev_context}{next_hint}{sections_section}
+{prev_context}{next_hint}{knowledge_block}{sections_section}
 GESPRÄCHSVERLAUF:{history_text}
 
 STUDENT: {user_message}
 
 Erkläre den aktuellen Abschnitt substantiell mit Beispiel (2-4 Absätze). Fokussiere auf dieses Teilkonzept.
+{ADAPTIVE_TEACHING_RULES}
 {FORMATTING_RULES}
 Antworte auf Deutsch. DUZE den Studenten."""
 
@@ -1046,12 +1179,14 @@ async def chat_about_book_chapter_stream(
     next_chapter_title: str | None = None,
     sections: list[dict] | None = None,
     current_section: int = 0,
+    knowledge_hits: list[dict] | None = None,
 ):
     """Streaming variant of chat_about_book_chapter. Yields SSE event dicts."""
     year = _current_year()
     authors_str = ", ".join(book_authors) if book_authors else "unbekannter Autor"
     prev_context = f"\nBEREITS BEHANDELT:\n{previous_chapters_summary}\n" if previous_chapters_summary else ""
     next_hint = f'\nNÄCHSTES KAPITEL: "{next_chapter_title}"' if next_chapter_title else ""
+    knowledge_block = _format_knowledge_block(knowledge_hits) if knowledge_hits else ""
     history_text = ""
     for msg in chat_history[-20:]:
         role_label = "Student" if msg["role"] == "user" else "Tutor"
@@ -1063,12 +1198,13 @@ async def chat_about_book_chapter_stream(
     prompt = f"""Du bist ein kompetenter Tutor ({year}), der einem Studenten beim Durcharbeiten eines Buches hilft. Du DUZT den Studenten IMMER.
 BUCH: "{book_title}" von {authors_str}
 KAPITEL {chapter_number}: "{chapter_title}"
-{prev_context}{next_hint}{sections_section}
+{prev_context}{next_hint}{knowledge_block}{sections_section}
 GESPRÄCHSVERLAUF:{history_text}
 
 STUDENT: {user_message}
 
 Recherchiere den tatsächlichen Inhalt dieses Kapitels. Erkläre den aktuellen Abschnitt substantiell mit Beispiel (2-4 Absätze).
+{ADAPTIVE_TEACHING_RULES}
 {FORMATTING_RULES}
 Antworte auf Deutsch. DUZE den Studenten IMMER."""
 
