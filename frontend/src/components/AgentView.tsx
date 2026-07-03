@@ -305,10 +305,10 @@ export default function AgentView() {
             </div>
 
             {/* Split layout: LEFT (Note/Diff) | RIGHT (Chat) */}
-            <div className="flex-1 flex overflow-hidden">
+            <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
 
-                {/* LEFT PANEL: Note Viewer / Diff — connected to sidebar explorer */}
-                <div className="w-[45%] border-r border-dark-800 flex flex-col overflow-hidden">
+                {/* LEFT PANEL: Note Viewer / Diff — hidden on mobile, shown on desktop */}
+                <div className="hidden lg:flex lg:w-[45%] border-r border-dark-800 flex-col overflow-hidden">
                     {/* Left panel tabs */}
                     <div className="flex items-center border-b border-dark-800 px-2 py-1.5 gap-1 flex-shrink-0">
                         {agentViewingNote && (

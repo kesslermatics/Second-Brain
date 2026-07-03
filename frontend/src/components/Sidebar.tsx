@@ -313,16 +313,16 @@ export default function Sidebar() {
                                         ) : (
                                             <span className="truncate flex-1">{session.title}</span>
                                         )}
-                                        <div className="opacity-0 group-hover:opacity-100 flex gap-0.5">
+                                        <div className="hidden group-hover:flex gap-0.5 flex-shrink-0">
                                             <button
                                                 onClick={(e) => startRenameSession(e, session.id, session.title)}
-                                                className="p-1 hover:bg-dark-700 rounded transition-opacity"
+                                                className="p-1 hover:bg-dark-700 rounded"
                                             >
                                                 <FiEdit2 className="w-3 h-3 text-dark-500 hover:text-blue-400" />
                                             </button>
                                             <button
                                                 onClick={(e) => handleDeleteSession(e, session.id, 'agent')}
-                                                className="p-1 hover:bg-dark-700 rounded transition-opacity"
+                                                className="p-1 hover:bg-dark-700 rounded"
                                             >
                                                 <FiTrash2 className="w-3 h-3 text-dark-500 hover:text-red-400" />
                                             </button>

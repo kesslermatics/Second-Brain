@@ -254,31 +254,31 @@ export default function FolderTreeComponent({ folders, level }: Props) {
                             ) : (
                                 <span className="truncate flex-1">{folder.name}</span>
                             )}
-                            <div className="opacity-0 group-hover:opacity-100 flex gap-0.5">
+                            <div className="hidden group-hover:flex gap-0.5 flex-shrink-0">
                                 <button
                                     onClick={(e) => startRenameFolder(e, folder.id, folder.name)}
-                                    className="p-0.5 hover:bg-dark-700 rounded"
+                                    className="p-1 hover:bg-dark-700 rounded"
                                     title="Ordner umbenennen"
                                 >
                                     <FiEdit2 className="w-3 h-3 text-blue-400" />
                                 </button>
                                 <button
                                     onClick={(e) => { e.stopPropagation(); setNewFolderParent(folder.id); }}
-                                    className="p-0.5 hover:bg-dark-700 rounded"
+                                    className="p-1 hover:bg-dark-700 rounded"
                                     title="Unterordner erstellen"
                                 >
                                     <FiFolderPlus className="w-3 h-3" />
                                 </button>
                                 <button
                                     onClick={(e) => handleCreateNote(e, folder.id)}
-                                    className="p-0.5 hover:bg-dark-700 rounded"
+                                    className="p-1 hover:bg-dark-700 rounded"
                                     title="Neue Notiz erstellen"
                                 >
                                     <FiFilePlus className="w-3 h-3 text-brain-400" />
                                 </button>
                                 <button
                                     onClick={(e) => handleDeleteFolder(e, folder.id)}
-                                    className="p-0.5 hover:bg-dark-700 rounded"
+                                    className="p-1 hover:bg-dark-700 rounded"
                                     title="Ordner löschen"
                                 >
                                     <FiTrash2 className="w-3 h-3 text-red-400" />
@@ -333,17 +333,17 @@ export default function FolderTreeComponent({ folders, level }: Props) {
                                         ) : (
                                             <span className="truncate flex-1">{note.title}</span>
                                         )}
-                                        <div className="opacity-0 group-hover:opacity-100 flex gap-0.5 flex-shrink-0">
+                                        <div className="hidden group-hover:flex gap-0.5 flex-shrink-0">
                                             <button
                                                 onClick={(e) => startRenameNote(e, note.id, note.title)}
-                                                className="p-0.5 hover:bg-dark-700 rounded"
+                                                className="p-1 hover:bg-dark-700 rounded"
                                                 title="Notiz umbenennen"
                                             >
                                                 <FiEdit2 className="w-3 h-3 text-blue-400" />
                                             </button>
                                             <button
                                                 onClick={(e) => handleDeleteNote(e, note.id)}
-                                                className="p-0.5 hover:bg-dark-700 rounded"
+                                                className="p-1 hover:bg-dark-700 rounded"
                                                 title="Notiz löschen"
                                             >
                                                 <FiTrash2 className="w-3 h-3 text-red-400" />
