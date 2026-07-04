@@ -761,9 +761,19 @@ export default function BookPanel() {
 
                     <div className="bg-dark-800 border border-dark-700 rounded-2xl p-6">
                         <div className="flex items-start gap-4 mb-4">
-                            <div className="p-3 bg-amber-900/30 rounded-xl flex-shrink-0">
-                                <FiBook className="w-6 h-6 text-amber-400" />
-                            </div>
+                            {bookInfo.cover_url ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                    src={bookInfo.cover_url}
+                                    alt={`Cover von ${bookInfo.title || 'Buch'}`}
+                                    className="w-20 h-auto max-h-32 object-contain rounded-lg shadow-lg shadow-black/40 flex-shrink-0 bg-dark-900 animate-[fadeIn_0.3s_ease-out]"
+                                    onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                                />
+                            ) : (
+                                <div className="p-3 bg-amber-900/30 rounded-xl flex-shrink-0">
+                                    <FiBook className="w-6 h-6 text-amber-400" />
+                                </div>
+                            )}
                             <div>
                                 <h3 className="text-lg font-bold text-white">{bookInfo.title}</h3>
                                 <p className="text-sm text-dark-400 mt-1">{bookInfo.authors?.join(', ')}</p>

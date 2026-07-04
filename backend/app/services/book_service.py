@@ -7,6 +7,7 @@ from app.services.ai_service import (
 from app.config import get_settings
 import json
 import re
+import httpx
 
 settings = get_settings()
 
@@ -29,6 +30,85 @@ BOOK_SEARCH_SCHEMA = {
     },
     "required": ["found"],
 }
+
+
+async def fetch_book_cover(
+    title: str | None = None,
+    authors: list[str] | None = None,
+    isbn: str | None = None,
+) -> str | None:
+    """Find a public cover image URL for a book.
+
+    Strategy (all key-free public APIs, best-effort — returns None on any failure):
+      1. Open Library by ISBN (most reliable when we have an ISBN)
+      2. Open Library search by title + author -> cover from the best doc
+      3. Google Books volume search -> thumbnail
+
+    Only returns a URL that actually resolves to an image.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    clean_isbn = re.sub(r"[^0-9Xx]", "", isbn or "") if isbn else ""
+    author = (authors[0] if authors else "") or ""
+
+    async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+        # 1. Open Library by ISBN — use the data API so we only return a real cover.
+        if clean_isbn:
+            try:
+                r = await client.get(
+                    "https://openlibrary.org/api/books",
+                    params={"bibkeys": f"ISBN:{clean_isbn}", "format": "json", "jscmd": "data"},
+                )
+                if r.status_code == 200:
+                    data = r.json().get(f"ISBN:{clean_isbn}", {})
+                    cover = (data.get("cover") or {}).get("large") or (data.get("cover") or {}).get("medium")
+                    if cover:
+                        return cover
+            except Exception as e:
+                logger.warning(f"Open Library ISBN cover lookup failed: {e}")
+
+        # 2. Open Library search by title + author.
+        if title:
+            try:
+                r = await client.get(
+                    "https://openlibrary.org/search.json",
+                    params={"title": title, "author": author, "limit": 1, "fields": "cover_i,isbn"},
+                )
+                if r.status_code == 200:
+                    docs = r.json().get("docs", [])
+                    if docs:
+                        cover_i = docs[0].get("cover_i")
+                        if cover_i:
+                            return f"https://covers.openlibrary.org/b/id/{cover_i}-L.jpg"
+                        isbns = docs[0].get("isbn") or []
+                        if isbns:
+                            return f"https://covers.openlibrary.org/b/isbn/{isbns[0]}-L.jpg"
+            except Exception as e:
+                logger.warning(f"Open Library search cover lookup failed: {e}")
+
+        # 3. Google Books fallback.
+        if title:
+            try:
+                q = f'intitle:{title}'
+                if author:
+                    q += f'+inauthor:{author}'
+                r = await client.get(
+                    "https://www.googleapis.com/books/v1/volumes",
+                    params={"q": q, "maxResults": 1},
+                )
+                if r.status_code == 200:
+                    items = r.json().get("items", [])
+                    if items:
+                        links = items[0].get("volumeInfo", {}).get("imageLinks", {})
+                        thumb = links.get("thumbnail") or links.get("smallThumbnail")
+                        if thumb:
+                            # Google returns http + zoom=1; normalise to https and a larger image.
+                            return thumb.replace("http://", "https://").replace("&edge=curl", "")
+            except Exception as e:
+                logger.warning(f"Google Books cover lookup failed: {e}")
+
+    return None
 
 BOOK_TOC_SCHEMA = {
     "type": "object",
@@ -86,16 +166,28 @@ Wenn kein passendes Buch gefunden wird:
     if research:
         structured_prompt += f"\n\nRECHERCHE-ERGEBNIS:\n{research[:2500]}"
 
+    async def _attach_cover(book: dict) -> dict:
+        """Enrich a found book with a public cover image URL (best-effort)."""
+        if book.get("found") and not book.get("cover_url"):
+            cover = await fetch_book_cover(
+                title=book.get("title"),
+                authors=book.get("authors"),
+                isbn=book.get("isbn"),
+            )
+            if cover:
+                book["cover_url"] = cover
+        return book
+
     result = await generate_json(structured_prompt, BOOK_SEARCH_SCHEMA, model=PRO_MODEL, temperature=0.2)
     if result and isinstance(result, dict):
-        return result
+        return await _attach_cover(result)
 
     # Fallback: legacy free-text + regex
     text = (await generate_with_search(prompt, model=PRO_MODEL)).strip()
     json_match = re.search(r'\{[\s\S]*\}', text)
     if json_match:
         try:
-            return json.loads(json_match.group())
+            return await _attach_cover(json.loads(json_match.group()))
         except json.JSONDecodeError:
             pass
 

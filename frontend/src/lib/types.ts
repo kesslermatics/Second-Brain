@@ -239,6 +239,7 @@ export interface BookSearchResult {
   language?: string;
   pages?: number;
   description?: string;
+  cover_url?: string;
   suggestion?: string;
 }
 
