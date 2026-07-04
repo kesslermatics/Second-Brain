@@ -67,6 +67,40 @@ function messageExtras(msg: CourseMessage): { diagrams: LessonDiagram[]; checkpo
     return { diagrams, checkpoints };
 }
 
+// ── Book cover with a graceful fallback ──────────────────────────────
+// Renders the real cover when available; otherwise a stylised spine-like
+// placeholder so the shelf stays visually consistent.
+function BookCover({
+    url,
+    title,
+    className = '',
+}: {
+    url?: string | null;
+    title?: string;
+    className?: string;
+}) {
+    const [failed, setFailed] = useState(false);
+    const showImage = url && !failed;
+    return (
+        <div className={`relative overflow-hidden rounded-md bg-gradient-to-br from-amber-900/40 to-dark-800 ring-1 ring-black/30 ${className}`}>
+            {showImage ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                    src={url!}
+                    alt={`Cover von ${title || 'Buch'}`}
+                    className="w-full h-full object-cover"
+                    onError={() => setFailed(true)}
+                />
+            ) : (
+                <div className="w-full h-full flex flex-col items-center justify-center p-2 text-center">
+                    <FiBook className="w-5 h-5 text-amber-400/70 mb-1" />
+                    <span className="text-[8px] leading-tight text-amber-100/60 line-clamp-3">{title}</span>
+                </div>
+            )}
+        </div>
+    );
+}
+
 export default function BookPanel() {
     // ── State ────────────────────────────────────────────────────────
     const [view, setView] = useState<View>({ kind: 'books' });
@@ -241,6 +275,7 @@ export default function BookPanel() {
                     year: bookInfo.year,
                     isbn: bookInfo.isbn,
                     publisher: bookInfo.publisher,
+                    cover_url: bookInfo.cover_url,
                 },
                 selectedChapters,
             );
@@ -576,6 +611,80 @@ export default function BookPanel() {
         return { current: currentIndex + 1, total: enabled.length };
     };
 
+    // ── Render: one book on the shelf ────────────────────────────────
+    const renderShelfBook = (course: CourseListItem, isCompleted: boolean) => {
+        const pct = course.enabled_units > 0
+            ? Math.round((course.completed_units / course.enabled_units) * 100)
+            : 0;
+        return (
+            <div key={course.id} className="group flex flex-col slide-up">
+                {/* Cover — click to resume/open */}
+                <button
+                    onClick={() => handleResumeCourse(course.id)}
+                    className="relative block w-full aspect-[2/3] rounded-md overflow-hidden shadow-lg shadow-black/40 ring-1 ring-black/40 transition-transform duration-200 group-hover:-translate-y-1 group-hover:shadow-xl group-hover:shadow-black/50"
+                    title={isCompleted ? 'Erneut öffnen' : 'Weiterlesen'}
+                >
+                    <BookCover url={course.book_cover_url} title={course.title} className="w-full h-full" />
+
+                    {/* Completed check badge */}
+                    {isCompleted && (
+                        <div className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-green-600 flex items-center justify-center shadow">
+                            <FiCheck className="w-3 h-3 text-white" />
+                        </div>
+                    )}
+
+                    {/* Progress bar overlaid at the bottom for in-progress books */}
+                    {!isCompleted && (
+                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent pt-6 pb-1.5 px-1.5">
+                            <div className="flex items-center gap-1.5">
+                                <div className="flex-1 h-1 bg-white/20 rounded-full overflow-hidden">
+                                    <div className="h-full bg-amber-400 rounded-full transition-all" style={{ width: `${pct}%` }} />
+                                </div>
+                                <span className="text-[9px] text-white/90 font-medium">{pct}%</span>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Hover actions */}
+                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                        <span
+                            onClick={(e) => { e.stopPropagation(); handleOpenSummaries(course); }}
+                            className="p-2 bg-dark-900/90 hover:bg-dark-800 rounded-lg text-dark-200 transition-colors"
+                            title="Kapitel-Zusammenfassungen"
+                        >
+                            <FiFileText className="w-3.5 h-3.5" />
+                        </span>
+                        <span
+                            onClick={(e) => { e.stopPropagation(); handleDeleteCourse(course.id); }}
+                            className="p-2 bg-dark-900/90 hover:bg-dark-800 rounded-lg text-dark-400 hover:text-red-400 transition-colors"
+                            title="Löschen"
+                        >
+                            <FiTrash2 className="w-3.5 h-3.5" />
+                        </span>
+                    </div>
+                </button>
+
+                {/* Shelf edge */}
+                <div className="h-1.5 bg-gradient-to-b from-dark-700 to-dark-800 rounded-b-sm shadow-inner" />
+
+                {/* Title + author */}
+                <div className="mt-2 px-0.5 min-w-0">
+                    <p className={`text-xs font-semibold truncate ${isCompleted ? 'text-dark-300' : 'text-white'}`} title={course.title}>
+                        {course.title}
+                    </p>
+                    {course.book_authors && course.book_authors.length > 0 && (
+                        <p className="text-[10px] text-dark-500 truncate">{course.book_authors.join(', ')}</p>
+                    )}
+                    <p className="text-[10px] text-dark-600 mt-0.5">
+                        {isCompleted
+                            ? `${course.completed_units}/${course.enabled_units} Kapitel · fertig`
+                            : `${course.completed_units}/${course.enabled_units} Kapitel`}
+                    </p>
+                </div>
+            </div>
+        );
+    };
+
     // ── Render: Books list ───────────────────────────────────────────
     const renderBooksList = () => {
         const activeDraft = courses.filter(c => c.status !== 'completed');
@@ -631,109 +740,25 @@ export default function BookPanel() {
                             </p>
                         </div>
                     ) : (
-                        <div className="max-w-2xl mx-auto space-y-6">
+                        <div className="max-w-4xl mx-auto space-y-8">
                             {activeDraft.length > 0 && (
-                                <div className="space-y-3">
-                                    {activeDraft.map((course) => (
-                                        <div
-                                            key={course.id}
-                                            className="bg-dark-800 border border-dark-700 rounded-xl p-4 hover:border-dark-600 transition-colors group"
-                                        >
-                                            <div className="flex items-start justify-between gap-3">
-                                                <div className="flex-1 min-w-0">
-                                                    <div className="flex items-center gap-2 mb-1">
-                                                        <span className="px-2 py-0.5 text-[10px] font-medium rounded-full bg-amber-600/20 text-amber-400">
-                                                            In Bearbeitung
-                                                        </span>
-                                                    </div>
-                                                    <h4 className="text-sm font-semibold text-white truncate">{course.title}</h4>
-                                                    {course.book_authors && course.book_authors.length > 0 && (
-                                                        <p className="text-xs text-dark-500 mt-0.5">{course.book_authors.join(', ')}</p>
-                                                    )}
-                                                    {course.total_units > 0 && course.enabled_units > 0 && (
-                                                        <div className="flex items-center gap-2 mt-2">
-                                                            <div className="flex-1 h-1.5 bg-dark-700 rounded-full overflow-hidden">
-                                                                <div
-                                                                    className="h-full bg-amber-500 rounded-full transition-all"
-                                                                    style={{ width: `${Math.round((course.completed_units / course.enabled_units) * 100)}%` }}
-                                                                />
-                                                            </div>
-                                                            <span className="text-[10px] text-dark-500">
-                                                                {course.completed_units}/{course.enabled_units}
-                                                            </span>
-                                                        </div>
-                                                    )}
-                                                </div>
-                                                <div className="flex items-center gap-1.5">
-                                                    <button
-                                                        onClick={() => handleOpenSummaries(course)}
-                                                        className="px-3 py-1.5 bg-dark-700 hover:bg-dark-600 text-dark-300 text-xs font-medium rounded-lg transition-colors"
-                                                        title="Kapitel-Zusammenfassungen"
-                                                    >
-                                                        <FiFileText className="w-3.5 h-3.5" />
-                                                    </button>
-                                                    <button
-                                                        onClick={() => handleResumeCourse(course.id)}
-                                                        className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-medium rounded-lg transition-colors"
-                                                    >
-                                                        Fortsetzen
-                                                    </button>
-                                                    <button
-                                                        onClick={() => handleDeleteCourse(course.id)}
-                                                        className="p-1.5 text-dark-600 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
-                                                    >
-                                                        <FiTrash2 className="w-3.5 h-3.5" />
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    ))}
+                                <div>
+                                    <h3 className="text-[11px] font-semibold uppercase tracking-wider text-dark-500 mb-4 px-1">
+                                        Aktuell im Regal
+                                    </h3>
+                                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-x-4 gap-y-6">
+                                        {activeDraft.map((course) => renderShelfBook(course, false))}
+                                    </div>
                                 </div>
                             )}
 
                             {completed.length > 0 && (
                                 <div>
-                                    {activeDraft.length > 0 && (
-                                        <div className="flex items-center gap-3 mb-3">
-                                            <div className="h-px flex-1 bg-dark-700" />
-                                            <span className="text-[10px] text-dark-500 font-medium uppercase tracking-wider">Abgeschlossen</span>
-                                            <div className="h-px flex-1 bg-dark-700" />
-                                        </div>
-                                    )}
-                                    <div className="space-y-2">
-                                        {completed.map((course) => (
-                                            <div
-                                                key={course.id}
-                                                className="bg-dark-800/50 border border-dark-700/50 rounded-xl p-3 group"
-                                            >
-                                                <div className="flex items-center justify-between gap-3">
-                                                    <div className="flex items-center gap-3 min-w-0">
-                                                        <FiCheck className="w-4 h-4 text-green-500 flex-shrink-0" />
-                                                        <div className="min-w-0">
-                                                            <h4 className="text-sm font-medium text-dark-300 truncate">{course.title}</h4>
-                                                            <p className="text-[10px] text-dark-600">
-                                                                {course.completed_units}/{course.enabled_units} Kapitel
-                                                                {course.book_authors && course.book_authors.length > 0 && ` · ${course.book_authors.join(', ')}`}
-                                                            </p>
-                                                        </div>
-                                                    </div>
-                                                    <div className="flex items-center gap-1.5">
-                                                        <button
-                                                            onClick={() => handleOpenSummaries(course)}
-                                                            className="px-3 py-1.5 bg-dark-700 hover:bg-dark-600 text-dark-300 text-xs font-medium rounded-lg transition-colors"
-                                                        >
-                                                            <FiFileText className="w-3.5 h-3.5" />
-                                                        </button>
-                                                        <button
-                                                            onClick={() => handleDeleteCourse(course.id)}
-                                                            className="p-1.5 text-dark-600 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
-                                                        >
-                                                            <FiTrash2 className="w-3.5 h-3.5" />
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        ))}
+                                    <h3 className="text-[11px] font-semibold uppercase tracking-wider text-dark-500 mb-4 px-1">
+                                        Durchgelesen
+                                    </h3>
+                                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-x-4 gap-y-6">
+                                        {completed.map((course) => renderShelfBook(course, true))}
                                     </div>
                                 </div>
                             )}
@@ -949,6 +974,12 @@ export default function BookPanel() {
                             >
                                 <FiArrowLeft className="w-4 h-4" />
                             </button>
+                            {/* Book cover — flush to the left of the chapter title */}
+                            <BookCover
+                                url={course.book_cover_url}
+                                title={course.title}
+                                className="w-9 h-[54px] flex-shrink-0 hidden sm:block"
+                            />
                             <div className="min-w-0">
                                 <div className="flex items-center gap-2">
                                     <span className="text-[10px] text-amber-400 font-medium">

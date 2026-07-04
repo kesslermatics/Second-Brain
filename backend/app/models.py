@@ -254,6 +254,7 @@ class Course(Base):
     book_year = Column(String(20), nullable=True)
     book_isbn = Column(String(50), nullable=True)
     book_publisher = Column(String(255), nullable=True)
+    book_cover_url = Column(String(1024), nullable=True)  # public cover image URL
     parent_course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id", ondelete="SET NULL"), nullable=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

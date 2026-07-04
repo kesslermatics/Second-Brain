@@ -130,6 +130,7 @@ async def list_courses(
             "book_year": c.book_year,
             "book_isbn": c.book_isbn,
             "book_publisher": c.book_publisher,
+            "book_cover_url": c.book_cover_url,
             "total_units": row.total,
             "completed_units": row.completed,
             "enabled_units": row.enabled,
@@ -167,6 +168,7 @@ async def get_course(
         "book_year": course.book_year,
         "book_isbn": course.book_isbn,
         "book_publisher": course.book_publisher,
+        "book_cover_url": course.book_cover_url,
         "units": [
             {
                 "id": str(u.id),
@@ -403,6 +405,7 @@ async def create_book_course(
     year = data.get("year")
     isbn = data.get("isbn")
     publisher = data.get("publisher")
+    cover_url = data.get("cover_url")
     chapters = data.get("chapters", [])
 
     if not title or not chapters:
@@ -424,6 +427,7 @@ async def create_book_course(
         book_year=str(year) if year else None,
         book_isbn=isbn or None,
         book_publisher=publisher or None,
+        book_cover_url=cover_url or None,
         user_id=current_user.id,
     )
     db.add(course)

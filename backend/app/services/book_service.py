@@ -52,6 +52,35 @@ async def fetch_book_cover(
     clean_isbn = re.sub(r"[^0-9Xx]", "", isbn or "") if isbn else ""
     author = (authors[0] if authors else "") or ""
 
+    # The AI often returns a long title with a subtitle ("Main: subtitle"), which
+    # rarely matches catalogue records. Search with the short main title too.
+    def _short_title(t: str) -> str:
+        return re.split(r"[:–—\-]", t, 1)[0].strip() if t else t
+
+    title_variants: list[str] = []
+    for t in (title, _short_title(title or "")):
+        t = (t or "").strip()
+        if t and t not in title_variants:
+            title_variants.append(t)
+
+    async def _ol_search(client, t: str, with_author: bool) -> str | None:
+        params = {"title": t, "limit": 1, "fields": "cover_i,isbn"}
+        if with_author and author:
+            params["author"] = author
+        r = await client.get("https://openlibrary.org/search.json", params=params)
+        if r.status_code != 200:
+            return None
+        docs = r.json().get("docs", [])
+        if not docs:
+            return None
+        cover_i = docs[0].get("cover_i")
+        if cover_i:
+            return f"https://covers.openlibrary.org/b/id/{cover_i}-L.jpg"
+        isbns = docs[0].get("isbn") or []
+        if isbns:
+            return f"https://covers.openlibrary.org/b/isbn/{isbns[0]}-L.jpg"
+        return None
+
     async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
         # 1. Open Library by ISBN — use the data API so we only return a real cover.
         if clean_isbn:
@@ -68,31 +97,20 @@ async def fetch_book_cover(
             except Exception as e:
                 logger.warning(f"Open Library ISBN cover lookup failed: {e}")
 
-        # 2. Open Library search by title + author.
-        if title:
-            try:
-                r = await client.get(
-                    "https://openlibrary.org/search.json",
-                    params={"title": title, "author": author, "limit": 1, "fields": "cover_i,isbn"},
-                )
-                if r.status_code == 200:
-                    docs = r.json().get("docs", [])
-                    if docs:
-                        cover_i = docs[0].get("cover_i")
-                        if cover_i:
-                            return f"https://covers.openlibrary.org/b/id/{cover_i}-L.jpg"
-                        isbns = docs[0].get("isbn") or []
-                        if isbns:
-                            return f"https://covers.openlibrary.org/b/isbn/{isbns[0]}-L.jpg"
-            except Exception as e:
-                logger.warning(f"Open Library search cover lookup failed: {e}")
+        # 2. Open Library search: full title+author, short title+author, short title only.
+        for t in title_variants:
+            for with_author in (True, False):
+                try:
+                    url = await _ol_search(client, t, with_author)
+                    if url:
+                        return url
+                except Exception as e:
+                    logger.warning(f"Open Library search cover lookup failed: {e}")
 
-        # 3. Google Books fallback.
-        if title:
+        # 3. Google Books fallback — plain query is more forgiving than intitle/inauthor.
+        for t in title_variants:
             try:
-                q = f'intitle:{title}'
-                if author:
-                    q += f'+inauthor:{author}'
+                q = f"{t} {author}".strip()
                 r = await client.get(
                     "https://www.googleapis.com/books/v1/volumes",
                     params={"q": q, "maxResults": 1},
@@ -103,7 +121,7 @@ async def fetch_book_cover(
                         links = items[0].get("volumeInfo", {}).get("imageLinks", {})
                         thumb = links.get("thumbnail") or links.get("smallThumbnail")
                         if thumb:
-                            # Google returns http + zoom=1; normalise to https and a larger image.
+                            # Google returns http + zoom=1; normalise to https, larger image.
                             return thumb.replace("http://", "https://").replace("&edge=curl", "")
             except Exception as e:
                 logger.warning(f"Google Books cover lookup failed: {e}")

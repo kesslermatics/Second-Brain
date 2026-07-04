@@ -633,7 +633,7 @@ export const getBookCourses = async () => {
 };
 
 export const createBookCourse = async (
-  bookInfo: { title: string; authors: string[]; description?: string; year?: number; isbn?: string; publisher?: string },
+  bookInfo: { title: string; authors: string[]; description?: string; year?: number; isbn?: string; publisher?: string; cover_url?: string },
   chapters: { chapter_number: string; title: string; level: number; enabled: boolean }[],
 ) => {
   const { data } = await api.post<CourseDetail>('/teacher/create-book-course', {
@@ -643,6 +643,7 @@ export const createBookCourse = async (
     year: bookInfo.year,
     isbn: bookInfo.isbn,
     publisher: bookInfo.publisher,
+    cover_url: bookInfo.cover_url,
     chapters,
   });
   return data;

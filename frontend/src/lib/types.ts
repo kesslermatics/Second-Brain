@@ -275,6 +275,7 @@ export interface CourseListItem {
   book_year?: string;
   book_isbn?: string;
   book_publisher?: string;
+  book_cover_url?: string | null;
   total_units: number;
   completed_units: number;
   enabled_units: number;
@@ -315,6 +316,7 @@ export interface CourseDetail {
   book_year?: string;
   book_isbn?: string;
   book_publisher?: string;
+  book_cover_url?: string | null;
   units: CourseUnit[];
   created_at: string | null;
   updated_at: string | null;
