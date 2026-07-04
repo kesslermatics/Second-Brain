@@ -27,8 +27,8 @@ import {
     ThinkingStatus, NoteToastHost, InlineQuiz, type SavedNoteToast,
 } from './TeachingComponents';
 import MermaidDiagram from './MermaidDiagram';
-import { CategoryBadge, CategoryFilter } from './CategoryUI';
-import { CATEGORY_ORDER } from '@/lib/categories';
+import { CategoryBadge, CategoryFilter, StatusBadge } from './CategoryUI';
+import { CATEGORY_ORDER, categoryStyle } from '@/lib/categories';
 
 type View =
     | { kind: 'courses' }
@@ -593,50 +593,47 @@ export default function TeacherPanel() {
             ? [...detail.units].filter((u) => u.enabled && u.level === 2).sort((a, b) => a.order_index - b.order_index)
             : [];
 
+        const accent = categoryStyle(course.category).hex;
+
         return (
             <div
                 key={course.id}
-                className={`slide-up group rounded-2xl border transition-all duration-200 overflow-hidden ${isExpanded
-                    ? 'border-teal-500/40 bg-dark-800 shadow-lg shadow-teal-950/20'
-                    : 'border-dark-700 bg-dark-800/60 hover:border-dark-600 hover:bg-dark-800'}`}
+                className={`slide-up group relative rounded-2xl border transition-all duration-200 overflow-hidden ${isExpanded
+                    ? 'border-dark-600 bg-dark-800 shadow-xl shadow-black/30'
+                    : 'border-dark-700/80 bg-dark-800/50 hover:border-dark-600 hover:bg-dark-800'}`}
             >
+                {/* Category accent bar on the left edge */}
+                <span
+                    className="absolute left-0 top-0 bottom-0 w-1 transition-opacity"
+                    style={{ backgroundColor: accent, opacity: isExpanded ? 1 : 0.6 }}
+                />
+
                 {/* Clickable header */}
                 <button
                     onClick={() => toggleExpandCourse(course.id)}
-                    className="w-full text-left p-4 flex items-start gap-4"
+                    className="w-full text-left p-4 pl-5 flex items-start gap-4"
                 >
                     {/* Progress ring */}
-                    <CircularProgress pct={pct} done={done} />
+                    <CircularProgress pct={pct} done={done} accent={accent} />
 
                     <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1 flex-wrap">
-                            {done ? (
-                                <span className="px-2 py-0.5 text-[10px] font-medium rounded-full bg-green-600/20 text-green-400">
-                                    Abgeschlossen
-                                </span>
-                            ) : (
-                                <span className={`px-2 py-0.5 text-[10px] font-medium rounded-full ${course.status === 'active' ? 'bg-teal-600/20 text-teal-400' : 'bg-dark-700 text-dark-400'}`}>
-                                    {course.status === 'active' ? 'Aktiv' : 'Entwurf'}
-                                </span>
-                            )}
-                            {course.parent_course_id && (
-                                <span className="px-2 py-0.5 text-[10px] font-medium rounded-full bg-purple-600/20 text-purple-400">
-                                    Vertiefung
-                                </span>
-                            )}
+                        <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
+                            {done ? <StatusBadge kind="completed" /> : <StatusBadge kind={course.status === 'active' ? 'active' : 'draft'} />}
+                            {course.parent_course_id && <StatusBadge kind="deepening" />}
                             <CategoryBadge category={course.category} />
                         </div>
                         <h4 className="text-sm font-semibold text-white truncate">{course.title}</h4>
-                        <p className={`text-xs text-dark-500 mt-0.5 transition-all ${isExpanded ? '' : 'line-clamp-1'}`}>
+                        <p className={`text-xs text-dark-500 mt-1 leading-relaxed transition-all ${isExpanded ? '' : 'line-clamp-2'}`}>
                             {course.description || 'Keine Beschreibung'}
                         </p>
-                        <p className="text-[10px] text-dark-600 mt-1.5">
-                            {course.completed_units}/{course.enabled_units} Lektionen
+                        <p className="text-[10px] text-dark-600 mt-2 font-medium">
+                            {course.completed_units}/{course.enabled_units} Lektionen · {pct}%
                         </p>
                     </div>
 
                     <FiChevronDown
-                        className={`w-4 h-4 text-dark-500 flex-shrink-0 mt-1 transition-transform duration-200 ${isExpanded ? 'rotate-180 text-teal-400' : 'group-hover:text-dark-300'}`}
+                        className={`w-4 h-4 text-dark-500 flex-shrink-0 mt-1 transition-transform duration-200 ${isExpanded ? 'rotate-180' : 'group-hover:text-dark-300'}`}
+                        style={isExpanded ? { color: accent } : undefined}
                     />
                 </button>
 
@@ -1358,32 +1355,32 @@ export default function TeacherPanel() {
 }
 
 // ── Circular progress ring for course cards ──────────────────────────
-function CircularProgress({ pct, done }: { pct: number; done: boolean }) {
-    const size = 44;
+function CircularProgress({ pct, done, accent }: { pct: number; done: boolean; accent?: string }) {
+    const size = 46;
     const stroke = 4;
     const r = (size - stroke) / 2;
     const circ = 2 * Math.PI * r;
     const offset = circ - (pct / 100) * circ;
-    const color = done ? '#22c55e' : '#2dd4bf';
+    const color = done ? '#22c55e' : (accent || '#2dd4bf');
 
     return (
         <div className="relative flex-shrink-0" style={{ width: size, height: size }}>
             <svg width={size} height={size} className="-rotate-90">
-                <circle cx={size / 2} cy={size / 2} r={r} stroke="#1f2937" strokeWidth={stroke} fill="none" />
+                <circle cx={size / 2} cy={size / 2} r={r} stroke="#262b33" strokeWidth={stroke} fill="none" />
                 <circle
                     cx={size / 2} cy={size / 2} r={r}
                     stroke={color} strokeWidth={stroke} fill="none"
                     strokeLinecap="round"
                     strokeDasharray={circ}
                     strokeDashoffset={offset}
-                    style={{ transition: 'stroke-dashoffset 0.5s ease-out' }}
+                    style={{ transition: 'stroke-dashoffset 0.6s cubic-bezier(0.22,1,0.36,1)' }}
                 />
             </svg>
             <div className="absolute inset-0 flex items-center justify-center">
                 {done ? (
                     <FiCheck className="w-4 h-4 text-green-400" />
                 ) : (
-                    <span className="text-[10px] font-semibold text-white">{pct}%</span>
+                    <span className="text-[10px] font-bold text-white">{pct}%</span>
                 )}
             </div>
         </div>
