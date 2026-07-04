@@ -6,6 +6,7 @@ from app.services.ai_service import (
 )
 from app.config import get_settings
 from app.categories import categories_prompt_block, normalize_category
+import asyncio
 import json
 import re
 import httpx
@@ -131,16 +132,37 @@ async def fetch_book_cover(
     return None
 
 
+async def _url_is_image(client: "httpx.AsyncClient", url: str) -> bool:
+    """Return True if the URL actually serves a real (non-empty) image."""
+    try:
+        r = await client.get(url, headers={"Range": "bytes=0-2048"})
+        if r.status_code not in (200, 206):
+            return False
+        ctype = r.headers.get("content-type", "")
+        if not ctype.startswith("image"):
+            return False
+        # Open Library placeholder / empty covers are a few bytes; require some size.
+        clen = r.headers.get("content-length")
+        if clen is not None and int(clen) < 1000:
+            return False
+        if not clen and len(r.content) < 500:
+            return False
+        return True
+    except Exception:
+        return False
+
+
 async def fetch_cover_candidates(
     title: str | None = None,
     authors: list[str] | None = None,
     isbn: str | None = None,
     limit: int = 12,
 ) -> list[str]:
-    """Return several candidate cover URLs so the user can pick the right one.
+    """Return several VERIFIED candidate cover URLs so the user can pick one.
 
-    Aggregates multiple results from Open Library (by ISBN + search) and Google
-    Books. De-duplicated, best-effort, order roughly by relevance.
+    Uses forgiving free-text search across Open Library (multiple query variants)
+    and Google Books, then validates every candidate URL actually serves a real
+    image — so the UI never shows blanks/404s and the count is honest.
     """
     import logging
     logger = logging.getLogger(__name__)
@@ -157,45 +179,61 @@ async def fetch_cover_candidates(
         if t and t not in title_variants:
             title_variants.append(t)
 
-    out: list[str] = []
+    raw: list[str] = []
 
     def _add(url: str | None):
-        if url and url not in out:
-            out.append(url)
+        if url and url not in raw:
+            raw.append(url)
+
+    # `?default=false` makes Open Library return 404 (not a blank placeholder)
+    # for missing covers, so validation can filter them cleanly.
+    def _ol_id(cover_i) -> str:
+        return f"https://covers.openlibrary.org/b/id/{cover_i}-L.jpg?default=false"
+
+    def _ol_isbn(i) -> str:
+        return f"https://covers.openlibrary.org/b/isbn/{i}-L.jpg?default=false"
 
     async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
-        # ISBN cover
         if clean_isbn:
-            _add(f"https://covers.openlibrary.org/b/isbn/{clean_isbn}-L.jpg")
+            _add(_ol_isbn(clean_isbn))
 
-        # Open Library search — take several docs, each may have a cover.
+        # Open Library — free-text `q=` search is far more forgiving than title=.
+        # Try: "title author", "title", "shorttitle author", "shorttitle".
+        queries: list[str] = []
         for t in title_variants:
-            if len(out) >= limit:
+            if author:
+                queries.append(f"{t} {author}")
+            queries.append(t)
+        for q in queries:
+            if len(raw) >= limit * 2:
                 break
             try:
                 r = await client.get(
                     "https://openlibrary.org/search.json",
-                    params={"title": t, "author": author, "limit": 6, "fields": "cover_i,isbn,edition_key"},
+                    params={"q": q, "limit": 8, "fields": "cover_i,isbn"},
                 )
                 if r.status_code == 200:
                     for doc in r.json().get("docs", []):
                         cover_i = doc.get("cover_i")
                         if cover_i:
-                            _add(f"https://covers.openlibrary.org/b/id/{cover_i}-L.jpg")
-                        for isbn_c in (doc.get("isbn") or [])[:2]:
-                            _add(f"https://covers.openlibrary.org/b/isbn/{isbn_c}-L.jpg")
+                            _add(_ol_id(cover_i))
+                        for isbn_c in (doc.get("isbn") or [])[:1]:
+                            _add(_ol_isbn(isbn_c))
             except Exception as e:
                 logger.warning(f"OL candidates failed: {e}")
 
-        # Google Books — several volumes.
+        # Google Books — try free query AND intitle/inauthor.
+        gb_queries = []
         for t in title_variants:
-            if len(out) >= limit:
+            gb_queries.append(f"{t} {author}".strip())
+            gb_queries.append(f'intitle:{t}' + (f'+inauthor:{author}' if author else ''))
+        for q in gb_queries:
+            if len(raw) >= limit * 2:
                 break
             try:
-                q = f"{t} {author}".strip()
                 r = await client.get(
                     "https://www.googleapis.com/books/v1/volumes",
-                    params={"q": q, "maxResults": 6},
+                    params={"q": q, "maxResults": 8},
                 )
                 if r.status_code == 200:
                     for item in r.json().get("items", []):
@@ -206,7 +244,11 @@ async def fetch_cover_candidates(
             except Exception as e:
                 logger.warning(f"Google Books candidates failed: {e}")
 
-    return out[:limit]
+        # Validate all candidates concurrently — keep only real images.
+        results = await asyncio.gather(*[_url_is_image(client, u) for u in raw])
+        verified = [u for u, ok in zip(raw, results) if ok]
+
+    return verified[:limit]
 
 
 BOOK_TOC_SCHEMA = {
