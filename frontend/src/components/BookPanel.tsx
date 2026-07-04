@@ -4,9 +4,8 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import {
     FiCheck, FiX, FiChevronRight, FiSearch, FiSquare, FiCheckSquare,
     FiSend, FiTrash2, FiArrowLeft, FiBook,
-    FiChevronDown, FiChevronUp, FiBookOpen, FiRefreshCw, FiFileText,
+    FiChevronDown, FiFileText, FiRefreshCw, FiMessageCircle,
 } from 'react-icons/fi';
-import { LuBrain, LuListChecks } from 'react-icons/lu';
 import ReactMarkdown from 'react-markdown';
 import { markdownComponents, remarkPlugins, rehypePlugins } from '@/lib/markdownComponents';
 import { useStore } from '@/lib/store';
@@ -15,21 +14,21 @@ import {
     getBookCourses, getTeacherCourse, deleteTeacherCourse,
     createBookCourse, updateCourseStatus, updateCourseUnit,
     getUnitMessages, sendTeacherChat, sendTeacherChatStream,
-    generateLessonNotes, generateTermNote,
-    recordNotesGenerated,
     generateUnitQuiz, generateUnitRecap,
-    ensureFolderPath, createNote,
     getBookSummaries, generateChapterSummary,
+    type TeacherSavedNote,
 } from '@/lib/api';
 import type {
     BookSearchResult, BookChapter,
     CourseListItem, CourseDetail, CourseUnit, CourseMessage,
-    CourseNoteResult, BookSummaryChapter, QuizQuestion, LessonRecap,
+    BookSummaryChapter, QuizQuestion, LessonRecap, LessonDiagram,
 } from '@/lib/types';
 import {
     LessonObjectivesCard, LearningPathButton, LearningPathOverlay,
-    LessonQuiz, LessonCompleteCelebration, isControlMessage,
+    LessonCompleteCelebration, isControlMessage,
+    ThinkingStatus, NoteToastHost, InlineQuiz, type SavedNoteToast,
 } from './TeachingComponents';
+import MermaidDiagram from './MermaidDiagram';
 
 type View =
     | { kind: 'books' }
@@ -37,11 +36,36 @@ type View =
     | { kind: 'loading-toc'; bookInfo: BookSearchResult }
     | { kind: 'confirm-toc'; bookInfo: BookSearchResult; chapters: BookChapter[] }
     | { kind: 'lesson-chat'; course: CourseDetail; unit: CourseUnit }
-    | { kind: 'note-review'; course: CourseDetail; unit: CourseUnit; notes: CourseNoteResult[]; currentIdx: number }
-    | { kind: 'quiz'; course: CourseDetail; unit: CourseUnit; questions: QuizQuestion[] }
     | { kind: 'lesson-complete'; course: CourseDetail; unit: CourseUnit }
     | { kind: 'book-completed'; course: CourseDetail }
     | { kind: 'book-summaries'; courseId: string; title: string; authors: string[] };
+
+// ── URL state (book course/unit) — survives reload, doesn't touch nav ─
+const URL_COURSE = 'bcourse';
+const URL_UNIT = 'bunit';
+
+function readUrlState(): { courseId: string | null; unitId: string | null } {
+    if (typeof window === 'undefined') return { courseId: null, unitId: null };
+    const p = new URLSearchParams(window.location.search);
+    return { courseId: p.get(URL_COURSE), unitId: p.get(URL_UNIT) };
+}
+
+function writeUrlState(courseId: string | null, unitId: string | null) {
+    if (typeof window === 'undefined') return;
+    const p = new URLSearchParams(window.location.search);
+    if (courseId) p.set(URL_COURSE, courseId); else p.delete(URL_COURSE);
+    if (unitId) p.set(URL_UNIT, unitId); else p.delete(URL_UNIT);
+    const qs = p.toString();
+    const url = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
+    window.history.replaceState(window.history.state, '', url);
+}
+
+function messageExtras(msg: CourseMessage): { diagrams: LessonDiagram[]; checkpoints: string[] } {
+    const md = (msg.metadata || {}) as Record<string, unknown>;
+    const diagrams = Array.isArray(md.diagrams) ? (md.diagrams as LessonDiagram[]) : [];
+    const checkpoints = Array.isArray(md.checkpoints) ? (md.checkpoints as string[]) : [];
+    return { diagrams, checkpoints };
+}
 
 export default function BookPanel() {
     // ── State ────────────────────────────────────────────────────────
@@ -61,19 +85,13 @@ export default function BookPanel() {
     const [messages, setMessages] = useState<CourseMessage[]>([]);
     const [chatInput, setChatInput] = useState('');
     const [sendingChat, setSendingChat] = useState(false);
-    const [streamingContent, setStreamingContent] = useState('');
-    const [streamingThought, setStreamingThought] = useState('');
+    const [statusLine, setStatusLine] = useState('');
 
-    // Note generation
-    const [generatingNotes, setGeneratingNotes] = useState(false);
-    const [savingNote, setSavingNote] = useState(false);
+    // Silent-save toasts + tutor-driven inline quiz
+    const [toasts, setToasts] = useState<SavedNoteToast[]>([]);
+    const [inlineQuiz, setInlineQuiz] = useState<QuizQuestion[] | null>(null);
 
-    // Term note
-    const [termInput, setTermInput] = useState('');
-    const [generatingTerm, setGeneratingTerm] = useState(false);
-
-    // Quiz / recap / learning path
-    const [generatingQuiz, setGeneratingQuiz] = useState(false);
+    // Recap / learning path
     const [recap, setRecap] = useState<LessonRecap | null>(null);
     const [loadingRecap, setLoadingRecap] = useState(false);
     const [showPath, setShowPath] = useState(false);
@@ -81,11 +99,9 @@ export default function BookPanel() {
     // Section walk-through state for the current chapter
     const [section, setSection] = useState<{ current: number; total: number }>({ current: 0, total: 0 });
 
-    // Prefetched caches: unitId -> data
-    const prefetchedNotesRef = useRef<Map<string, CourseNoteResult[]>>(new Map());
+    // Prefetched caches
     const prefetchedMessagesRef = useRef<Map<string, CourseMessage[]>>(new Map());
     const prefetchedSectionRef = useRef<Map<string, { current: number; total: number }>>(new Map());
-    const userSentMessageRef = useRef(false);
 
     // Summaries
     const [summaryChapters, setSummaryChapters] = useState<BookSummaryChapter[]>([]);
@@ -96,7 +112,17 @@ export default function BookPanel() {
     const chatEndRef = useRef<HTMLDivElement>(null);
     const lastAssistantRef = useRef<HTMLDivElement>(null);
     const chatInputRef = useRef<HTMLTextAreaElement>(null);
+    const restoredRef = useRef(false);
     const { loadFolderTree } = useStore();
+
+    // ── Toast helpers ────────────────────────────────────────────────
+    const pushToast = useCallback((note: TeacherSavedNote) => {
+        const id = `${note.note_id}-${Date.now()}`;
+        setToasts((prev) => [...prev, { id, title: note.title, action: note.action }]);
+    }, []);
+    const dismissToast = useCallback((id: string) => {
+        setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, []);
 
     // ── Load book courses ────────────────────────────────────────────
     const loadCourses = useCallback(async () => {
@@ -115,7 +141,6 @@ export default function BookPanel() {
         loadCourses();
     }, [loadCourses]);
 
-    // Scroll to the start of the last assistant message so the user can read from the top
     useEffect(() => {
         if (view.kind === 'lesson-chat' && messages.length > 0) {
             const lastMsg = messages[messages.length - 1];
@@ -126,6 +151,39 @@ export default function BookPanel() {
             }
         }
     }, [messages, view]);
+
+    // Keep URL in sync with the current chapter
+    useEffect(() => {
+        if (view.kind === 'lesson-chat') {
+            writeUrlState(view.course.id, view.unit.id);
+        } else if (view.kind === 'books') {
+            writeUrlState(null, null);
+        }
+    }, [view]);
+
+    // Restore from URL on first mount
+    useEffect(() => {
+        if (restoredRef.current) return;
+        restoredRef.current = true;
+        const { courseId, unitId } = readUrlState();
+        if (!courseId) return;
+        (async () => {
+            try {
+                const course = await getTeacherCourse(courseId);
+                if ((course.kind || 'teacher') !== 'book') return;
+                const unit = unitId
+                    ? course.units.find((u) => u.id === unitId)
+                    : course.units.find((u) => u.enabled && (u.status === 'active' || u.status === 'pending'));
+                if (unit) await openUnitChat(course, unit);
+            } catch { /* stale link */ }
+        })();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    const resetLessonEphemeral = () => {
+        setStatusLine('');
+        setInlineQuiz(null);
+    };
 
     // ── Search book ──────────────────────────────────────────────────
     const handleSearch = async () => {
@@ -146,7 +204,6 @@ export default function BookPanel() {
         }
     };
 
-    // ── Confirm book → load TOC ──────────────────────────────────────
     const handleConfirmBook = async (bookInfo: BookSearchResult) => {
         setView({ kind: 'loading-toc', bookInfo });
         setError(null);
@@ -167,7 +224,6 @@ export default function BookPanel() {
         }
     };
 
-    // ── Start book course from TOC ───────────────────────────────────
     const handleStartBookCourse = async (bookInfo: BookSearchResult, chapters: BookChapter[]) => {
         setError(null);
         try {
@@ -177,7 +233,6 @@ export default function BookPanel() {
                 level: ch.level,
                 enabled: enabledChapters[ch.chapter_number] !== false,
             }));
-
             const course = await createBookCourse(
                 {
                     title: bookInfo.title!,
@@ -189,17 +244,13 @@ export default function BookPanel() {
                 },
                 selectedChapters,
             );
-
             const firstUnit = course.units.find((u) => u.enabled && u.status === 'pending');
-            if (firstUnit) {
-                await openUnitChat(course, firstUnit);
-            }
+            if (firstUnit) await openUnitChat(course, firstUnit);
         } catch {
             setError('Fehler beim Erstellen des Buchkurses.');
         }
     };
 
-    // ── Resume book course ───────────────────────────────────────────
     const handleResumeCourse = async (courseId: string) => {
         setError(null);
         try {
@@ -219,30 +270,24 @@ export default function BookPanel() {
 
     // ── Open unit chat ───────────────────────────────────────────────
     const openUnitChat = async (course: CourseDetail, unit: CourseUnit) => {
-        userSentMessageRef.current = false;
         setView({ kind: 'lesson-chat', course, unit });
+        resetLessonEphemeral();
 
-        // Use prefetched messages from memory if available (instant)
         const cached = prefetchedMessagesRef.current.get(unit.id);
         prefetchedMessagesRef.current.delete(unit.id);
 
         if (cached && cached.length > 0) {
             setMessages(cached);
-            userSentMessageRef.current = cached.some(
-                m => m.role === 'user' && !isControlMessage(m.content)
-            );
             const cachedSection = prefetchedSectionRef.current.get(unit.id);
             prefetchedSectionRef.current.delete(unit.id);
             setSection(cachedSection || {
                 current: unit.current_section || 0,
                 total: unit.sections?.length || 0,
             });
-            prefetchNotesForUnit(course.id, unit.id);
             prefetchNextUnit(course, unit);
             return;
         }
 
-        // No cache — fetch from server
         setMessages([]);
         setSection({ current: unit.current_section || 0, total: unit.sections?.length || 0 });
         try {
@@ -250,31 +295,16 @@ export default function BookPanel() {
             setMessages(msgs);
             if (msgs.length === 0) {
                 setSendingChat(true);
-                setStreamingContent('');
-                setStreamingThought('');
-                let fullContent = '';
-                const response = await sendTeacherChatStream(course.id, unit.id, '[START]', (event) => {
-                    if (event.type === 'thinking') {
-                        setStreamingThought((prev) => prev + event.content);
-                    } else if (event.type === 'chunk') {
-                        fullContent += event.content;
-                        setStreamingContent(fullContent);
-                    }
-                });
-                setStreamingContent('');
-                setStreamingThought('');
+                setStatusLine('');
+                const response = await streamTurn(course.id, unit.id, '[START]');
                 setMessages([
                     { id: 'start', role: 'user', content: '[START]', metadata: null, created_at: null },
                     response.message,
                 ]);
                 setSection({ current: response.current_section, total: response.total_sections });
+                await afterTurn(course.id, unit.id, response);
                 setSendingChat(false);
-            } else {
-                userSentMessageRef.current = msgs.some(
-                    m => m.role === 'user' && !isControlMessage(m.content)
-                );
             }
-            prefetchNotesForUnit(course.id, unit.id);
             prefetchNextUnit(course, unit);
         } catch {
             setError('Fehler beim Laden des Chats.');
@@ -283,15 +313,6 @@ export default function BookPanel() {
         }
     };
 
-    // ── Prefetch notes for a unit in background ─────────────────────
-    const prefetchNotesForUnit = (courseId: string, unitId: string) => {
-        if (prefetchedNotesRef.current.has(unitId)) return;
-        generateLessonNotes(courseId, unitId).then(notes => {
-            if (notes.length > 0) prefetchedNotesRef.current.set(unitId, notes);
-        }).catch(() => { });
-    };
-
-    // ── Prefetch next unit greeting ──────────────────────────────────
     const prefetchNextUnit = (course: CourseDetail, currentUnit: CourseUnit) => {
         const sorted = [...course.units].sort((a, b) => a.order_index - b.order_index);
         const curIdx = sorted.findIndex(u => u.id === currentUnit.id);
@@ -299,12 +320,10 @@ export default function BookPanel() {
             u => u.enabled && (u.status === 'pending' || u.status === 'active')
         );
         if (!nextUnit) return;
-        if (prefetchedMessagesRef.current.has(nextUnit.id)) return; // already cached
-        // Fire-and-forget: fetch or create greeting, cache in memory
+        if (prefetchedMessagesRef.current.has(nextUnit.id)) return;
         getUnitMessages(course.id, nextUnit.id).then(msgs => {
             if (msgs.length > 0) {
                 prefetchedMessagesRef.current.set(nextUnit.id, msgs);
-                prefetchNotesForUnit(course.id, nextUnit.id);
             } else {
                 sendTeacherChat(course.id, nextUnit.id, '[START]').then(response => {
                     prefetchedMessagesRef.current.set(nextUnit.id, [
@@ -315,10 +334,35 @@ export default function BookPanel() {
                         current: response.current_section,
                         total: response.total_sections,
                     });
-                    prefetchNotesForUnit(course.id, nextUnit.id);
                 }).catch(() => { });
             }
         }).catch(() => { });
+    };
+
+    // ── Shared stream handler ────────────────────────────────────────
+    const streamTurn = async (courseId: string, unitId: string, message: string) => {
+        setStatusLine('');
+        return sendTeacherChatStream(courseId, unitId, message, (event) => {
+            if (event.type === 'status') {
+                setStatusLine(event.content);
+            } else if (event.type === 'note_saved') {
+                pushToast(event.note);
+            }
+        });
+    };
+
+    const afterTurn = async (
+        courseId: string,
+        unitId: string,
+        response: Awaited<ReturnType<typeof sendTeacherChatStream>>,
+    ) => {
+        setStatusLine('');
+        if (response.quiz_suggested) {
+            try {
+                const questions = await generateUnitQuiz(courseId, unitId);
+                if (questions.length > 0) setInlineQuiz(questions);
+            } catch { /* non-fatal */ }
+        }
     };
 
     // ── Send chat message ────────────────────────────────────────────
@@ -327,9 +371,7 @@ export default function BookPanel() {
         const msg = chatInput.trim();
         setChatInput('');
         setSendingChat(true);
-        setStreamingContent('');
-        setStreamingThought('');
-        userSentMessageRef.current = true;  // invalidate prefetched notes
+        setInlineQuiz(null);
 
         const tempId = `temp-${Date.now()}`;
         setMessages((prev) => [
@@ -338,246 +380,41 @@ export default function BookPanel() {
         ]);
 
         try {
-            let fullContent = '';
-            const response = await sendTeacherChatStream(view.course.id, view.unit.id, msg, (event) => {
-                if (event.type === 'thinking') {
-                    setStreamingThought((prev) => prev + event.content);
-                } else if (event.type === 'chunk') {
-                    fullContent += event.content;
-                    setStreamingContent(fullContent);
-                }
-            });
-            setStreamingContent('');
-            setStreamingThought('');
-            setMessages((prev) => [...prev.filter((m) => m.id !== tempId),
-            { id: tempId, role: 'user', content: msg, metadata: null, created_at: new Date().toISOString() },
-            response.message
+            const response = await streamTurn(view.course.id, view.unit.id, msg);
+            setMessages((prev) => [
+                ...prev.filter((m) => m.id !== tempId),
+                { id: tempId, role: 'user', content: msg, metadata: null, created_at: new Date().toISOString() },
+                response.message,
             ]);
             setSection({ current: response.current_section, total: response.total_sections });
+            await afterTurn(view.course.id, view.unit.id, response);
         } catch {
             setError('Fehler beim Senden der Nachricht.');
             setMessages((prev) => prev.filter((m) => m.id !== tempId));
-            setStreamingContent('');
-            setStreamingThought('');
         } finally {
+            setStatusLine('');
             setSendingChat(false);
             chatInputRef.current?.focus();
         }
     };
 
-    // ── Advance to the next section within the chapter ───────────────
     const handleNextSection = async () => {
         if (view.kind !== 'lesson-chat' || sendingChat) return;
         setSendingChat(true);
-        setStreamingContent('');
-        setStreamingThought('');
-        userSentMessageRef.current = true;
+        setInlineQuiz(null);
         try {
-            let fullContent = '';
-            const response = await sendTeacherChatStream(view.course.id, view.unit.id, '[ABSCHNITT_WEITER]', (event) => {
-                if (event.type === 'thinking') {
-                    setStreamingThought((prev) => prev + event.content);
-                } else if (event.type === 'chunk') {
-                    fullContent += event.content;
-                    setStreamingContent(fullContent);
-                }
-            });
-            setStreamingContent('');
-            setStreamingThought('');
+            const response = await streamTurn(view.course.id, view.unit.id, '[ABSCHNITT_WEITER]');
             setMessages((prev) => [...prev, response.message]);
             setSection({ current: response.current_section, total: response.total_sections });
+            await afterTurn(view.course.id, view.unit.id, response);
         } catch {
             setError('Fehler beim Laden des nächsten Abschnitts.');
-            setStreamingContent('');
-            setStreamingThought('');
         } finally {
+            setStatusLine('');
             setSendingChat(false);
         }
     };
 
-    // True when a note_generated marker exists and no new content
-    // came after it. A section advance ([ABSCHNITT_WEITER]) counts as new
-    // material, so notes can be generated again after moving on.
-    const notesGeneratedForContext = (() => {
-        let lastMarker = -1;
-        let lastContent = -1;
-        messages.forEach((m, i) => {
-            if (m.role === 'note_generated') lastMarker = i;
-            if (m.role === 'user' && (!isControlMessage(m.content) || m.content === '[ABSCHNITT_WEITER]')) lastContent = i;
-        });
-        return lastMarker >= 0 && lastMarker > lastContent;
-    })();
-
-    // ── Record that notes were generated for the current unit ────────
-    const markNotesGenerated = (course: CourseDetail, unit: CourseUnit, noteTitles: string[]) => {
-        setMessages((prev) => [
-            ...prev,
-            {
-                id: `notegen-${Date.now()}`,
-                role: 'note_generated',
-                content: `Notizen generiert: ${noteTitles.join(', ')}`,
-                metadata: null,
-                created_at: new Date().toISOString(),
-            },
-        ]);
-        userSentMessageRef.current = false;
-        recordNotesGenerated(course.id, unit.id, noteTitles).catch(() => { });
-    };
-
-    // ── "Notizen prüfen" → generate notes and open preview ───────────
-    const handlePreviewNotes = async () => {
-        if (view.kind !== 'lesson-chat' || generatingNotes || notesGeneratedForContext) return;
-        setGeneratingNotes(true);
-        setError(null);
-        try {
-            // Use prefetched notes if user didn't add messages
-            const unitId = view.unit.id;
-            const cached = !userSentMessageRef.current ? prefetchedNotesRef.current.get(unitId) : undefined;
-            const notes = cached || await generateLessonNotes(view.course.id, unitId);
-            prefetchedNotesRef.current.delete(unitId);
-            if (notes.length > 0) {
-                markNotesGenerated(view.course, view.unit, notes.map((n) => n.title));
-                setView({
-                    kind: 'note-review',
-                    course: view.course,
-                    unit: view.unit,
-                    notes,
-                    currentIdx: 0,
-                });
-            } else {
-                setError('Keine Notizen generiert. Versuche es nach mehr Konversation erneut.');
-            }
-        } catch {
-            setError('Fehler beim Generieren der Notizen.');
-        } finally {
-            setGeneratingNotes(false);
-        }
-    };
-
-    // ── "Notizen direkt speichern" → generate and save without preview ─
-    const handleGenerateAndSaveNotes = async () => {
-        if (view.kind !== 'lesson-chat' || generatingNotes || notesGeneratedForContext) return;
-        setGeneratingNotes(true);
-        setError(null);
-        try {
-            const unitId = view.unit.id;
-            const cached = !userSentMessageRef.current ? prefetchedNotesRef.current.get(unitId) : undefined;
-            const notes = cached || await generateLessonNotes(view.course.id, unitId);
-            prefetchedNotesRef.current.delete(unitId);
-            if (notes.length === 0) {
-                setError('Keine Notizen generiert. Versuche es nach mehr Konversation erneut.');
-                return;
-            }
-            for (const note of notes) {
-                const folder = await ensureFolderPath(note.folder);
-                await createNote(note.title, note.content, folder.id, note.tag_ids);
-            }
-            loadFolderTree();  // fire-and-forget
-            markNotesGenerated(view.course, view.unit, notes.map((n) => n.title));
-        } catch {
-            setError('Fehler beim Speichern der Notizen.');
-        } finally {
-            setGeneratingNotes(false);
-        }
-    };
-
-    // ── Generate term note (from chat or inline [NOTIZ_ANFRAGE]) ─────
-    const handleGenerateTermNote = async (topicOverride?: string) => {
-        const term = topicOverride || termInput.trim();
-        if (!term || generatingTerm || view.kind !== 'lesson-chat') return;
-        if (!topicOverride) setTermInput('');
-        setGeneratingTerm(true);
-        setError(null);
-        try {
-            const note = await generateTermNote(view.course.id, view.unit.id, term);
-            setView({
-                kind: 'note-review',
-                course: view.course,
-                unit: view.unit,
-                notes: [note],
-                currentIdx: 0,
-            });
-        } catch {
-            setError(`Fehler beim Generieren der Notiz für "${term}".`);
-        } finally {
-            setGeneratingTerm(false);
-        }
-    };
-
-    // ── Accept/Skip note ─────────────────────────────────────────────
-    const handleAcceptNote = async () => {
-        if (view.kind !== 'note-review' || savingNote) return;
-        setSavingNote(true);
-        setError(null);
-        const note = view.notes[view.currentIdx];
-        try {
-            const folder = await ensureFolderPath(note.folder);
-            await createNote(note.title, note.content, folder.id, note.tag_ids);
-            loadFolderTree();  // fire-and-forget — don't block UI
-            advanceNoteReview();
-        } catch {
-            setError('Fehler beim Speichern der Notiz.');
-        } finally {
-            setSavingNote(false);
-        }
-    };
-
-    const handleSkipNote = () => {
-        if (view.kind !== 'note-review') return;
-        advanceNoteReview();
-    };
-
-    const advanceNoteReview = () => {
-        if (view.kind !== 'note-review') return;
-        const nextIdx = view.currentIdx + 1;
-        if (nextIdx < view.notes.length) {
-            setView({ ...view, currentIdx: nextIdx });
-        } else {
-            returnToChat(view.course, view.unit);
-        }
-    };
-
-    // ── Return to chat after note review ─────────────────────────────
-    const returnToChat = async (course: CourseDetail, unit: CourseUnit) => {
-        setMessages([]);
-        setView({ kind: 'lesson-chat', course, unit });
-        try {
-            const msgs = await getUnitMessages(course.id, unit.id);
-            setMessages(msgs);
-            // Restore section state from the (possibly updated) unit
-            const fresh = await getTeacherCourse(course.id);
-            const freshUnit = fresh.units.find((u) => u.id === unit.id);
-            if (freshUnit) {
-                setSection({
-                    current: freshUnit.current_section || 0,
-                    total: freshUnit.sections?.length || 0,
-                });
-            }
-        } catch {
-            setError('Fehler beim Laden des Chats.');
-        }
-    };
-
-    // ── Start quiz ───────────────────────────────────────────────────
-    const handleStartQuiz = async () => {
-        if (view.kind !== 'lesson-chat' || generatingQuiz) return;
-        setGeneratingQuiz(true);
-        setError(null);
-        try {
-            const questions = await generateUnitQuiz(view.course.id, view.unit.id);
-            if (questions.length > 0) {
-                setView({ kind: 'quiz', course: view.course, unit: view.unit, questions });
-            } else {
-                setError('Konnte kein Quiz generieren. Versuche es nach etwas mehr Konversation erneut.');
-            }
-        } catch {
-            setError('Fehler beim Generieren des Quiz.');
-        } finally {
-            setGeneratingQuiz(false);
-        }
-    };
-
-    // ── Is this the last enabled unit awaiting completion? ───────────
     const isLastEnabledUnit = (course: CourseDetail, currentUnit: CourseUnit) => {
         const sorted = [...course.units].sort((a, b) => a.order_index - b.order_index);
         const curIdx = sorted.findIndex(u => u.id === currentUnit.id);
@@ -586,17 +423,12 @@ export default function BookPanel() {
         );
     };
 
-    // ── Complete unit → show celebration with recap ──────────────────
     const handleCompleteUnit = async () => {
         if (view.kind !== 'lesson-chat') return;
         setError(null);
-
         const currentCourse = view.course;
         const currentUnit = view.unit;
-
-        // Mark complete in background — don't block the celebration
         updateCourseUnit(currentCourse.id, currentUnit.id, { status: 'completed' }).catch(() => { });
-
         setRecap(null);
         setLoadingRecap(true);
         setView({ kind: 'lesson-complete', course: currentCourse, unit: currentUnit });
@@ -606,18 +438,15 @@ export default function BookPanel() {
             .finally(() => setLoadingRecap(false));
     };
 
-    // ── Advance to next unit after the celebration screen ────────────
     const handleAdvanceAfterCelebration = async () => {
         if (view.kind !== 'lesson-complete') return;
         const currentCourse = view.course;
         const currentUnit = view.unit;
-
         const sorted = [...currentCourse.units].sort((a, b) => a.order_index - b.order_index);
         const curIdx = sorted.findIndex(u => u.id === currentUnit.id);
         const nextUnit = sorted.slice(curIdx + 1).find(
             u => u.enabled && (u.status === 'pending' || u.status === 'active')
         );
-
         if (nextUnit) {
             await openUnitChat(currentCourse, nextUnit);
         } else {
@@ -631,23 +460,17 @@ export default function BookPanel() {
         }
     };
 
-    // ── Skip unit ────────────────────────────────────────────────────
     const handleSkipUnit = async () => {
         if (view.kind !== 'lesson-chat') return;
         setError(null);
-
         const currentCourse = view.course;
         const currentUnit = view.unit;
-
         const sorted = [...currentCourse.units].sort((a, b) => a.order_index - b.order_index);
         const curIdx = sorted.findIndex(u => u.id === currentUnit.id);
         const nextUnit = sorted.slice(curIdx + 1).find(
             u => u.enabled && (u.status === 'pending' || u.status === 'active')
         );
-
-        // Fire skip in background
         updateCourseUnit(currentCourse.id, currentUnit.id, { status: 'skipped' }).catch(() => { });
-
         if (nextUnit) {
             await openUnitChat(currentCourse, nextUnit);
         } else {
@@ -661,7 +484,6 @@ export default function BookPanel() {
         }
     };
 
-    // ── Delete course ────────────────────────────────────────────────
     const handleDeleteCourse = async (courseId: string) => {
         try {
             await deleteTeacherCourse(courseId);
@@ -671,7 +493,7 @@ export default function BookPanel() {
         }
     };
 
-    // ── Open book summaries ──────────────────────────────────────────
+    // ── Summaries ────────────────────────────────────────────────────
     const handleOpenSummaries = async (course: CourseListItem) => {
         setView({
             kind: 'book-summaries',
@@ -686,7 +508,6 @@ export default function BookPanel() {
         try {
             const data = await getBookSummaries(course.id);
             setSummaryChapters(data.chapters);
-            // Auto-expand first chapter that has a summary
             const firstWithSummary = data.chapters.find(ch => ch.summary);
             if (firstWithSummary) {
                 setExpandedChapters({ [firstWithSummary.id]: true });
@@ -749,23 +570,10 @@ export default function BookPanel() {
     const enabledCount = (chapters: BookChapter[]) =>
         chapters.filter((ch) => enabledChapters[ch.chapter_number] !== false).length;
 
-    // ── Get current unit progress ────────────────────────────────────
     const getUnitProgress = (course: CourseDetail, currentUnit: CourseUnit) => {
         const enabled = course.units.filter((u) => u.enabled);
         const currentIndex = enabled.findIndex((u) => u.id === currentUnit.id);
         return { current: currentIndex + 1, total: enabled.length };
-    };
-
-    // ── Parse [NOTIZ_ANFRAGE: ...] markers from assistant messages ───
-    const extractNoteRequests = (content: string): { cleanContent: string; requests: string[] } => {
-        const regex = /\[NOTIZ_ANFRAGE:\s*(.+?)\]/g;
-        const requests: string[] = [];
-        let match;
-        while ((match = regex.exec(content)) !== null) {
-            requests.push(match[1].trim());
-        }
-        const cleanContent = content.replace(/\s*\[NOTIZ_ANFRAGE:\s*.+?\]/g, '').trim();
-        return { cleanContent, requests };
     };
 
     // ── Render: Books list ───────────────────────────────────────────
@@ -775,7 +583,6 @@ export default function BookPanel() {
 
         return (
             <div className="h-full flex flex-col">
-                {/* Search bar */}
                 <div className="p-4 border-b border-dark-800">
                     <div className="max-w-lg mx-auto">
                         <div className="flex gap-2">
@@ -806,7 +613,6 @@ export default function BookPanel() {
                     </div>
                 </div>
 
-                {/* Courses grid */}
                 <div className="flex-1 overflow-y-auto p-4">
                     {loadingCourses ? (
                         <div className="flex items-center justify-center py-12">
@@ -819,14 +625,13 @@ export default function BookPanel() {
                             </div>
                             <h3 className="text-lg font-semibold text-white mb-2">Bücher interaktiv durcharbeiten</h3>
                             <p className="text-sm text-dark-500 max-w-md mx-auto">
-                                Gib den Titel eines Buches ein. Die KI sucht nach dem Buch,
-                                zeigt dir das Inhaltsverzeichnis und erklärt dir jedes Kapitel
-                                interaktiv — wie ein persönlicher Tutor.
+                                Gib den Titel eines Buches ein. Die KI sucht das Buch, zeigt dir das
+                                Inhaltsverzeichnis und erklärt dir jedes Kapitel interaktiv — Notizen
+                                entstehen automatisch im Hintergrund.
                             </p>
                         </div>
                     ) : (
                         <div className="max-w-2xl mx-auto space-y-6">
-                            {/* Active books */}
                             {activeDraft.length > 0 && (
                                 <div className="space-y-3">
                                     {activeDraft.map((course) => (
@@ -845,7 +650,7 @@ export default function BookPanel() {
                                                     {course.book_authors && course.book_authors.length > 0 && (
                                                         <p className="text-xs text-dark-500 mt-0.5">{course.book_authors.join(', ')}</p>
                                                     )}
-                                                    {course.total_units > 0 && (
+                                                    {course.total_units > 0 && course.enabled_units > 0 && (
                                                         <div className="flex items-center gap-2 mt-2">
                                                             <div className="flex-1 h-1.5 bg-dark-700 rounded-full overflow-hidden">
                                                                 <div
@@ -886,7 +691,6 @@ export default function BookPanel() {
                                 </div>
                             )}
 
-                            {/* Completed books */}
                             {completed.length > 0 && (
                                 <div>
                                     {activeDraft.length > 0 && (
@@ -962,49 +766,30 @@ export default function BookPanel() {
                             </div>
                             <div>
                                 <h3 className="text-lg font-bold text-white">{bookInfo.title}</h3>
-                                <p className="text-sm text-dark-400 mt-1">
-                                    {bookInfo.authors?.join(', ')}
-                                </p>
+                                <p className="text-sm text-dark-400 mt-1">{bookInfo.authors?.join(', ')}</p>
                             </div>
                         </div>
 
                         <div className="space-y-2 text-sm mb-6">
                             {bookInfo.year && (
-                                <div className="flex justify-between text-dark-400">
-                                    <span>Jahr</span>
-                                    <span className="text-white">{bookInfo.year}</span>
-                                </div>
+                                <div className="flex justify-between text-dark-400"><span>Jahr</span><span className="text-white">{bookInfo.year}</span></div>
                             )}
                             {bookInfo.publisher && (
-                                <div className="flex justify-between text-dark-400">
-                                    <span>Verlag</span>
-                                    <span className="text-white">{bookInfo.publisher}</span>
-                                </div>
+                                <div className="flex justify-between text-dark-400"><span>Verlag</span><span className="text-white">{bookInfo.publisher}</span></div>
                             )}
                             {bookInfo.language && (
-                                <div className="flex justify-between text-dark-400">
-                                    <span>Sprache</span>
-                                    <span className="text-white">{bookInfo.language}</span>
-                                </div>
+                                <div className="flex justify-between text-dark-400"><span>Sprache</span><span className="text-white">{bookInfo.language}</span></div>
                             )}
                             {bookInfo.pages && (
-                                <div className="flex justify-between text-dark-400">
-                                    <span>Seiten</span>
-                                    <span className="text-white">{bookInfo.pages}</span>
-                                </div>
+                                <div className="flex justify-between text-dark-400"><span>Seiten</span><span className="text-white">{bookInfo.pages}</span></div>
                             )}
                             {bookInfo.isbn && (
-                                <div className="flex justify-between text-dark-400">
-                                    <span>ISBN</span>
-                                    <span className="text-white font-mono text-xs">{bookInfo.isbn}</span>
-                                </div>
+                                <div className="flex justify-between text-dark-400"><span>ISBN</span><span className="text-white font-mono text-xs">{bookInfo.isbn}</span></div>
                             )}
                         </div>
 
                         {bookInfo.description && (
-                            <p className="text-sm text-dark-400 mb-6 leading-relaxed">
-                                {bookInfo.description}
-                            </p>
+                            <p className="text-sm text-dark-400 mb-6 leading-relaxed">{bookInfo.description}</p>
                         )}
 
                         <div className="flex gap-2">
@@ -1022,10 +807,7 @@ export default function BookPanel() {
                                 <FiX className="w-4 h-4" />
                             </button>
                         </div>
-
-                        {error && (
-                            <p className="mt-3 text-sm text-red-400">{error}</p>
-                        )}
+                        {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
                     </div>
                 </div>
             </div>
@@ -1052,7 +834,6 @@ export default function BookPanel() {
     const renderConfirmToc = () => {
         if (view.kind !== 'confirm-toc') return null;
         const { bookInfo, chapters } = view;
-
         return (
             <div className="h-full overflow-y-auto p-4">
                 <div className="max-w-2xl mx-auto">
@@ -1092,8 +873,7 @@ export default function BookPanel() {
                                     <button
                                         key={i}
                                         onClick={() => toggleChapter(ch.chapter_number)}
-                                        className={`w-full flex items-center gap-2 py-2 text-sm rounded-lg px-2 transition-colors hover:bg-dark-700/50 ${!enabled ? 'opacity-40' : ''
-                                            }`}
+                                        className={`w-full flex items-center gap-2 py-2 text-sm rounded-lg px-2 transition-colors hover:bg-dark-700/50 ${!enabled ? 'opacity-40' : ''}`}
                                         style={{ paddingLeft: `${(ch.level - 1) * 20 + 8}px` }}
                                     >
                                         {enabled ? (
@@ -1104,9 +884,7 @@ export default function BookPanel() {
                                         <span className="text-dark-500 font-mono text-xs w-10 flex-shrink-0 text-left">
                                             {ch.chapter_number}
                                         </span>
-                                        <span className={`text-left ${ch.level === 1 ? 'text-white font-semibold' :
-                                            ch.level === 2 ? 'text-dark-300' : 'text-dark-500'
-                                            }`}>
+                                        <span className={`text-left ${ch.level === 1 ? 'text-white font-semibold' : ch.level === 2 ? 'text-dark-300' : 'text-dark-500'}`}>
                                             {ch.title}
                                         </span>
                                     </button>
@@ -1148,9 +926,10 @@ export default function BookPanel() {
                 ? unit.sections[section.current].title
                 : null;
 
+        const visibleMessages = messages.filter(m => m.role !== 'user' || !isControlMessage(m.content));
+
         return (
             <div className="h-full flex flex-col relative">
-                {/* Unit header */}
                 <div className="px-4 py-3 border-b border-dark-800 bg-dark-900/50">
                     <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3 min-w-0">
@@ -1174,7 +953,9 @@ export default function BookPanel() {
                                         {currentSectionTitle ? ` · ${currentSectionTitle}` : ''}
                                     </p>
                                 ) : (
-                                    <p className="text-[10px] text-dark-500 truncate">{course.title}{course.book_authors && course.book_authors.length > 0 ? ` · ${course.book_authors.join(', ')}` : ''}</p>
+                                    <p className="text-[10px] text-dark-500 truncate">
+                                        {course.title}{course.book_authors && course.book_authors.length > 0 ? ` · ${course.book_authors.join(', ')}` : ''}
+                                    </p>
                                 )}
                             </div>
                         </div>
@@ -1188,18 +969,12 @@ export default function BookPanel() {
                             </button>
                         </div>
                     </div>
-                    {/* Section progress dots / fallback bar */}
                     {hasSections ? (
                         <div className="mt-2 flex items-center gap-1">
                             {Array.from({ length: section.total }).map((_, i) => (
                                 <div
                                     key={i}
-                                    className={`h-1.5 flex-1 rounded-full transition-colors ${i < section.current
-                                        ? 'bg-amber-500'
-                                        : i === section.current
-                                            ? 'bg-amber-400'
-                                            : 'bg-dark-800'
-                                        }`}
+                                    className={`h-1.5 flex-1 rounded-full transition-colors ${i < section.current ? 'bg-amber-500' : i === section.current ? 'bg-amber-400' : 'bg-dark-800'}`}
                                 />
                             ))}
                         </div>
@@ -1213,7 +988,6 @@ export default function BookPanel() {
                     )}
                 </div>
 
-                {/* Learning path overlay */}
                 {showPath && (
                     <LearningPathOverlay
                         units={course.units}
@@ -1225,86 +999,60 @@ export default function BookPanel() {
                     />
                 )}
 
-                {/* Messages */}
                 <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                    {/* Chapter overview — visible at a glance */}
                     <LessonObjectivesCard unit={unit} accent="amber" label="In diesem Kapitel" />
-                    {messages.filter(m => m.role !== 'user' || !isControlMessage(m.content)).map((msg, idx, arr) => {
+                    {visibleMessages.map((msg, idx, arr) => {
                         const isLastAssistant = msg.role === 'assistant' && idx === arr.length - 1;
+                        if (msg.role === 'note_generated') return null;
+                        const { diagrams, checkpoints } = msg.role === 'assistant' ? messageExtras(msg) : { diagrams: [], checkpoints: [] };
                         return (
                             <div
                                 key={msg.id}
                                 ref={isLastAssistant ? lastAssistantRef : undefined}
-                                className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                                className={`chat-message flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                             >
-                                {msg.role === 'note_generated' ? (
-                                    <div className="flex items-center gap-2 px-3 py-2 bg-green-900/20 border border-green-800/30 rounded-lg text-xs text-green-400">
-                                        <FiCheck className="w-3.5 h-3.5" />
-                                        {msg.content}
-                                    </div>
-                                ) : (
-                                    <div
-                                        className={`max-w-[85%] sm:max-w-[78%] px-4 py-3 rounded-2xl text-sm ${msg.role === 'user'
-                                            ? 'bg-amber-600 text-white rounded-br-md'
-                                            : 'bg-dark-900 border border-dark-700 text-dark-100 rounded-bl-md'
-                                            }`}
-                                    >
-                                        {msg.role === 'assistant' ? (
-                                            (() => {
-                                                const { cleanContent, requests } = extractNoteRequests(msg.content);
-                                                return (
-                                                    <>
-                                                        <div className="markdown-content lesson-prose">
-                                                            <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
-                                                                {cleanContent}
-                                                            </ReactMarkdown>
-                                                        </div>
-                                                        {requests.length > 0 && (
-                                                            <div className="mt-3 flex flex-wrap gap-1.5">
-                                                                {requests.map((topic, i) => (
-                                                                    <button
-                                                                        key={i}
-                                                                        onClick={() => handleGenerateTermNote(topic)}
-                                                                        disabled={generatingTerm}
-                                                                        className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600/20 text-amber-300 hover:bg-amber-600/30 text-xs font-medium rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                                                                    >
-                                                                        <FiBookOpen className="w-3.5 h-3.5" />
-                                                                        Notiz erstellen: {topic}
-                                                                    </button>
-                                                                ))}
-                                                            </div>
-                                                        )}
-                                                    </>
-                                                );
-                                            })()
-                                        ) : (
-                                            <p className="whitespace-pre-wrap">{msg.content}</p>
-                                        )}
-                                    </div>
-                                )}
+                                <div
+                                    className={`max-w-[85%] sm:max-w-[78%] px-4 py-3 rounded-2xl text-sm ${msg.role === 'user'
+                                        ? 'bg-amber-600 text-white rounded-br-md'
+                                        : 'bg-dark-900 border border-dark-700 text-dark-100 rounded-bl-md'}`}
+                                >
+                                    {msg.role === 'assistant' ? (
+                                        <>
+                                            <div className="markdown-content lesson-prose">
+                                                <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
+                                                    {msg.content}
+                                                </ReactMarkdown>
+                                            </div>
+                                            {diagrams.map((d, i) => (
+                                                <MermaidDiagram key={i} code={d.code} caption={d.caption} />
+                                            ))}
+                                            {checkpoints.map((q, i) => (
+                                                <div key={i} className="mt-3 flex items-start gap-2 px-3 py-2 rounded-xl bg-amber-600/10 border border-amber-500/20">
+                                                    <FiMessageCircle className="w-3.5 h-3.5 text-amber-300 mt-0.5 flex-shrink-0" />
+                                                    <p className="text-xs text-amber-100">{q}</p>
+                                                </div>
+                                            ))}
+                                        </>
+                                    ) : (
+                                        <p className="whitespace-pre-wrap">{msg.content}</p>
+                                    )}
+                                </div>
                             </div>
                         );
                     })}
 
+                    {inlineQuiz && !sendingChat && (
+                        <div className="flex justify-start">
+                            <div className="w-full max-w-[92%]">
+                                <InlineQuiz questions={inlineQuiz} accent="amber" />
+                            </div>
+                        </div>
+                    )}
+
                     {sendingChat && (
                         <div className="flex justify-start">
                             <div className="bg-dark-800 border border-dark-700 rounded-2xl rounded-bl-md px-4 py-3 max-w-[85%]">
-                                {streamingContent ? (
-                                    <div className="prose prose-invert prose-sm max-w-none text-sm">
-                                        <ReactMarkdown components={markdownComponents} remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>
-                                            {streamingContent}
-                                        </ReactMarkdown>
-                                    </div>
-                                ) : (
-                                    <div className="flex items-center gap-2 text-xs text-dark-500">
-                                        <div className="flex gap-0.5">
-                                            <div className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
-                                            <div className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" style={{ animationDelay: '0.15s' }} />
-                                            <div className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" style={{ animationDelay: '0.3s' }} />
-                                        </div>
-                                        <span>Formuliert Erklärung...</span>
-                                    </div>
-                                )}
+                                <ThinkingStatus status={statusLine} accent="amber" />
                             </div>
                         </div>
                     )}
@@ -1312,15 +1060,6 @@ export default function BookPanel() {
                     <div ref={chatEndRef} />
                 </div>
 
-                {/* Term note input (collapsible) */}
-                <TermNoteBar
-                    termInput={termInput}
-                    setTermInput={setTermInput}
-                    onGenerate={handleGenerateTermNote}
-                    generating={generatingTerm}
-                />
-
-                {/* Chat input */}
                 <div className="p-3 border-t border-dark-800 bg-dark-900/50">
                     <div className="flex gap-2 items-end">
                         <textarea
@@ -1336,147 +1075,40 @@ export default function BookPanel() {
                             placeholder="Frage stellen oder diskutieren..."
                             rows={1}
                             className="flex-1 px-3 py-2.5 bg-dark-800 border border-dark-700 rounded-xl text-white text-sm placeholder-dark-600 focus:outline-none focus:border-amber-500 resize-none min-h-[40px] max-h-[120px]"
-                            style={{ height: 'auto' }}
                         />
                         <button
                             onClick={handleSendMessage}
                             disabled={!chatInput.trim() || sendingChat}
-                            className="p-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+                            className="p-2.5 bg-dark-700 hover:bg-dark-600 text-white rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
+                            title="Nachricht senden"
                         >
                             <FiSend className="w-4 h-4" />
                         </button>
-                    </div>
-                    {/* Action buttons */}
-                    <div className="flex flex-wrap gap-2 mt-2">
-                        <button
-                            onClick={handlePreviewNotes}
-                            disabled={generatingNotes || sendingChat || messages.length < 2 || notesGeneratedForContext}
-                            title={notesGeneratedForContext ? 'Für diesen Stand wurden bereits Notizen erstellt. Stelle eine neue Frage, um weitere zu generieren.' : 'Notizen generieren und vor dem Speichern ansehen'}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600/20 text-green-400 hover:bg-green-600/30 text-xs font-medium rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                        >
-                            {generatingNotes ? (
-                                <div className="w-3 h-3 border-2 border-green-400 border-t-transparent rounded-full animate-spin" />
-                            ) : (
-                                <FiCheck className="w-3.5 h-3.5" />
-                            )}
-                            Notizen prüfen & speichern
-                        </button>
-                        <button
-                            onClick={handleGenerateAndSaveNotes}
-                            disabled={generatingNotes || sendingChat || messages.length < 2 || notesGeneratedForContext}
-                            title={notesGeneratedForContext ? 'Für diesen Stand wurden bereits Notizen erstellt. Stelle eine neue Frage, um weitere zu generieren.' : 'Notizen generieren und sofort ohne Vorschau speichern'}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600/10 text-green-400 hover:bg-green-600/20 text-xs font-medium rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                        >
-                            {generatingNotes ? (
-                                <div className="w-3 h-3 border-2 border-green-400 border-t-transparent rounded-full animate-spin" />
-                            ) : (
-                                <FiFileText className="w-3.5 h-3.5" />
-                            )}
-                            Direkt speichern
-                        </button>
-                        <button
-                            onClick={handleStartQuiz}
-                            disabled={generatingQuiz || sendingChat || messages.length < 2}
-                            title="Kurzes Quiz zum aktuellen Kapitel"
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600/20 text-purple-300 hover:bg-purple-600/30 text-xs font-medium rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                        >
-                            {generatingQuiz ? (
-                                <div className="w-3 h-3 border-2 border-purple-300 border-t-transparent rounded-full animate-spin" />
-                            ) : (
-                                <LuListChecks className="w-3.5 h-3.5" />
-                            )}
-                            Quiz
-                        </button>
-                        {/* Section navigation: walk through the chapter, recap only at the end */}
                         {!onLastSection ? (
                             <button
                                 onClick={handleNextSection}
                                 disabled={sendingChat || messages.length < 2}
-                                title="Zum nächsten Abschnitt dieses Kapitels"
-                                className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                title="Weiter zum nächsten Abschnitt"
+                                className="flex items-center gap-1.5 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white text-sm font-semibold rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
                             >
-                                <FiChevronRight className="w-3.5 h-3.5" />
                                 Weiter
+                                <FiChevronRight className="w-4 h-4" />
                             </button>
                         ) : (
                             <button
                                 onClick={handleCompleteUnit}
                                 disabled={sendingChat || messages.length < 2}
                                 title="Kapitel abschließen"
-                                className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600/20 text-amber-400 hover:bg-amber-600/30 text-xs font-medium rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                className="flex items-center gap-1.5 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white text-sm font-semibold rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
                             >
-                                <FiCheck className="w-3.5 h-3.5" />
-                                Kapitel abschließen
+                                <FiCheck className="w-4 h-4" />
+                                Abschließen
                             </button>
                         )}
                     </div>
                 </div>
-            </div>
-        );
-    };
 
-    // ── Render: Note Review ──────────────────────────────────────────
-    const renderNoteReview = () => {
-        if (view.kind !== 'note-review') return null;
-        const note = view.notes[view.currentIdx];
-        const isLast = view.currentIdx === view.notes.length - 1;
-
-        return (
-            <div className="h-full flex flex-col">
-                {/* Header */}
-                <div className="px-4 py-3 border-b border-dark-800 bg-dark-900/50 flex items-center justify-between">
-                    <div>
-                        <p className="text-xs text-dark-500">
-                            Notiz {view.currentIdx + 1} von {view.notes.length}
-                        </p>
-                        <h3 className="text-sm font-semibold text-white">{note.title}</h3>
-                    </div>
-                    <div className="flex items-center gap-2">
-                        {note.tag_names.length > 0 && (
-                            <div className="flex gap-1 flex-wrap">
-                                {note.tag_names.map((tag, i) => (
-                                    <span key={i} className="px-2 py-0.5 text-[10px] bg-dark-700 text-dark-400 rounded-full">
-                                        {tag}
-                                    </span>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-                </div>
-
-                {/* Folder */}
-                <div className="px-4 py-1.5 border-b border-dark-800 bg-dark-900/30">
-                    <p className="text-[10px] text-dark-500">
-                        Ordner: <span className="text-amber-400">{note.folder}</span>
-                    </p>
-                </div>
-
-                {/* Content */}
-                <div className="flex-1 overflow-y-auto px-6 py-5">
-                    <div className="markdown-content text-sm">
-                        <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
-                            {note.content}
-                        </ReactMarkdown>
-                    </div>
-                </div>
-
-                {/* Actions */}
-                <div className="px-4 py-3 border-t border-dark-800 flex gap-2">
-                    <button
-                        onClick={handleAcceptNote}
-                        disabled={savingNote}
-                        className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-500 text-white text-sm font-medium rounded-xl transition-colors disabled:opacity-50"
-                    >
-                        <FiCheck className="w-4 h-4" />
-                        {savingNote ? 'Speichert...' : 'Akzeptieren'}
-                    </button>
-                    <button
-                        onClick={handleSkipNote}
-                        className="px-4 py-2 bg-dark-700 hover:bg-dark-600 text-dark-300 text-sm rounded-xl transition-colors"
-                    >
-                        {isLast ? 'Überspringen & zurück' : 'Überspringen'}
-                    </button>
-                </div>
+                <NoteToastHost toasts={toasts} accent="amber" onDismiss={dismissToast} />
             </div>
         );
     };
@@ -1499,9 +1131,7 @@ export default function BookPanel() {
                         <span className="text-amber-400 font-medium">{course.title}</span>
                     </p>
                     {course.book_authors && course.book_authors.length > 0 && (
-                        <p className="text-xs text-dark-500 mb-1">
-                            {course.book_authors.join(', ')}
-                        </p>
+                        <p className="text-xs text-dark-500 mb-1">{course.book_authors.join(', ')}</p>
                     )}
                     <p className="text-xs text-dark-500 mb-6">
                         {completedCount} von {totalUnits} Kapiteln abgeschlossen
@@ -1556,7 +1186,6 @@ export default function BookPanel() {
 
         return (
             <div className="h-full flex flex-col">
-                {/* Header */}
                 <div className="px-4 py-3 border-b border-dark-800 bg-dark-900/50">
                     <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3 min-w-0">
@@ -1586,7 +1215,6 @@ export default function BookPanel() {
                     </div>
                 </div>
 
-                {/* Content */}
                 <div className="flex-1 overflow-y-auto">
                     {loadingSummaries ? (
                         <div className="flex items-center justify-center py-12">
@@ -1608,46 +1236,28 @@ export default function BookPanel() {
 
                                 return (
                                     <div key={ch.id} className="group">
-                                        {/* Chapter row */}
                                         <button
                                             onClick={() => hasSummary ? toggleSummaryChapter(ch.id) : canGenerate ? handleGenerateSummary(courseId, ch.id) : undefined}
                                             disabled={!hasSummary && !canGenerate}
-                                            className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors ${hasSummary ? 'hover:bg-dark-800/50 cursor-pointer' :
-                                                canGenerate ? 'hover:bg-dark-800/50 cursor-pointer' :
-                                                    'opacity-40 cursor-default'
-                                                }`}
+                                            className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors ${hasSummary ? 'hover:bg-dark-800/50 cursor-pointer' : canGenerate ? 'hover:bg-dark-800/50 cursor-pointer' : 'opacity-40 cursor-default'}`}
                                             style={{ paddingLeft: `${(ch.level - 1) * 16 + 16}px` }}
                                         >
-                                            {/* Expand/collapse indicator */}
                                             <div className="w-4 h-4 flex-shrink-0 flex items-center justify-center">
                                                 {isGenerating ? (
                                                     <div className="w-3.5 h-3.5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
                                                 ) : hasSummary ? (
-                                                    isExpanded ?
-                                                        <FiChevronDown className="w-3.5 h-3.5 text-amber-400" /> :
-                                                        <FiChevronRight className="w-3.5 h-3.5 text-dark-500" />
+                                                    isExpanded ? <FiChevronDown className="w-3.5 h-3.5 text-amber-400" /> : <FiChevronRight className="w-3.5 h-3.5 text-dark-500" />
                                                 ) : canGenerate ? (
                                                     <FiRefreshCw className="w-3.5 h-3.5 text-dark-600 group-hover:text-amber-400 transition-colors" />
                                                 ) : (
                                                     <div className="w-1.5 h-1.5 rounded-full bg-dark-700" />
                                                 )}
                                             </div>
-
-                                            {/* Status indicator */}
-                                            <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isCompleted ? 'bg-green-500' :
-                                                isActive ? 'bg-amber-400' :
-                                                    'bg-dark-700'
-                                                }`} />
-
-                                            {/* Chapter info */}
+                                            <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isCompleted ? 'bg-green-500' : isActive ? 'bg-amber-400' : 'bg-dark-700'}`} />
                                             <span className="text-dark-500 font-mono text-[10px] w-8 flex-shrink-0">{ch.unit_number}</span>
-                                            <span className={`text-sm flex-1 min-w-0 truncate ${ch.level === 1 ? 'font-semibold text-white' :
-                                                ch.level === 2 ? 'text-dark-300' : 'text-dark-500'
-                                                }`}>
+                                            <span className={`text-sm flex-1 min-w-0 truncate ${ch.level === 1 ? 'font-semibold text-white' : ch.level === 2 ? 'text-dark-300' : 'text-dark-500'}`}>
                                                 {ch.title}
                                             </span>
-
-                                            {/* Summary badge */}
                                             {hasSummary && (
                                                 <span className="text-[9px] text-dark-600 flex-shrink-0">
                                                     {ch.summary_generated_at ? new Date(ch.summary_generated_at).toLocaleDateString('de-DE') : ''}
@@ -1660,7 +1270,6 @@ export default function BookPanel() {
                                             )}
                                         </button>
 
-                                        {/* Expanded summary content */}
                                         {isExpanded && hasSummary && (
                                             <div className="bg-dark-800/30 border-t border-dark-800">
                                                 <div className="px-6 py-5 max-w-3xl mx-auto">
@@ -1698,7 +1307,6 @@ export default function BookPanel() {
     // ── Main render ──────────────────────────────────────────────────
     return (
         <div className="h-full flex flex-col">
-            {/* Header */}
             <div className="flex items-center gap-2 px-3 sm:px-4 py-3 border-b border-dark-800 bg-dark-900/50">
                 <FiBook className="w-4 h-4 text-amber-400 flex-shrink-0" />
                 <h2 className="text-sm font-semibold text-white flex-shrink-0">Bücher</h2>
@@ -1707,7 +1315,6 @@ export default function BookPanel() {
                 </span>
             </div>
 
-            {/* Error bar */}
             {error && view.kind !== 'books' && (
                 <div className="px-4 py-2 bg-red-900/20 border-b border-red-800/30 flex items-center justify-between">
                     <p className="text-xs text-red-400">{error}</p>
@@ -1717,21 +1324,12 @@ export default function BookPanel() {
                 </div>
             )}
 
-            {/* Content */}
             <div className="flex-1 overflow-hidden">
                 {view.kind === 'books' && renderBooksList()}
                 {view.kind === 'confirm-book' && renderConfirmBook()}
                 {view.kind === 'loading-toc' && renderLoadingToc()}
                 {view.kind === 'confirm-toc' && renderConfirmToc()}
                 {view.kind === 'lesson-chat' && renderLessonChat()}
-                {view.kind === 'note-review' && renderNoteReview()}
-                {view.kind === 'quiz' && (
-                    <LessonQuiz
-                        questions={view.questions}
-                        accent="amber"
-                        onClose={() => returnToChat(view.course, view.unit)}
-                    />
-                )}
                 {view.kind === 'lesson-complete' && (
                     <LessonCompleteCelebration
                         unitTitle={view.unit.title}
@@ -1746,62 +1344,6 @@ export default function BookPanel() {
                 {view.kind === 'book-completed' && renderBookCompleted()}
                 {view.kind === 'book-summaries' && renderBookSummaries()}
             </div>
-        </div>
-    );
-}
-
-// ── Term Note Bar (collapsible) ──────────────────────────────────────
-function TermNoteBar({
-    termInput,
-    setTermInput,
-    onGenerate,
-    generating,
-}: {
-    termInput: string;
-    setTermInput: (v: string) => void;
-    onGenerate: () => void;
-    generating: boolean;
-}) {
-    const [expanded, setExpanded] = useState(false);
-
-    return (
-        <div className="border-t border-dark-800">
-            <button
-                onClick={() => setExpanded(!expanded)}
-                className="w-full flex items-center justify-between px-3 py-1.5 text-[10px] text-dark-500 hover:text-dark-300 transition-colors"
-            >
-                <span className="flex items-center gap-1">
-                    <FiBookOpen className="w-3 h-3" />
-                    Einzelne Notiz zu einem Begriff
-                </span>
-                {expanded ? <FiChevronDown className="w-3 h-3" /> : <FiChevronUp className="w-3 h-3" />}
-            </button>
-            {expanded && (
-                <div className="px-3 pb-2">
-                    <div className="flex gap-1.5">
-                        <input
-                            type="text"
-                            value={termInput}
-                            onChange={(e) => setTermInput(e.target.value)}
-                            onKeyDown={(e) => e.key === 'Enter' && onGenerate()}
-                            placeholder="z.B. Habit Loop, Growth Mindset..."
-                            className="flex-1 px-2.5 py-1.5 bg-dark-800 border border-dark-700 rounded-lg text-white text-xs placeholder-dark-600 focus:outline-none focus:border-amber-500 min-w-0"
-                        />
-                        <button
-                            onClick={onGenerate}
-                            disabled={!termInput.trim() || generating}
-                            className="px-2.5 py-1.5 bg-amber-600 hover:bg-amber-500 text-white text-xs rounded-lg transition-colors disabled:opacity-50 flex items-center gap-1"
-                        >
-                            {generating ? (
-                                <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                            ) : (
-                                <FiBookOpen className="w-3 h-3" />
-                            )}
-                            Notiz
-                        </button>
-                    </div>
-                </div>
-            )}
         </div>
     );
 }

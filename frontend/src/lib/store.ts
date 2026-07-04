@@ -131,8 +131,15 @@ export const useStore = create<AppState>((set, get) => ({
   setActiveAgentSession: (session) => set({ activeAgentSession: session }),
 
   // UI
-  activeView: 'agent',
-  setActiveView: (view) => set({ activeView: view }),
+  activeView: (typeof window !== 'undefined'
+    ? (localStorage.getItem('brain_active_view') as AppState['activeView'] | null)
+    : null) || 'agent',
+  setActiveView: (view) => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('brain_active_view', view);
+    }
+    set({ activeView: view });
+  },
   sidebarOpen: typeof window !== 'undefined' ? window.innerWidth >= 1024 : true,
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
 }));

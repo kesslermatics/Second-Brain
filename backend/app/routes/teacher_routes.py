@@ -30,6 +30,7 @@ from app.services.teacher_service import (
     generate_lesson_sections,
     get_relevant_knowledge,
     get_existing_note_titles,
+    edit_curriculum,
 )
 from app.services.book_service import generate_chapter_summary
 from app.services.teacher_agent import run_teacher_agent
@@ -312,6 +313,78 @@ async def teacher_generate_curriculum(
     await db.refresh(course)
 
     # Return full course with units
+    return await get_course(str(course.id), db, current_user)
+
+
+@router.post("/courses/{course_id}/edit-curriculum")
+async def teacher_edit_curriculum(
+    course_id: str,
+    data: dict,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Revise a draft course's curriculum via a free-text chat instruction.
+
+    Only allowed while the course is still a draft (not yet started). Replaces
+    the course's units with the revised set and returns the updated course.
+    """
+    instruction = (data.get("instruction") or "").strip()
+    if not instruction:
+        raise HTTPException(status_code=400, detail="Instruction required")
+
+    result = await db.execute(
+        select(Course)
+        .options(selectinload(Course.units))
+        .where(Course.id == course_id, Course.user_id == current_user.id)
+    )
+    course = result.scalars().first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    if course.status != "draft":
+        raise HTTPException(status_code=400, detail="Nur Entwürfe können angepasst werden")
+
+    # Build the current curriculum shape from the stored units
+    current = {
+        "title": course.title,
+        "description": course.description or "",
+        "units": [
+            {
+                "unit_number": u.unit_number,
+                "title": u.title,
+                "description": u.description or "",
+                "learning_objectives": u.learning_objectives or [],
+                "level": u.level,
+            }
+            for u in sorted(course.units, key=lambda x: x.order_index)
+        ],
+    }
+
+    revised = await edit_curriculum(current, instruction)
+    if not revised.get("units"):
+        raise HTTPException(status_code=500, detail="Konnte den Lehrplan nicht anpassen")
+
+    # Replace units
+    for u in list(course.units):
+        await db.delete(u)
+    await db.flush()
+
+    course.title = revised.get("title", course.title)
+    course.description = revised.get("description", course.description)
+    for idx, unit_data in enumerate(revised["units"]):
+        unit = CourseUnit(
+            course_id=course.id,
+            unit_number=unit_data.get("unit_number", str(idx + 1)),
+            title=unit_data.get("title", f"Lektion {idx + 1}"),
+            description=unit_data.get("description", ""),
+            learning_objectives=unit_data.get("learning_objectives", []),
+            level=unit_data.get("level", 1),
+            enabled=True,
+            status="pending",
+            order_index=idx,
+        )
+        db.add(unit)
+
+    await db.commit()
     return await get_course(str(course.id), db, current_user)
 
 
@@ -735,6 +808,11 @@ async def unit_chat_stream(
         if next_title:
             subject_block += f'\nNÄCHSTES THEMA: "{next_title}"'
 
+    # Where teacher-generated notes should live by default
+    default_folder = (
+        f"Bücher/{course.title}" if is_book else f"Kurse/{course.title}"
+    )
+
     async def event_stream():
         full_response_parts = []
         agent_advanced = False
@@ -748,23 +826,29 @@ async def unit_chat_stream(
             current_section=current_section_idx,
             chat_history=chat_history,
             user_message=user_message,
+            default_folder=default_folder,
         ):
             etype = event.get("type")
             if etype == "thinking":
+                # Raw reasoning — not shown in the UI, but forwarded for completeness.
                 yield f"data: {json.dumps({'type': 'thinking', 'content': event['content']}, ensure_ascii=False)}\n\n"
+            elif etype == "status":
+                yield f"data: {json.dumps({'type': 'status', 'content': event['content']}, ensure_ascii=False)}\n\n"
             elif etype == "chunk":
                 full_response_parts.append(event["content"])
                 yield f"data: {json.dumps({'type': 'chunk', 'content': event['content']}, ensure_ascii=False)}\n\n"
-            elif etype == "tool_call":
-                yield f"data: {json.dumps({'type': 'tool_call', 'content': event['content']}, ensure_ascii=False)}\n\n"
             elif etype == "quiz_suggested":
                 yield f"data: {json.dumps({'type': 'quiz_suggested'}, ensure_ascii=False)}\n\n"
-            elif etype == "note_proposal":
-                yield f"data: {json.dumps({'type': 'note_proposal', 'note': event['note']}, ensure_ascii=False)}\n\n"
+            elif etype == "note_saved":
+                yield f"data: {json.dumps({'type': 'note_saved', 'note': event['note']}, ensure_ascii=False)}\n\n"
             elif etype == "difficulty":
                 yield f"data: {json.dumps({'type': 'difficulty', 'level': event.get('level')}, ensure_ascii=False)}\n\n"
             elif etype == "understanding":
                 yield f"data: {json.dumps({'type': 'understanding', 'concept': event.get('concept'), 'status': event.get('status')}, ensure_ascii=False)}\n\n"
+            elif etype == "checkpoint":
+                yield f"data: {json.dumps({'type': 'checkpoint', 'question': event.get('question', '')}, ensure_ascii=False)}\n\n"
+            elif etype == "diagram":
+                yield f"data: {json.dumps({'type': 'diagram', 'code': event.get('code', ''), 'caption': event.get('caption', '')}, ensure_ascii=False)}\n\n"
             elif etype == "advance_section":
                 agent_advanced = True
             elif etype == "done":
@@ -772,15 +856,40 @@ async def unit_chat_stream(
 
         full_text = "".join(full_response_parts).strip()
         quiz_suggested = bool(collected_final.get("quiz_suggested"))
-        note_proposals = collected_final.get("note_proposals", [])
+        saved_notes = collected_final.get("saved_notes", [])
+        understanding = collected_final.get("understanding", [])
+        diagrams = collected_final.get("diagrams", [])
+        checkpoints = collected_final.get("checkpoints", [])
 
-        # Persist: assistant message + advance section if the model chose to
+        # Persist: assistant message (with any diagrams/checkpoints as metadata) +
+        # advance section if the model chose to. Notes were already saved live by
+        # the agent, so we just record a marker for them.
         new_section_idx = current_section_idx
+        msg_metadata = {}
+        if diagrams:
+            msg_metadata["diagrams"] = diagrams
+        if checkpoints:
+            msg_metadata["checkpoints"] = checkpoints
+        if understanding:
+            msg_metadata["understanding"] = understanding
+
         async with async_session() as save_db:
             assistant_msg = CourseMessage(
-                course_id=course.id, unit_id=unit.id, role="assistant", content=full_text,
+                course_id=course.id, unit_id=unit.id, role="assistant",
+                content=full_text, metadata_=msg_metadata or None,
             )
             save_db.add(assistant_msg)
+
+            # Record a note_generated marker so the "already saved" logic still works
+            if saved_notes:
+                titles = [n.get("title", "") for n in saved_notes if n.get("title")]
+                if titles:
+                    marker = CourseMessage(
+                        course_id=course.id, unit_id=unit.id, role="note_generated",
+                        content=f"Notizen automatisch gespeichert: {', '.join(titles)}",
+                        metadata_={"note_titles": titles, "auto": True},
+                    )
+                    save_db.add(marker)
 
             if agent_advanced and sections_list and current_section_idx < len(sections_list) - 1:
                 fresh_unit = await save_db.get(CourseUnit, unit.id)
@@ -804,7 +913,10 @@ async def unit_chat_stream(
             "total_sections": total,
             "is_last_section": is_last,
             "quiz_suggested": quiz_suggested,
-            "note_proposals": note_proposals,
+            "saved_notes": saved_notes,
+            "diagrams": diagrams,
+            "checkpoints": checkpoints,
+            "understanding": understanding,
         }, ensure_ascii=False)
         yield f"data: {done_data}\n\n"
 

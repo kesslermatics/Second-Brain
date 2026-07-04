@@ -27,9 +27,17 @@ def get_client() -> genai.Client:
 
 
 # ── Model constants ───────────────────────────────────────────────────
-
+# FLASH_MODEL: ultra-cheap tier for trivial tasks (vision, tag/link suggestion,
+#   chat titles, the tutor's "thinking" status line).
+# PRO_MODEL:   the primary high-quality reasoning model used by the teacher,
+#   the agentic workspace, the book service and RAG/summaries.
+#
+# Model choice (2026-07): an A/B eval (see backend/eval_teacher_models.py) showed
+# gemini-3.5-flash matches gemini-3.1-pro-preview on didactic quality while being
+# ~1.4x faster and ~74% cheaper (far fewer thinking tokens). It also thinks and
+# grounds. We therefore use it as the primary model everywhere PRO_MODEL is used.
 FLASH_MODEL = "gemini-3-flash-preview"
-PRO_MODEL = "gemini-3.1-pro-preview"
+PRO_MODEL = "gemini-3.5-flash"
 
 
 async def generate(prompt: str, model: str = None, system_instruction: str = None, temperature: float = None, tools=None) -> str:

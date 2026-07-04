@@ -2,23 +2,33 @@
 Agentic Teacher — a true function-calling tutor.
 
 Unlike the legacy prompt pipeline (one prompt in, one text out), this runs a
-multi-turn tool loop with gemini-3.1-pro-preview. The model itself decides —
+multi-turn tool loop with the primary reasoning model. The model itself decides —
 autonomously, mid-conversation — when to:
   - search the student's existing Second Brain notes (search_my_notes)
   - offer a short comprehension quiz (propose_quiz)
   - adjust the difficulty / pace of the upcoming material (set_difficulty)
   - flag a concept the student struggles with or has mastered (mark_understanding)
-  - save atomic notes for what was just learned (save_note)
+  - SILENTLY save an atomic note for what was just learned (save_note)
+  - SILENTLY extend an existing note instead of duplicating it (update_note)
+  - create a folder to organise notes (create_folder)
+  - throw in a light inline check-in question (ask_checkpoint)
+  - draw a small diagram when the topic is clearly structural (draw_diagram)
   - advance to the next section (advance_section)
 
-Streaming SSE events (compatible with the existing frontend):
-  {"type": "thinking", "content": ...}     thought summaries
+Notes are now persisted immediately and in the background — there is no review
+screen. The frontend only gets a lightweight "note_saved" event so it can show
+a small animated toast.
+
+Streaming SSE events (consumed by the frontend):
+  {"type": "thinking", "content": ...}     raw thought summaries (unused in UI)
+  {"type": "status", "content": ...}        short German "tutor is thinking" line
   {"type": "chunk", "content": ...}         answer text
-  {"type": "tool_call", "content": ...}     human-readable tool step
   {"type": "quiz_suggested"}                model wants to offer a quiz
-  {"type": "note_proposal", "note": {...}}  a note the model proposes to save
+  {"type": "note_saved", "note": {...}}     a note was saved/updated in the background
   {"type": "difficulty", "level": ...}      difficulty change
   {"type": "understanding", ...}            concept mastery signal
+  {"type": "checkpoint", "question": ...}   inline check-in question
+  {"type": "diagram", "code": ...}          a mermaid diagram to render
   {"type": "advance_section"}               model advanced the section
   {"type": "done", ...}                     final event
 """
@@ -32,6 +42,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.ai_service import get_client, PRO_MODEL
 from app.services.teacher_service import (
     get_relevant_knowledge, _build_sections_block, FORMATTING_RULES, _current_year,
+    save_atomic_note, update_atomic_note, summarize_thinking_status,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,7 +58,8 @@ def _teacher_tools() -> list:
         description=(
             "Durchsuche die bestehenden Notizen des Studenten (sein Second Brain). "
             "Nutze dies, wenn es hilft an Vorwissen anzuknüpfen, Dopplungen zu vermeiden "
-            "oder zu sehen was er zum Thema schon festgehalten hat."
+            "oder zu sehen was er zum Thema schon festgehalten hat. Gibt auch note_id "
+            "zurück — die brauchst du, wenn du mit update_note eine Notiz ergänzen willst."
         ),
         parameters={
             "type": "object",
@@ -106,9 +118,11 @@ def _teacher_tools() -> list:
     save_note = types.FunctionDeclaration(
         name="save_note",
         description=(
-            "Schlage eine atomare Notiz zum gerade Gelernten vor (wird dem Studenten zum Speichern "
-            "angeboten). Nutze dies wenn ein in sich abgeschlossenes Konzept behandelt wurde und es "
-            "sich lohnt, es dauerhaft festzuhalten. Prüfe vorher mit search_my_notes auf Dopplungen."
+            "Speichere SOFORT und im Hintergrund eine atomare Notiz zum gerade Gelernten "
+            "(kein Bestätigungsschritt — sie wird direkt im Second Brain des Studenten abgelegt). "
+            "Nutze dies eigenständig, wenn ein in sich abgeschlossenes Konzept behandelt wurde und "
+            "es sich lohnt, es dauerhaft festzuhalten. Prüfe VORHER mit search_my_notes auf Dopplungen — "
+            "wenn es das Konzept schon als Notiz gibt, nutze stattdessen update_note."
         ),
         parameters={
             "type": "object",
@@ -116,8 +130,73 @@ def _teacher_tools() -> list:
                 "title": {"type": "string", "description": "Der Begriff / das Konzept als Titel"},
                 "content": {"type": "string", "description": "Markdown-Inhalt der atomaren Notiz"},
                 "tags": {"type": "array", "items": {"type": "string"}},
+                "folder": {"type": "string", "description": "Optionaler Ordnerpfad, z.B. 'Kurse/Lineare Algebra'"},
             },
             "required": ["title", "content"],
+        },
+    )
+
+    update_note = types.FunctionDeclaration(
+        name="update_note",
+        description=(
+            "Ergänze oder überarbeite eine BESTEHENDE Notiz, statt eine neue anzulegen. Nutze dies, "
+            "wenn search_my_notes ergeben hat, dass es zum Konzept schon eine Notiz gibt — so vermeidest "
+            "du Dopplungen und baust das Wissen des Studenten sauber aus. Erfolgt sofort im Hintergrund."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "note_id": {"type": "string", "description": "Die ID der bestehenden Notiz (aus search_my_notes)"},
+                "content": {"type": "string", "description": "Neuer/ergänzender Markdown-Inhalt"},
+                "append": {"type": "boolean", "description": "true = an bestehenden Inhalt anhängen, false = ersetzen"},
+            },
+            "required": ["note_id", "content"],
+        },
+    )
+
+    create_folder = types.FunctionDeclaration(
+        name="create_folder",
+        description=(
+            "Lege einen Ordner (Pfad) im Second Brain an, um Notizen sauber zu organisieren. "
+            "Ordner werden bei save_note ohnehin automatisch erstellt — nutze dies nur, wenn du "
+            "explizit eine Struktur vorbereiten willst."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {"path": {"type": "string", "description": "Ordnerpfad, z.B. 'Kurse/Thema/Unterthema'"}},
+            "required": ["path"],
+        },
+    )
+
+    ask_checkpoint = types.FunctionDeclaration(
+        name="ask_checkpoint",
+        description=(
+            "Wirf eine EINZELNE, beiläufige Verständnisfrage mitten in die Erklärung ein — leichter als "
+            "ein Quiz, um den Studenten aktiv zu halten. Er kann antworten ODER einfach weitermachen. "
+            "Nutze dies mit Fingerspitzengefühl, nicht in jeder Nachricht."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {"question": {"type": "string", "description": "Die kurze Frage an den Studenten"}},
+            "required": ["question"],
+        },
+    )
+
+    draw_diagram = types.FunctionDeclaration(
+        name="draw_diagram",
+        description=(
+            "Zeichne ein kleines Diagramm, WENN das Thema klar strukturell ist (Abläufe, Hierarchien, "
+            "Zeitachsen, Beziehungen). Nutze dies NUR, wenn ein Diagramm den Inhalt wirklich klarer macht — "
+            "nicht bei abstrakten/unstrukturierten Themen. Verwende gültige, EINFACHE Mermaid-Syntax "
+            "(flowchart TD / sequenceDiagram). Halte es klein und übersichtlich."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "code": {"type": "string", "description": "Gültiger Mermaid-Code (z.B. 'flowchart TD; A-->B')"},
+                "caption": {"type": "string", "description": "Kurze Bildunterschrift"},
+            },
+            "required": ["code"],
         },
     )
 
@@ -131,8 +210,9 @@ def _teacher_tools() -> list:
     )
 
     return [types.Tool(function_declarations=[
-        search_my_notes, propose_quiz, set_difficulty,
-        mark_understanding, save_note, advance_section,
+        search_my_notes, propose_quiz, set_difficulty, mark_understanding,
+        save_note, update_note, create_folder, ask_checkpoint, draw_diagram,
+        advance_section,
     ])]
 
 
@@ -145,10 +225,14 @@ Du unterrichtest wie ein echter, kluger Lehrer — nicht wie ein Textgenerator:
 - Du beobachtest, wie gut er mitkommt, und passt Tempo/Tiefe an (`set_difficulty`). Wenn er strauchelt, erklärst du einfacher und mit mehr Beispielen; wenn er schnell versteht, gehst du tiefer.
 - Du hältst mit `mark_understanding` fest, was sitzt und was nicht.
 - Du wirfst EIGENSTÄNDIG kurze Verständnis-Quizze ein (`propose_quiz`), wenn ein Baustein sitzt — mit Fingerspitzengefühl, nicht ständig.
-- Wenn ein abgeschlossenes Konzept es wert ist, festgehalten zu werden, schlägst du mit `save_note` eine atomare Notiz vor. Prüfe vorher mit `search_my_notes`, ob es das schon gibt — vermeide Dopplungen.
+- Du hältst gelerntes Wissen EIGENSTÄNDIG und STILL als Notizen fest: Wenn ein abgeschlossenes Konzept es wert ist, nutze `save_note` (es wird sofort und ohne Rückfrage gespeichert). Prüfe VORHER mit `search_my_notes`, ob es das schon gibt — wenn ja, ergänze die bestehende Notiz mit `update_note` statt eine neue anzulegen. Du entscheidest selbst, was festgehalten wird — der Student muss nichts bestätigen.
+- Du wirfst hin und wieder eine beiläufige Zwischenfrage ein (`ask_checkpoint`), um den Studenten aktiv zu halten.
+- Bei klar strukturierten Themen (Abläufe, Hierarchien, Zeitachsen) kannst du ein kleines Diagramm zeichnen (`draw_diagram`) — aber nur, wenn es wirklich hilft.
 - Du gehst mit `advance_section` zum nächsten Abschnitt über, wenn der aktuelle sitzt.
 
 ABSCHNITTSWEISES LEHREN: Behandle immer nur den aktuell markierten Abschnitt — substantiell, mit Beispiel (in der Regel 2-4 Absätze), fokussiert auf dieses eine Teilkonzept. Wirf nicht die ganze Lektion auf einmal raus.
+
+RECALL: Ab und zu (nicht immer) bittest du den Studenten am Ende eines Abschnitts, das eben Gelernte in einem Satz selbst zusammenzufassen — das festigt das Wissen. Er kann aber auch einfach weitermachen.
 
 SPEZIAL-NACHRICHTEN:
 - "[START]": Der Student hat die Lektion/das Kapitel gerade geöffnet. Steige mit einem kurzen, neugierig machenden Hook ein (1-2 Sätze), dann erkläre den ERSTEN Abschnitt substantiell. Keine Begrüßungsfloskeln.
@@ -156,6 +240,7 @@ SPEZIAL-NACHRICHTEN:
 
 WICHTIG:
 - Du kannst mehrere Tools nacheinander nutzen, bevor du antwortest. Der Text, den du schreibst, ist deine eigentliche Erklärung an den Studenten.
+- Erwähne die Tools NICHT im Fließtext (schreibe nicht "ich speichere jetzt eine Notiz") — das passiert still im Hintergrund und wird dem Studenten separat angezeigt.
 - Bei mathematischen Themen: LaTeX ($...$ inline, $$...$$ als Block). Bei nicht-mathematischen Themen keine Formeln.
 
 {FORMATTING_RULES}
@@ -195,6 +280,7 @@ async def run_teacher_agent(
     current_section: int,
     chat_history: list[dict],
     user_message: str,
+    default_folder: str | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Run the agentic teaching loop, yielding SSE-compatible events."""
     client = get_client()
@@ -223,20 +309,17 @@ async def run_teacher_agent(
     max_rounds = 8
     collected = {
         "quiz_suggested": False,
-        "note_proposals": [],
+        "saved_notes": [],
         "difficulty": None,
         "understanding": [],
+        "checkpoints": [],
+        "diagrams": [],
         "advance": False,
     }
 
-    step_labels = {
-        "search_my_notes": "Durchsuche deine Notizen",
-        "propose_quiz": "Schlägt ein Quiz vor",
-        "set_difficulty": "Passt Schwierigkeit an",
-        "mark_understanding": "Merkt sich Verständnis",
-        "save_note": "Schlägt Notiz vor",
-        "advance_section": "Nächster Abschnitt",
-    }
+    # Track the latest thinking text so we can turn it into a status line before
+    # a tool round runs.
+    latest_thought = ""
 
     for round_num in range(max_rounds + 1):
         function_calls = []
@@ -254,6 +337,7 @@ async def run_teacher_agent(
                             for part in cand.content.parts:
                                 all_parts.append(part)
                                 if getattr(part, "thought", False) and getattr(part, "text", None):
+                                    latest_thought += part.text
                                     yield {"type": "thinking", "content": part.text}
                                 elif getattr(part, "text", None) and not getattr(part, "function_call", None):
                                     text_parts.append(part.text)
@@ -275,6 +359,7 @@ async def run_teacher_agent(
                         function_calls.append(part.function_call)
                     elif getattr(part, "text", None):
                         if getattr(part, "thought", False):
+                            latest_thought += part.text
                             yield {"type": "thinking", "content": part.text}
                         else:
                             text_parts.append(part.text)
@@ -292,24 +377,49 @@ async def run_teacher_agent(
         for fc in function_calls:
             name = fc.name
             args = dict(fc.args) if fc.args else {}
-            yield {"type": "tool_call", "content": step_labels.get(name, name)}
 
-            result = await _execute_teacher_tool(name, args, user_id, db, collected)
+            # Emit a short, warm German status line (Flash-powered, one at a time).
+            # Sequential on the critical path — as requested; we evaluate later.
+            status = await summarize_thinking_status(
+                thinking_text=latest_thought, tool_name=name, tool_args=args,
+            )
+            latest_thought = ""
+            yield {"type": "status", "content": status}
+
+            result = await _execute_teacher_tool(name, args, user_id, db, collected, default_folder)
 
             # Emit side-channel events for the frontend
             if name == "propose_quiz":
                 collected["quiz_suggested"] = True
                 yield {"type": "quiz_suggested", "reason": args.get("reason", "")}
             elif name == "save_note":
-                note = {"title": args.get("title", ""), "content": args.get("content", ""), "tags": args.get("tags", [])}
-                collected["note_proposals"].append(note)
-                yield {"type": "note_proposal", "note": note}
+                if result.get("note_id"):
+                    saved = {"note_id": result["note_id"], "title": result.get("title", ""), "folder": result.get("folder", ""), "action": "created"}
+                    collected["saved_notes"].append(saved)
+                    yield {"type": "note_saved", "note": saved}
+            elif name == "update_note":
+                if result.get("note_id"):
+                    saved = {"note_id": result["note_id"], "title": result.get("title", ""), "action": "updated"}
+                    collected["saved_notes"].append(saved)
+                    yield {"type": "note_saved", "note": saved}
             elif name == "set_difficulty":
                 collected["difficulty"] = args.get("level")
                 yield {"type": "difficulty", "level": args.get("level"), "reason": args.get("reason", "")}
             elif name == "mark_understanding":
-                collected["understanding"].append({"concept": args.get("concept"), "status": args.get("status")})
-                yield {"type": "understanding", "concept": args.get("concept"), "status": args.get("status")}
+                u = {"concept": args.get("concept"), "status": args.get("status")}
+                collected["understanding"].append(u)
+                yield {"type": "understanding", **u}
+            elif name == "ask_checkpoint":
+                q = args.get("question", "")
+                if q:
+                    collected["checkpoints"].append(q)
+                    yield {"type": "checkpoint", "question": q}
+            elif name == "draw_diagram":
+                code = args.get("code", "")
+                if code:
+                    d = {"code": code, "caption": args.get("caption", "")}
+                    collected["diagrams"].append(d)
+                    yield {"type": "diagram", **d}
             elif name == "advance_section":
                 collected["advance"] = True
                 yield {"type": "advance_section"}
@@ -321,7 +431,10 @@ async def run_teacher_agent(
     yield {"type": "done", **collected}
 
 
-async def _execute_teacher_tool(name: str, args: dict, user_id: str, db: AsyncSession, collected: dict) -> dict:
+async def _execute_teacher_tool(
+    name: str, args: dict, user_id: str, db: AsyncSession, collected: dict,
+    default_folder: str | None = None,
+) -> dict:
     """Execute a teacher tool call and return a result dict fed back to the model."""
     try:
         if name == "search_my_notes":
@@ -334,7 +447,31 @@ async def _execute_teacher_tool(name: str, args: dict, user_id: str, db: AsyncSe
         elif name == "mark_understanding":
             return {"status": "recorded", "concept": args.get("concept"), "state": args.get("status")}
         elif name == "save_note":
-            return {"status": "proposed", "message": "Die Notiz wurde dem Studenten zum Speichern vorgeschlagen (noch nicht gespeichert)."}
+            res = await save_atomic_note(
+                user_id, db,
+                title=args.get("title", "Notiz"),
+                content=args.get("content", ""),
+                folder_path=args.get("folder") or default_folder,
+                tags=args.get("tags", []),
+            )
+            return {"status": "saved", **res}
+        elif name == "update_note":
+            res = await update_atomic_note(
+                user_id, db,
+                note_id=args.get("note_id", ""),
+                content=args.get("content"),
+                append=bool(args.get("append", True)),
+            )
+            return {"status": "updated", **res}
+        elif name == "create_folder":
+            from app.services.teacher_service import _ensure_folder
+            folder = await _ensure_folder(user_id, db, args.get("path", ""))
+            await db.commit()
+            return {"status": "created", "folder": folder.path if folder else args.get("path", "")}
+        elif name == "ask_checkpoint":
+            return {"status": "asked", "message": "Die Zwischenfrage wird dem Studenten angezeigt."}
+        elif name == "draw_diagram":
+            return {"status": "drawn", "message": "Das Diagramm wird dem Studenten angezeigt."}
         elif name == "advance_section":
             return {"status": "advanced"}
         return {"error": f"Unbekanntes Tool: {name}"}

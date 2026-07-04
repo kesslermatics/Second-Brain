@@ -464,21 +464,46 @@ export const sendTeacherChat = async (courseId: string, unitId: string, message:
   return data;
 };
 
-export interface TeacherNoteProposal {
+export interface TeacherSavedNote {
+  note_id: string;
   title: string;
-  content: string;
-  tags?: string[];
+  folder?: string;
+  action: 'created' | 'updated';
+}
+
+export interface TeacherDiagram {
+  code: string;
+  caption?: string;
+}
+
+export interface TeacherUnderstanding {
+  concept: string;
+  status: string;
 }
 
 export type TeacherStreamEvent =
   | { type: 'thinking'; content: string }
+  | { type: 'status'; content: string }
   | { type: 'chunk'; content: string }
-  | { type: 'tool_call'; content: string }
   | { type: 'quiz_suggested' }
-  | { type: 'note_proposal'; note: TeacherNoteProposal }
+  | { type: 'note_saved'; note: TeacherSavedNote }
   | { type: 'difficulty'; level: string }
   | { type: 'understanding'; concept: string; status: string }
-  | { type: 'done'; message_id: string; sections: unknown[]; current_section: number; total_sections: number; is_last_section: boolean; quiz_suggested?: boolean; note_proposals?: TeacherNoteProposal[] };
+  | { type: 'checkpoint'; question: string }
+  | { type: 'diagram'; code: string; caption?: string }
+  | {
+      type: 'done';
+      message_id: string;
+      sections: unknown[];
+      current_section: number;
+      total_sections: number;
+      is_last_section: boolean;
+      quiz_suggested?: boolean;
+      saved_notes?: TeacherSavedNote[];
+      diagrams?: TeacherDiagram[];
+      checkpoints?: string[];
+      understanding?: TeacherUnderstanding[];
+    };
 
 export const sendTeacherChatStream = async (
   courseId: string,
@@ -538,7 +563,9 @@ export const sendTeacherChatStream = async (
       id: done?.message_id || `stream-${Date.now()}`,
       role: 'assistant',
       content: fullContent,
-      metadata: null,
+      metadata: (done && (done.diagrams?.length || done.checkpoints?.length))
+        ? { diagrams: done.diagrams || [], checkpoints: done.checkpoints || [] }
+        : null,
       created_at: new Date().toISOString(),
     },
     sections: (done?.sections || []) as TeacherChatResponse['sections'],
@@ -546,8 +573,15 @@ export const sendTeacherChatStream = async (
     total_sections: done?.total_sections ?? 0,
     is_last_section: done?.is_last_section ?? false,
     quiz_suggested: done?.quiz_suggested ?? false,
-    note_proposals: done?.note_proposals ?? [],
+    saved_notes: done?.saved_notes ?? [],
+    diagrams: done?.diagrams ?? [],
+    checkpoints: done?.checkpoints ?? [],
   };
+};
+
+export const editCurriculum = async (courseId: string, instruction: string) => {
+  const { data } = await api.post<CourseDetail>(`/teacher/courses/${courseId}/edit-curriculum`, { instruction });
+  return data;
 };
 
 export const generateLessonNotes = async (courseId: string, unitId: string) => {

@@ -1,6 +1,6 @@
 """
 Agentic Workspace Service — true multi-turn, function-calling agent using
-gemini-3.1-pro-preview with thinking and streaming.
+the primary reasoning model (PRO_MODEL) with thinking and streaming.
 
 Architecture:
 - Uses the new google-genai SDK with native function calling (no JSON simulation)
@@ -25,7 +25,7 @@ from sqlalchemy import select, or_, func
 
 from app.config import get_settings
 from app.models import Note, Folder, Tag, Image, note_tags
-from app.services.ai_service import get_client, PRO_MODEL
+from app.services.ai_service import get_client, PRO_MODEL, FLASH_MODEL
 from app.services.vector_service import hybrid_search
 
 # Supported image mime types the model can actually look at directly
@@ -45,7 +45,7 @@ settings = get_settings()
 
 # ── Agent model ───────────────────────────────────────────────────────
 
-AGENT_MODEL = PRO_MODEL  # gemini-3.1-pro-preview — thinking model
+AGENT_MODEL = PRO_MODEL  # primary reasoning model (thinking + grounding)
 
 # ── System instruction (lean, no JSON format rules) ───────────────────
 
@@ -827,7 +827,7 @@ async def _execute_tool(name: str, args: dict, user_id: str, db: AsyncSession) -
             try:
                 search_client = get_client()
                 search_response = await search_client.aio.models.generate_content(
-                    model="gemini-3-flash-preview",
+                    model=FLASH_MODEL,
                     contents=f"Recherchiere: {query}\n\nGib eine präzise, faktenbasierte Zusammenfassung.",
                     config=types.GenerateContentConfig(
                         tools=[types.Tool(google_search=types.GoogleSearch())],

@@ -208,6 +208,41 @@ body {
   animation: dots 1.5s infinite;
 }
 
+/* Teacher: silent note-saved toast */
+@keyframes toastIn {
+  0% { opacity: 0; transform: translateY(12px) scale(0.96); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes toastOut {
+  0% { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(8px) scale(0.96); }
+}
+.toast-enter { animation: toastIn 0.35s cubic-bezier(0.22, 1, 0.36, 1); }
+.toast-leave { animation: toastOut 0.35s ease-in forwards; }
+
+/* Teacher: "thinking" status line crossfade */
+@keyframes statusSwap {
+  0% { opacity: 0; transform: translateY(4px); }
+  15% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+.status-line { animation: statusSwap 0.4s ease-out; }
+
+/* Teacher: soft slide-up for cards appearing in the chat flow */
+@keyframes slideUp {
+  0% { opacity: 0; transform: translateY(16px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+.slide-up { animation: slideUp 0.4s cubic-bezier(0.22, 1, 0.36, 1); }
+
+/* Teacher: gentle pulse for the saved-note checkmark */
+@keyframes checkPop {
+  0% { transform: scale(0); }
+  60% { transform: scale(1.2); }
+  100% { transform: scale(1); }
+}
+.check-pop { animation: checkPop 0.4s ease-out; }
+
 /* ── TipTap Rich Text Editor ────────────────────────────────── */
 .tiptap-editor .ProseMirror {
   min-height: 300px;

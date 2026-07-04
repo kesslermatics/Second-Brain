@@ -1377,3 +1377,258 @@ Antworte NUR mit dem JSON, kein anderer Text:
         "suggested_tags": [],
         "suggested_folder": f"Bücher/{book_title}",
     }
+
+
+# ── Note persistence helpers (used by the agentic teacher to save silently) ──
+# The agentic tutor saves notes on its own, in the background, without a review
+# screen. These helpers own folder creation, tag resolution, note creation /
+# update and vector-embedding upsert. They open their writes on whatever session
+# is passed in (the caller decides transaction scope).
+
+_TEACHER_TAG_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16']
+
+
+async def _ensure_folder(user_id, db, path: str | None):
+    """Create all folders in a path if missing; return the leaf folder."""
+    from uuid import UUID
+    from sqlalchemy import select
+    from app.models import Folder
+
+    if not path:
+        path = "Allgemein"
+    uid = user_id if not isinstance(user_id, str) else UUID(str(user_id))
+
+    result = await db.execute(select(Folder).where(Folder.path == path, Folder.user_id == uid))
+    folder = result.scalar_one_or_none()
+    if folder:
+        return folder
+
+    parts = [p for p in path.split("/") if p]
+    current_path = ""
+    parent_id = None
+    folder = None
+    for part in parts:
+        current_path = f"{current_path}/{part}" if current_path else part
+        result = await db.execute(select(Folder).where(Folder.path == current_path, Folder.user_id == uid))
+        existing = result.scalar_one_or_none()
+        if existing:
+            parent_id = existing.id
+            folder = existing
+            continue
+        new_folder = Folder(name=part, path=current_path, parent_id=parent_id, user_id=uid)
+        db.add(new_folder)
+        await db.flush()
+        await db.refresh(new_folder)
+        parent_id = new_folder.id
+        folder = new_folder
+    return folder
+
+
+async def _resolve_tag_objects(user_id, db, names: list[str] | None):
+    """Resolve tag names to Tag rows, creating new ones as needed."""
+    import random
+    from uuid import UUID
+    from sqlalchemy import select
+    from app.models import Tag
+
+    uid = user_id if not isinstance(user_id, str) else UUID(str(user_id))
+    tag_result = await db.execute(select(Tag).where(Tag.user_id == uid))
+    all_tags = list(tag_result.scalars().all())
+
+    resolved = []
+    for tag_name in names or []:
+        tl = (tag_name or "").strip().lower()
+        if not tl:
+            continue
+        found = next((t for t in all_tags if t.name_lower == tl), None)
+        if not found:
+            found = Tag(
+                name=tag_name.strip(), name_lower=tl,
+                color=random.choice(_TEACHER_TAG_COLORS), user_id=uid,
+            )
+            db.add(found)
+            await db.flush()
+            await db.refresh(found)
+            all_tags.append(found)
+        resolved.append(found)
+    return resolved
+
+
+async def save_atomic_note(
+    user_id, db, title: str, content: str,
+    folder_path: str | None = None, tags: list[str] | None = None,
+) -> dict:
+    """Create and persist a single note, ensuring its folder + tags exist.
+
+    Commits on the given session and upserts the vector embedding (best-effort).
+    Returns {note_id, title, folder}.
+    """
+    from uuid import UUID
+    from app.models import Note
+
+    uid = user_id if not isinstance(user_id, str) else UUID(str(user_id))
+    folder = await _ensure_folder(uid, db, folder_path or "Allgemein")
+    tag_objs = await _resolve_tag_objects(uid, db, tags)
+
+    note = Note(
+        title=(title or "Notiz").strip()[:500],
+        content=content or "",
+        note_type="text",
+        folder_id=folder.id,
+        user_id=uid,
+    )
+    db.add(note)
+    await db.flush()
+    await db.refresh(note)
+    for t in tag_objs:
+        note.tags.append(t)
+    await db.commit()
+
+    try:
+        from app.services.vector_service import upsert_note_embedding
+        upsert_note_embedding(str(note.id), str(uid), note.title, note.content, folder.path)
+    except Exception:
+        pass
+
+    return {"note_id": str(note.id), "title": note.title, "folder": folder.path}
+
+
+async def update_atomic_note(
+    user_id, db, note_id: str,
+    content: str | None = None, append: bool = False, title: str | None = None,
+) -> dict:
+    """Update an existing note's content/title. Returns {note_id, title} or {error}."""
+    from uuid import UUID
+    from app.models import Note, Folder
+
+    uid = user_id if not isinstance(user_id, str) else UUID(str(user_id))
+    try:
+        note = await db.get(Note, UUID(str(note_id)))
+    except Exception:
+        note = None
+    if not note or note.user_id != uid:
+        return {"error": "Notiz nicht gefunden"}
+
+    if title:
+        note.title = title.strip()[:500]
+    if content is not None:
+        if append:
+            note.content = (note.content or "").rstrip() + "\n\n" + content
+        else:
+            note.content = content
+    await db.commit()
+    await db.refresh(note)
+
+    try:
+        folder = await db.get(Folder, note.folder_id)
+        from app.services.vector_service import upsert_note_embedding
+        upsert_note_embedding(str(note.id), str(uid), note.title, note.content, folder.path if folder else "")
+    except Exception:
+        pass
+
+    return {"note_id": str(note.id), "title": note.title, "updated": True}
+
+
+# ── Curriculum editing via chat ───────────────────────────────────────
+
+async def edit_curriculum(current_curriculum: dict, instruction: str) -> dict:
+    """Revise an existing curriculum based on a free-text instruction.
+
+    Takes the current {title, description, units:[...]} and the user's instruction
+    (e.g. "tausche Lektion 3 und 5", "mehr Fokus auf Beweise", "kürzer") and returns
+    a fully revised curriculum in the same shape. Falls back to the input on failure.
+    """
+    year = _current_year()
+    current_json = json.dumps(current_curriculum, ensure_ascii=False, indent=2)
+
+    prompt = f"""Du bist ein Lehrplanentwickler ({year}). Der Student möchte einen bestehenden
+Lehrplan anpassen. Hier ist der AKTUELLE Lehrplan als JSON:
+
+{current_json}
+
+ANWEISUNG DES STUDENTEN:
+{instruction}
+
+Überarbeite den Lehrplan gemäß der Anweisung. Regeln:
+- Behalte die bewährte Struktur bei (Module = level 1, Lektionen = level 2)
+- unit_number als String: Module "1", "2", …; Lektionen "1.1", "1.2", …
+- Ändere NUR das, worum der Student bittet — den Rest lässt du inhaltlich stabil
+- Jede Lektion hat klare Lernziele (learning_objectives)
+- Gib den KOMPLETTEN überarbeiteten Lehrplan zurück, nicht nur die Änderung
+
+Antworte ausschließlich im JSON-Format des Lehrplans."""
+
+    result = await generate_json(prompt, CURRICULUM_SCHEMA, model=PRO_MODEL, temperature=0.5)
+    if result and isinstance(result, dict) and result.get("units"):
+        return {
+            "title": result.get("title", current_curriculum.get("title", "")),
+            "description": result.get("description", current_curriculum.get("description", "")),
+            "units": result.get("units", []),
+        }
+    return current_curriculum
+
+
+# ── "Thinking" status line (Flash-powered, German, short) ─────────────
+
+async def summarize_thinking_status(
+    thinking_text: str | None = None,
+    tool_name: str | None = None,
+    tool_args: dict | None = None,
+) -> str:
+    """Turn the agent's raw (English, verbose) reasoning / tool step into a short,
+    warm German status line, as if the tutor were briefly thinking out loud.
+
+    Uses the cheap FLASH_MODEL. Kept intentionally tiny (a half sentence). On any
+    failure it falls back to a deterministic phrase so the UI is never empty.
+    """
+    # Deterministic fallback per tool — always available, never blocks.
+    fallback_by_tool = {
+        "search_my_notes": "Ich schaue, was du dazu schon weißt …",
+        "propose_quiz": "Ich überlege mir eine kleine Verständnisfrage …",
+        "set_difficulty": "Ich passe das Tempo an dich an …",
+        "mark_understanding": "Ich merke mir, wie es bei dir sitzt …",
+        "save_note": "Ich halte das für dich als Notiz fest …",
+        "update_note": "Ich ergänze eine bestehende Notiz …",
+        "create_folder": "Ich sortiere das sauber ein …",
+        "ask_checkpoint": "Ich formuliere eine kurze Zwischenfrage …",
+        "draw_diagram": "Ich skizziere das für dich …",
+        "advance_section": "Weiter zum nächsten Abschnitt …",
+    }
+    fallback = fallback_by_tool.get(tool_name or "", "Ich denke kurz nach …")
+
+    src = (thinking_text or "").strip()
+    if not src and not tool_name:
+        return fallback
+
+    context = ""
+    if tool_name:
+        context += f"\nAktuelle Aktion des Tutors: {tool_name}"
+        if tool_args:
+            try:
+                context += f" ({json.dumps(tool_args, ensure_ascii=False)[:200]})"
+            except Exception:
+                pass
+    if src:
+        context += f"\nInterner Gedankengang (evtl. englisch):\n{src[:800]}"
+
+    prompt = f"""Formuliere eine EINZIGE, sehr kurze deutsche Statuszeile (max 6 Wörter),
+die zeigt, was ein Tutor gerade tut oder denkt — warmherzig, in der ICH-Form, mit einem
+abschließenden „ …". Keine Anführungszeichen, kein Punkt am Ende, nur die Zeile.
+{context}
+
+Beispiele für den Stil:
+- „Ich suche ein gutes Beispiel …"
+- „Ich knüpfe an dein Vorwissen an …"
+- „Ich fasse das Wichtigste zusammen …"
+
+Statuszeile:"""
+
+    try:
+        line = (await generate(prompt, model=FLASH_MODEL, temperature=0.4)).strip()
+        line = line.strip('"\'').strip()
+        # Guard against the model returning a paragraph.
+        if not line or len(line) > 80:
+            return fallback
+        return line
+    except Exception:
+        return fallback

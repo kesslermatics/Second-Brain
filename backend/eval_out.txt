@@ -1,0 +1,24 @@
+==============================================================================
+TEACHER MODEL EVAL — gemini-3.1-pro-preview  vs  gemini-3.5-flash
+Course: Einführung in die Wahrscheinlichkeitsrechnung
+Lesson: Bedingte Wahrscheinlichkeit und der Satz von Bayes
+Repeats per task: 1
+==============================================================================
+
+[teach_start]
+    gemini-3.1-pro-preview      37.61s | in   761 · think  3343 · out  1094 · tot   5198 | $0.04532
+    gemini-3.5-flash            15.92s | in   761 · think  1275 · out  1097 · tot   3133 | $0.00616
+    judge: A=10 B=9 -> Gewinner A | Beide Antworten sind didaktisch hervorragend, fachlich korrekt und sehr gut strukturiert. Antwort A gewinnt knapp, da die Verständnisfrage am Ende (Ka
+
+[teach_next]
+    gemini-3.1-pro-preview      29.19s | in   751 · think  1655 · out  1477 · tot   3883 | $0.03226
+    gemini-3.5-flash            18.23s | in   751 · think  1201 · out  1697 · tot   3649 | $0.00747
+    judge: A=8 B=9 -> Gewinner B | Beide Antworten sind didaktisch hervorragend und gut strukturiert. Antwort B gewinnt knapp, da sie im Beispiel die Berechnung des Nenners (Evidenz) üb
+
+[curriculum]
+    gemini-3.1-pro-preview      23.71s | in    75 · think  2485 · out   759 · tot   3319 | $0.03253
+    gemini-3.5-flash            17.62s | in    75 · think  2568 · out   907 · tot   3550 | $0.00871
+    judge: A=9 B=8 -> Gewinner A | Beide liefern ein valides, gut strukturiertes JSON-Curriculum. Antwort A formuliert die Lernziele didaktisch sauberer (kompetenzorientierte Aktionsver
+
+[quiz]
+    gemini-3.1-pro-preview      18.35s | in   117 · think  1634 · out   684 · tot   2435 | $0.02333

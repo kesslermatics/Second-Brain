@@ -371,6 +371,18 @@ export interface LessonRecap {
   next_preview: string;
 }
 
+export interface LessonDiagram {
+  code: string;
+  caption?: string;
+}
+
+export interface SavedNoteInfo {
+  note_id: string;
+  title: string;
+  folder?: string;
+  action: 'created' | 'updated';
+}
+
 export interface TeacherChatResponse {
   message: CourseMessage;
   sections: LessonSection[];
@@ -378,7 +390,9 @@ export interface TeacherChatResponse {
   total_sections: number;
   is_last_section: boolean;
   quiz_suggested?: boolean;
-  note_proposals?: { title: string; content: string; tags?: string[] }[];
+  saved_notes?: SavedNoteInfo[];
+  diagrams?: LessonDiagram[];
+  checkpoints?: string[];
 }
 
 // ── Agent / Agentic Workspace ────────────────────────────────────────
