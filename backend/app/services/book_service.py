@@ -130,6 +130,85 @@ async def fetch_book_cover(
 
     return None
 
+
+async def fetch_cover_candidates(
+    title: str | None = None,
+    authors: list[str] | None = None,
+    isbn: str | None = None,
+    limit: int = 12,
+) -> list[str]:
+    """Return several candidate cover URLs so the user can pick the right one.
+
+    Aggregates multiple results from Open Library (by ISBN + search) and Google
+    Books. De-duplicated, best-effort, order roughly by relevance.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    clean_isbn = re.sub(r"[^0-9Xx]", "", isbn or "") if isbn else ""
+    author = (authors[0] if authors else "") or ""
+
+    def _short_title(t: str) -> str:
+        return re.split(r"[:–—\-]", t, 1)[0].strip() if t else t
+
+    title_variants: list[str] = []
+    for t in (title, _short_title(title or "")):
+        t = (t or "").strip()
+        if t and t not in title_variants:
+            title_variants.append(t)
+
+    out: list[str] = []
+
+    def _add(url: str | None):
+        if url and url not in out:
+            out.append(url)
+
+    async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+        # ISBN cover
+        if clean_isbn:
+            _add(f"https://covers.openlibrary.org/b/isbn/{clean_isbn}-L.jpg")
+
+        # Open Library search — take several docs, each may have a cover.
+        for t in title_variants:
+            if len(out) >= limit:
+                break
+            try:
+                r = await client.get(
+                    "https://openlibrary.org/search.json",
+                    params={"title": t, "author": author, "limit": 6, "fields": "cover_i,isbn,edition_key"},
+                )
+                if r.status_code == 200:
+                    for doc in r.json().get("docs", []):
+                        cover_i = doc.get("cover_i")
+                        if cover_i:
+                            _add(f"https://covers.openlibrary.org/b/id/{cover_i}-L.jpg")
+                        for isbn_c in (doc.get("isbn") or [])[:2]:
+                            _add(f"https://covers.openlibrary.org/b/isbn/{isbn_c}-L.jpg")
+            except Exception as e:
+                logger.warning(f"OL candidates failed: {e}")
+
+        # Google Books — several volumes.
+        for t in title_variants:
+            if len(out) >= limit:
+                break
+            try:
+                q = f"{t} {author}".strip()
+                r = await client.get(
+                    "https://www.googleapis.com/books/v1/volumes",
+                    params={"q": q, "maxResults": 6},
+                )
+                if r.status_code == 200:
+                    for item in r.json().get("items", []):
+                        links = item.get("volumeInfo", {}).get("imageLinks", {})
+                        thumb = links.get("thumbnail") or links.get("smallThumbnail")
+                        if thumb:
+                            _add(thumb.replace("http://", "https://").replace("&edge=curl", ""))
+            except Exception as e:
+                logger.warning(f"Google Books candidates failed: {e}")
+
+    return out[:limit]
+
+
 BOOK_TOC_SCHEMA = {
     "type": "object",
     "properties": {

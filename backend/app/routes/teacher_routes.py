@@ -507,6 +507,54 @@ async def update_unit(
     return {"ok": True, "status": unit.status, "enabled": unit.enabled}
 
 
+@router.get("/courses/{course_id}/cover-candidates")
+async def course_cover_candidates(
+    course_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return several candidate cover image URLs for a book course to choose from."""
+    result = await db.execute(
+        select(Course).where(Course.id == course_id, Course.user_id == current_user.id)
+    )
+    course = result.scalars().first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    from app.services.book_service import fetch_cover_candidates
+    candidates = await fetch_cover_candidates(
+        title=course.title,
+        authors=course.book_authors or [],
+        isbn=course.book_isbn,
+    )
+    return {"candidates": candidates}
+
+
+@router.patch("/courses/{course_id}/cover")
+async def update_course_cover(
+    course_id: str,
+    data: dict,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Set a book course's cover image URL (chosen from candidates or a custom URL)."""
+    result = await db.execute(
+        select(Course).where(Course.id == course_id, Course.user_id == current_user.id)
+    )
+    course = result.scalars().first()
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    cover_url = (data.get("cover_url") or "").strip()
+    # Basic validation — only allow https image URLs (or clearing the cover).
+    if cover_url and not cover_url.startswith("https://"):
+        raise HTTPException(status_code=400, detail="Cover-URL muss mit https:// beginnen")
+
+    course.book_cover_url = cover_url or None
+    await db.commit()
+    return {"ok": True, "cover_url": course.book_cover_url}
+
+
 @router.patch("/courses/{course_id}/status")
 async def update_course_status(
     course_id: str,

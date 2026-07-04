@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import {
     FiCheck, FiX, FiChevronRight, FiSearch, FiSquare, FiCheckSquare,
     FiSend, FiTrash2, FiArrowLeft, FiBook,
-    FiChevronDown, FiFileText, FiRefreshCw, FiMessageCircle,
+    FiChevronDown, FiFileText, FiRefreshCw, FiMessageCircle, FiImage,
 } from 'react-icons/fi';
 import ReactMarkdown from 'react-markdown';
 import { markdownComponents, remarkPlugins, rehypePlugins } from '@/lib/markdownComponents';
@@ -16,6 +16,7 @@ import {
     getUnitMessages, sendTeacherChat, sendTeacherChatStream,
     generateUnitQuiz, generateUnitRecap,
     getBookSummaries, generateChapterSummary,
+    getCoverCandidates, updateCourseCover,
     type TeacherSavedNote,
 } from '@/lib/api';
 import type {
@@ -119,6 +120,11 @@ export default function BookPanel() {
 
     // Category filter for the shelf
     const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
+
+    // "Change cover" modal — { courseId, title } of the book being edited
+    const [coverEditFor, setCoverEditFor] = useState<{ id: string; title: string } | null>(null);
+    // Local override so a changed cover shows instantly without a full reload
+    const [coverOverrides, setCoverOverrides] = useState<Record<string, string>>({});
 
     // Chat
     const [messages, setMessages] = useState<CourseMessage[]>([]);
@@ -533,6 +539,20 @@ export default function BookPanel() {
         }
     };
 
+    // ── Change cover ─────────────────────────────────────────────────
+    const handleSaveCover = async (courseId: string, coverUrl: string) => {
+        try {
+            await updateCourseCover(courseId, coverUrl);
+            setCoverOverrides((prev) => ({ ...prev, [courseId]: coverUrl }));
+            setCoverEditFor(null);
+        } catch {
+            setError('Fehler beim Speichern des Covers.');
+        }
+    };
+
+    const coverFor = (course: CourseListItem) =>
+        coverOverrides[course.id] ?? course.book_cover_url;
+
     // ── Summaries ────────────────────────────────────────────────────
     const handleOpenSummaries = async (course: CourseListItem) => {
         setView({
@@ -629,7 +649,7 @@ export default function BookPanel() {
                     className="relative block w-full aspect-[2/3] rounded-md overflow-hidden shadow-lg shadow-black/40 ring-1 ring-black/40 transition-transform duration-200 group-hover:-translate-y-1 group-hover:shadow-xl group-hover:shadow-black/50"
                     title={isCompleted ? 'Erneut öffnen' : 'Weiterlesen'}
                 >
-                    <BookCover url={course.book_cover_url} title={course.title} className="w-full h-full" />
+                    <BookCover url={coverFor(course)} title={course.title} className="w-full h-full" />
 
                     {/* Completed check badge */}
                     {isCompleted && (
@@ -652,6 +672,13 @@ export default function BookPanel() {
 
                     {/* Hover actions */}
                     <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                        <span
+                            onClick={(e) => { e.stopPropagation(); setCoverEditFor({ id: course.id, title: course.title }); }}
+                            className="p-2 bg-dark-900/90 hover:bg-dark-800 rounded-lg text-dark-200 transition-colors"
+                            title="Cover ändern"
+                        >
+                            <FiImage className="w-3.5 h-3.5" />
+                        </span>
                         <span
                             onClick={(e) => { e.stopPropagation(); handleOpenSummaries(course); }}
                             className="p-2 bg-dark-900/90 hover:bg-dark-800 rounded-lg text-dark-200 transition-colors"
@@ -1008,7 +1035,7 @@ export default function BookPanel() {
                             </button>
                             {/* Book cover — flush to the left of the chapter title */}
                             <BookCover
-                                url={course.book_cover_url}
+                                url={coverOverrides[course.id] ?? course.book_cover_url}
                                 title={course.title}
                                 className="w-9 h-[54px] flex-shrink-0 hidden sm:block"
                             />
@@ -1416,6 +1443,147 @@ export default function BookPanel() {
                 )}
                 {view.kind === 'book-completed' && renderBookCompleted()}
                 {view.kind === 'book-summaries' && renderBookSummaries()}
+            </div>
+
+            {/* Change-cover modal */}
+            {coverEditFor && (
+                <CoverPickerModal
+                    courseId={coverEditFor.id}
+                    title={coverEditFor.title}
+                    onClose={() => setCoverEditFor(null)}
+                    onSave={(url) => handleSaveCover(coverEditFor.id, url)}
+                />
+            )}
+        </div>
+    );
+}
+
+// ── Cover picker modal ───────────────────────────────────────────────
+// Loads candidate covers from public sources; lets the user pick one or paste
+// a custom https URL.
+function CoverPickerModal({
+    courseId,
+    title,
+    onClose,
+    onSave,
+}: {
+    courseId: string;
+    title: string;
+    onClose: () => void;
+    onSave: (url: string) => void;
+}) {
+    const [candidates, setCandidates] = useState<string[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [selected, setSelected] = useState<string | null>(null);
+    const [customUrl, setCustomUrl] = useState('');
+    const [saving, setSaving] = useState(false);
+
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                const c = await getCoverCandidates(courseId);
+                if (!cancelled) setCandidates(c);
+            } catch {
+                if (!cancelled) setCandidates([]);
+            } finally {
+                if (!cancelled) setLoading(false);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [courseId]);
+
+    const chosen = customUrl.trim() || selected;
+    const canSave = !!chosen && (customUrl.trim() === '' || customUrl.trim().startsWith('https://'));
+
+    const handleSave = () => {
+        if (!chosen || !canSave) return;
+        setSaving(true);
+        onSave(chosen);
+    };
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-[fadeIn_0.15s_ease-out]" onClick={onClose}>
+            <div
+                className="w-full max-w-lg bg-dark-900 border border-dark-700 rounded-2xl shadow-2xl slide-up max-h-[85vh] flex flex-col"
+                onClick={(e) => e.stopPropagation()}
+            >
+                <div className="px-4 py-3 border-b border-dark-800 flex items-center justify-between">
+                    <div className="min-w-0">
+                        <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                            <FiImage className="w-4 h-4 text-amber-400" /> Cover ändern
+                        </h3>
+                        <p className="text-[11px] text-dark-500 truncate">{title}</p>
+                    </div>
+                    <button onClick={onClose} className="p-1.5 hover:bg-dark-800 rounded-lg text-dark-500 hover:text-white transition-colors">
+                        <FiX className="w-4 h-4" />
+                    </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-4">
+                    <p className="text-xs text-dark-400 mb-2">Vorschläge — wähle das richtige Cover:</p>
+                    {loading ? (
+                        <div className="grid grid-cols-4 gap-3">
+                            {Array.from({ length: 8 }).map((_, i) => (
+                                <div key={i} className="aspect-[2/3] rounded-lg bg-dark-800 animate-pulse" />
+                            ))}
+                        </div>
+                    ) : candidates.length > 0 ? (
+                        <div className="grid grid-cols-4 gap-3">
+                            {candidates.map((url) => {
+                                const isSel = !customUrl.trim() && selected === url;
+                                return (
+                                    <button
+                                        key={url}
+                                        onClick={() => { setSelected(url); setCustomUrl(''); }}
+                                        className={`relative aspect-[2/3] rounded-lg overflow-hidden ring-2 transition-all ${isSel ? 'ring-amber-500 scale-[1.03]' : 'ring-transparent hover:ring-dark-600'}`}
+                                    >
+                                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                                        <img
+                                            src={url}
+                                            alt="Cover-Vorschlag"
+                                            className="w-full h-full object-cover bg-dark-800"
+                                            onError={(e) => { (e.currentTarget.parentElement as HTMLElement).style.display = 'none'; }}
+                                        />
+                                        {isSel && (
+                                            <div className="absolute top-1 right-1 w-4 h-4 rounded-full bg-amber-500 flex items-center justify-center">
+                                                <FiCheck className="w-2.5 h-2.5 text-white" />
+                                            </div>
+                                        )}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    ) : (
+                        <p className="text-xs text-dark-500 py-4 text-center">Keine Vorschläge gefunden — gib unten eine eigene URL ein.</p>
+                    )}
+
+                    {/* Custom URL */}
+                    <div className="mt-4">
+                        <label className="text-xs text-dark-400">Oder eigene Bild-URL (https)</label>
+                        <input
+                            type="text"
+                            value={customUrl}
+                            onChange={(e) => { setCustomUrl(e.target.value); setSelected(null); }}
+                            placeholder="https://…/cover.jpg"
+                            className="mt-1 w-full px-3 py-2 bg-dark-800 border border-dark-700 rounded-lg text-white text-xs placeholder-dark-600 focus:outline-none focus:border-amber-500"
+                        />
+                    </div>
+                </div>
+
+                <div className="px-4 py-3 border-t border-dark-800 flex gap-2">
+                    <button
+                        onClick={handleSave}
+                        disabled={!canSave || saving}
+                        className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                        {saving ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <FiCheck className="w-4 h-4" />}
+                        Cover übernehmen
+                    </button>
+                    <button onClick={onClose} className="px-4 py-2 bg-dark-700 hover:bg-dark-600 text-dark-300 text-sm rounded-xl transition-colors">
+                        Abbrechen
+                    </button>
+                </div>
             </div>
         </div>
     );

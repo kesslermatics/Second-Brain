@@ -650,6 +650,19 @@ export const createBookCourse = async (
   return data;
 };
 
+export const getCoverCandidates = async (courseId: string) => {
+  const { data } = await api.get<{ candidates: string[] }>(`/teacher/courses/${courseId}/cover-candidates`);
+  return data.candidates;
+};
+
+export const updateCourseCover = async (courseId: string, coverUrl: string) => {
+  const { data } = await api.patch<{ ok: boolean; cover_url: string | null }>(
+    `/teacher/courses/${courseId}/cover`,
+    { cover_url: coverUrl },
+  );
+  return data;
+};
+
 export const getBookSummaries = async (courseId: string) => {
   const { data } = await api.get<BookSummariesResponse>(`/teacher/courses/${courseId}/summaries`);
   return data;
