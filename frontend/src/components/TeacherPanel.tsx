@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import {
-    FiCheck, FiX, FiChevronRight, FiCheckSquare, FiSquare,
+    FiCheck, FiX, FiChevronRight, FiChevronDown, FiCheckSquare, FiSquare,
     FiSend, FiTrash2, FiArrowLeft, FiMessageCircle,
 } from 'react-icons/fi';
 import { LuGraduationCap, LuSparkles } from 'react-icons/lu';
@@ -27,6 +27,8 @@ import {
     ThinkingStatus, NoteToastHost, InlineQuiz, type SavedNoteToast,
 } from './TeachingComponents';
 import MermaidDiagram from './MermaidDiagram';
+import { CategoryBadge, CategoryFilter } from './CategoryUI';
+import { CATEGORY_ORDER } from '@/lib/categories';
 
 type View =
     | { kind: 'courses' }
@@ -112,6 +114,21 @@ export default function TeacherPanel() {
     const [customFocusInput, setCustomFocusInput] = useState('');
     const [focusDescriptionInput, setFocusDescriptionInput] = useState('');
     const [focusLessonCountInput, setFocusLessonCountInput] = useState('');
+
+    // Course overview: expand-on-click to reveal description + lessons
+    const [expandedCourseId, setExpandedCourseId] = useState<string | null>(null);
+    const [courseDetailCache, setCourseDetailCache] = useState<Record<string, CourseDetail>>({});
+    const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
+
+    const toggleExpandCourse = useCallback(async (courseId: string) => {
+        setExpandedCourseId((prev) => (prev === courseId ? null : courseId));
+        if (!courseDetailCache[courseId]) {
+            try {
+                const detail = await getTeacherCourse(courseId);
+                setCourseDetailCache((prev) => ({ ...prev, [courseId]: detail }));
+            } catch { /* non-fatal — card still shows summary */ }
+        }
+    }, [courseDetailCache]);
 
     const chatEndRef = useRef<HTMLDivElement>(null);
     const lastAssistantRef = useRef<HTMLDivElement>(null);
@@ -565,6 +582,131 @@ export default function TeacherPanel() {
         );
     };
 
+    // ── Render: a single course card (modern, expand-on-click) ───────
+    const renderCourseCard = (course: CourseListItem, done: boolean) => {
+        const pct = course.enabled_units > 0
+            ? Math.round((course.completed_units / course.enabled_units) * 100)
+            : 0;
+        const isExpanded = expandedCourseId === course.id;
+        const detail = courseDetailCache[course.id];
+        const lessons = detail
+            ? [...detail.units].filter((u) => u.enabled && u.level === 2).sort((a, b) => a.order_index - b.order_index)
+            : [];
+
+        return (
+            <div
+                key={course.id}
+                className={`slide-up group rounded-2xl border transition-all duration-200 overflow-hidden ${isExpanded
+                    ? 'border-teal-500/40 bg-dark-800 shadow-lg shadow-teal-950/20'
+                    : 'border-dark-700 bg-dark-800/60 hover:border-dark-600 hover:bg-dark-800'}`}
+            >
+                {/* Clickable header */}
+                <button
+                    onClick={() => toggleExpandCourse(course.id)}
+                    className="w-full text-left p-4 flex items-start gap-4"
+                >
+                    {/* Progress ring */}
+                    <CircularProgress pct={pct} done={done} />
+
+                    <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1 flex-wrap">
+                            {done ? (
+                                <span className="px-2 py-0.5 text-[10px] font-medium rounded-full bg-green-600/20 text-green-400">
+                                    Abgeschlossen
+                                </span>
+                            ) : (
+                                <span className={`px-2 py-0.5 text-[10px] font-medium rounded-full ${course.status === 'active' ? 'bg-teal-600/20 text-teal-400' : 'bg-dark-700 text-dark-400'}`}>
+                                    {course.status === 'active' ? 'Aktiv' : 'Entwurf'}
+                                </span>
+                            )}
+                            {course.parent_course_id && (
+                                <span className="px-2 py-0.5 text-[10px] font-medium rounded-full bg-purple-600/20 text-purple-400">
+                                    Vertiefung
+                                </span>
+                            )}
+                            <CategoryBadge category={course.category} />
+                        </div>
+                        <h4 className="text-sm font-semibold text-white truncate">{course.title}</h4>
+                        <p className={`text-xs text-dark-500 mt-0.5 transition-all ${isExpanded ? '' : 'line-clamp-1'}`}>
+                            {course.description || 'Keine Beschreibung'}
+                        </p>
+                        <p className="text-[10px] text-dark-600 mt-1.5">
+                            {course.completed_units}/{course.enabled_units} Lektionen
+                        </p>
+                    </div>
+
+                    <FiChevronDown
+                        className={`w-4 h-4 text-dark-500 flex-shrink-0 mt-1 transition-transform duration-200 ${isExpanded ? 'rotate-180 text-teal-400' : 'group-hover:text-dark-300'}`}
+                    />
+                </button>
+
+                {/* Expandable body */}
+                <div className={`grid transition-all duration-300 ease-out ${isExpanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
+                    <div className="overflow-hidden">
+                        <div className="px-4 pb-4">
+                            {/* Lesson list */}
+                            <div className="rounded-xl bg-dark-900/60 border border-dark-700/60 p-3 mb-3">
+                                <p className="text-[10px] font-semibold uppercase tracking-wider text-dark-500 mb-2">
+                                    Lektionen
+                                </p>
+                                {detail ? (
+                                    lessons.length > 0 ? (
+                                        <ul className="space-y-1 max-h-52 overflow-y-auto pr-1">
+                                            {lessons.map((u) => {
+                                                const uDone = u.status === 'completed';
+                                                const uActive = u.status === 'active';
+                                                return (
+                                                    <li key={u.id} className="flex items-center gap-2 text-xs">
+                                                        <span className={`w-4 h-4 rounded-full flex items-center justify-center flex-shrink-0 ${uDone ? 'bg-teal-500/80' : uActive ? 'border-2 border-teal-400' : 'border border-dark-600'}`}>
+                                                            {uDone && <FiCheck className="w-2.5 h-2.5 text-white" />}
+                                                        </span>
+                                                        <span className={`truncate ${uDone ? 'text-dark-400' : uActive ? 'text-teal-300' : 'text-dark-300'}`}>
+                                                            {u.title}
+                                                        </span>
+                                                    </li>
+                                                );
+                                            })}
+                                        </ul>
+                                    ) : (
+                                        <p className="text-xs text-dark-500">Keine Lektionen.</p>
+                                    )
+                                ) : (
+                                    <div className="space-y-1.5 py-1">
+                                        <div className="h-3 bg-dark-700 rounded animate-pulse w-full" />
+                                        <div className="h-3 bg-dark-700 rounded animate-pulse w-4/5" />
+                                        <div className="h-3 bg-dark-700 rounded animate-pulse w-3/5" />
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Actions */}
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={() => done ? handleLoadFocus(detail || courseDetailCache[course.id]!) : handleResumeCourse(course.id)}
+                                    disabled={done && (loadingFocus || !detail)}
+                                    className={`flex-1 flex items-center justify-center gap-2 px-4 py-2 text-xs font-semibold rounded-xl transition-colors disabled:opacity-50 ${done ? 'bg-purple-600 hover:bg-purple-500 text-white' : 'bg-teal-600 hover:bg-teal-500 text-white'}`}
+                                >
+                                    {done ? (
+                                        <><LuSparkles className="w-3.5 h-3.5" /> Vertiefen</>
+                                    ) : (
+                                        <>{course.status === 'active' ? 'Fortsetzen' : 'Öffnen'} <FiChevronRight className="w-3.5 h-3.5" /></>
+                                    )}
+                                </button>
+                                <button
+                                    onClick={() => handleDeleteCourse(course.id)}
+                                    className="p-2 text-dark-500 hover:text-red-400 hover:bg-dark-700 rounded-xl transition-colors"
+                                    title="Kurs löschen"
+                                >
+                                    <FiTrash2 className="w-4 h-4" />
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
     // ── Render: Courses list ─────────────────────────────────────────
     const renderCoursesList = () => (
         <div className="h-full flex flex-col">
@@ -630,112 +772,51 @@ export default function TeacherPanel() {
                         </p>
                     </div>
                 ) : (
-                    <div className="max-w-2xl mx-auto space-y-6">
+                    <div className="max-w-3xl mx-auto space-y-6">
                         {(() => {
-                            const activeDraft = courses.filter(c => c.status !== 'completed');
-                            const completed = courses.filter(c => c.status === 'completed');
+                            // Categories present across all courses (in canonical order)
+                            const present = CATEGORY_ORDER.filter(cat =>
+                                courses.some(c => c.category === cat)
+                            );
+                            const matches = (c: CourseListItem) => !categoryFilter || c.category === categoryFilter;
+                            const activeDraft = courses.filter(c => c.status !== 'completed' && matches(c));
+                            const completed = courses.filter(c => c.status === 'completed' && matches(c));
                             return (
                                 <>
+                                    {present.length > 1 && (
+                                        <CategoryFilter
+                                            categories={present}
+                                            active={categoryFilter}
+                                            onSelect={setCategoryFilter}
+                                        />
+                                    )}
+
                                     {activeDraft.length > 0 && (
-                                        <div className="space-y-3">
-                                            {activeDraft.map((course) => (
-                                                <div
-                                                    key={course.id}
-                                                    className="bg-dark-800 border border-dark-700 rounded-xl p-4 hover:border-dark-600 transition-colors group"
-                                                >
-                                                    <div className="flex items-start justify-between gap-3">
-                                                        <div className="flex-1 min-w-0">
-                                                            <div className="flex items-center gap-2 mb-1">
-                                                                <span className={`px-2 py-0.5 text-[10px] font-medium rounded-full ${course.status === 'active' ? 'bg-teal-600/20 text-teal-400' : 'bg-dark-700 text-dark-400'}`}>
-                                                                    {course.status === 'active' ? 'Aktiv' : 'Entwurf'}
-                                                                </span>
-                                                                {course.parent_course_id && (
-                                                                    <span className="px-2 py-0.5 text-[10px] font-medium rounded-full bg-purple-600/20 text-purple-400">
-                                                                        Vertiefung
-                                                                    </span>
-                                                                )}
-                                                            </div>
-                                                            <h4 className="text-sm font-semibold text-white truncate">{course.title}</h4>
-                                                            <p className="text-xs text-dark-500 mt-0.5 line-clamp-2">{course.description}</p>
-                                                            {course.total_units > 0 && course.enabled_units > 0 && (
-                                                                <div className="flex items-center gap-2 mt-2">
-                                                                    <div className="flex-1 h-1.5 bg-dark-700 rounded-full overflow-hidden">
-                                                                        <div
-                                                                            className="h-full bg-teal-500 rounded-full transition-all"
-                                                                            style={{ width: `${Math.round((course.completed_units / course.enabled_units) * 100)}%` }}
-                                                                        />
-                                                                    </div>
-                                                                    <span className="text-[10px] text-dark-500">
-                                                                        {course.completed_units}/{course.enabled_units}
-                                                                    </span>
-                                                                </div>
-                                                            )}
-                                                        </div>
-                                                        <div className="flex items-center gap-1.5">
-                                                            <button
-                                                                onClick={() => handleResumeCourse(course.id)}
-                                                                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${course.status === 'active' ? 'bg-teal-600 hover:bg-teal-500 text-white' : 'bg-dark-700 hover:bg-dark-600 text-white'}`}
-                                                            >
-                                                                {course.status === 'active' ? 'Fortsetzen' : 'Öffnen'}
-                                                            </button>
-                                                            <button
-                                                                onClick={() => handleDeleteCourse(course.id)}
-                                                                className="p-1.5 text-dark-600 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
-                                                            >
-                                                                <FiTrash2 className="w-3.5 h-3.5" />
-                                                            </button>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            ))}
+                                        <div>
+                                            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-dark-500 mb-3 px-1">
+                                                Meine Kurse
+                                            </h3>
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                {activeDraft.map((course) => renderCourseCard(course, false))}
+                                            </div>
                                         </div>
                                     )}
 
                                     {completed.length > 0 && (
                                         <div>
-                                            {activeDraft.length > 0 && (
-                                                <div className="flex items-center gap-3 mb-3">
-                                                    <div className="h-px flex-1 bg-dark-700" />
-                                                    <span className="text-[10px] text-dark-500 font-medium uppercase tracking-wider">Abgeschlossen</span>
-                                                    <div className="h-px flex-1 bg-dark-700" />
-                                                </div>
-                                            )}
-                                            <div className="space-y-2">
-                                                {completed.map((course) => (
-                                                    <div
-                                                        key={course.id}
-                                                        className="bg-dark-800/50 border border-dark-700/50 rounded-xl p-3 group"
-                                                    >
-                                                        <div className="flex items-center justify-between gap-3">
-                                                            <div className="flex items-center gap-3 min-w-0">
-                                                                <FiCheck className="w-4 h-4 text-green-500 flex-shrink-0" />
-                                                                <div className="min-w-0">
-                                                                    <h4 className="text-sm font-medium text-dark-300 truncate">{course.title}</h4>
-                                                                    <p className="text-[10px] text-dark-600">
-                                                                        {course.completed_units}/{course.enabled_units} Lektionen
-                                                                        {course.parent_course_id && ' · Vertiefung'}
-                                                                    </p>
-                                                                </div>
-                                                            </div>
-                                                            <div className="flex items-center gap-1.5">
-                                                                <button
-                                                                    onClick={() => handleResumeCourse(course.id)}
-                                                                    className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white text-xs font-medium rounded-lg transition-colors"
-                                                                >
-                                                                    Vertiefen
-                                                                </button>
-                                                                <button
-                                                                    onClick={() => handleDeleteCourse(course.id)}
-                                                                    className="p-1.5 text-dark-600 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
-                                                                >
-                                                                    <FiTrash2 className="w-3.5 h-3.5" />
-                                                                </button>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                ))}
+                                            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-dark-500 mb-3 px-1">
+                                                Abgeschlossen
+                                            </h3>
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                {completed.map((course) => renderCourseCard(course, true))}
                                             </div>
                                         </div>
+                                    )}
+
+                                    {activeDraft.length === 0 && completed.length === 0 && (
+                                        <p className="text-center text-sm text-dark-500 py-8">
+                                            Keine Kurse in dieser Kategorie.
+                                        </p>
                                     )}
                                 </>
                             );
@@ -1271,6 +1352,39 @@ export default function TeacherPanel() {
                 )}
                 {view.kind === 'course-completed' && renderCourseCompleted()}
                 {view.kind === 'advanced-focus' && renderAdvancedFocus()}
+            </div>
+        </div>
+    );
+}
+
+// ── Circular progress ring for course cards ──────────────────────────
+function CircularProgress({ pct, done }: { pct: number; done: boolean }) {
+    const size = 44;
+    const stroke = 4;
+    const r = (size - stroke) / 2;
+    const circ = 2 * Math.PI * r;
+    const offset = circ - (pct / 100) * circ;
+    const color = done ? '#22c55e' : '#2dd4bf';
+
+    return (
+        <div className="relative flex-shrink-0" style={{ width: size, height: size }}>
+            <svg width={size} height={size} className="-rotate-90">
+                <circle cx={size / 2} cy={size / 2} r={r} stroke="#1f2937" strokeWidth={stroke} fill="none" />
+                <circle
+                    cx={size / 2} cy={size / 2} r={r}
+                    stroke={color} strokeWidth={stroke} fill="none"
+                    strokeLinecap="round"
+                    strokeDasharray={circ}
+                    strokeDashoffset={offset}
+                    style={{ transition: 'stroke-dashoffset 0.5s ease-out' }}
+                />
+            </svg>
+            <div className="absolute inset-0 flex items-center justify-center">
+                {done ? (
+                    <FiCheck className="w-4 h-4 text-green-400" />
+                ) : (
+                    <span className="text-[10px] font-semibold text-white">{pct}%</span>
+                )}
             </div>
         </div>
     );

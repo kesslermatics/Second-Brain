@@ -149,6 +149,7 @@ async def init_db():
                 ("book_isbn", "VARCHAR(50)"),
                 ("book_publisher", "VARCHAR(255)"),
                 ("book_cover_url", "VARCHAR(1024)"),
+                ("category", "VARCHAR(100)"),
             ]:
                 await conn.execute(
                     __import__('sqlalchemy').text(

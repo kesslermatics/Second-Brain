@@ -5,6 +5,7 @@ from app.services.ai_service import (
     generate_json, generate_with_search_sources, PRO_MODEL, FLASH_MODEL, DEFAULT_NOTE_PROMPT,
 )
 from app.config import get_settings
+from app.categories import categories_prompt_block, normalize_category
 import json
 import re
 import httpx
@@ -26,6 +27,7 @@ BOOK_SEARCH_SCHEMA = {
         "language": {"type": "string"},
         "pages": {"type": "integer"},
         "description": {"type": "string"},
+        "category": {"type": "string"},
         "suggestion": {"type": "string"},
     },
     "required": ["found"],
@@ -166,8 +168,12 @@ Antworte NUR mit dem JSON, kein anderer Text:
     "isbn": "ISBN wenn verfügbar",
     "language": "Deutsch/English/etc",
     "pages": 300,
-    "description": "Kurze Beschreibung des Buchs in 2-3 Sätzen"
+    "description": "Kurze Beschreibung des Buchs in 2-3 Sätzen",
+    "category": "Eine Kategorie aus der Liste unten"
 }}
+
+KATEGORIE:
+{categories_prompt_block()}
 
 Wenn kein passendes Buch gefunden wird:
 {{
@@ -185,15 +191,17 @@ Wenn kein passendes Buch gefunden wird:
         structured_prompt += f"\n\nRECHERCHE-ERGEBNIS:\n{research[:2500]}"
 
     async def _attach_cover(book: dict) -> dict:
-        """Enrich a found book with a public cover image URL (best-effort)."""
-        if book.get("found") and not book.get("cover_url"):
-            cover = await fetch_book_cover(
-                title=book.get("title"),
-                authors=book.get("authors"),
-                isbn=book.get("isbn"),
-            )
-            if cover:
-                book["cover_url"] = cover
+        """Enrich a found book with a cover image URL + normalised category."""
+        if book.get("found"):
+            book["category"] = normalize_category(book.get("category"))
+            if not book.get("cover_url"):
+                cover = await fetch_book_cover(
+                    title=book.get("title"),
+                    authors=book.get("authors"),
+                    isbn=book.get("isbn"),
+                )
+                if cover:
+                    book["cover_url"] = cover
         return book
 
     result = await generate_json(structured_prompt, BOOK_SEARCH_SCHEMA, model=PRO_MODEL, temperature=0.2)

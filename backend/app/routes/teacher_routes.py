@@ -131,6 +131,7 @@ async def list_courses(
             "book_isbn": c.book_isbn,
             "book_publisher": c.book_publisher,
             "book_cover_url": c.book_cover_url,
+            "category": c.category,
             "total_units": row.total,
             "completed_units": row.completed,
             "enabled_units": row.enabled,
@@ -169,6 +170,7 @@ async def get_course(
         "book_isbn": course.book_isbn,
         "book_publisher": course.book_publisher,
         "book_cover_url": course.book_cover_url,
+        "category": course.category,
         "units": [
             {
                 "id": str(u.id),
@@ -288,6 +290,7 @@ async def teacher_generate_curriculum(
         topic=topic,
         title=curriculum["title"],
         description=curriculum.get("description", ""),
+        category=curriculum.get("category"),
         status="draft",
         parent_course_id=parent_course_id,
         user_id=current_user.id,
@@ -406,6 +409,7 @@ async def create_book_course(
     isbn = data.get("isbn")
     publisher = data.get("publisher")
     cover_url = data.get("cover_url")
+    category = data.get("category")
     chapters = data.get("chapters", [])
 
     if not title or not chapters:
@@ -428,6 +432,7 @@ async def create_book_course(
         book_isbn=isbn or None,
         book_publisher=publisher or None,
         book_cover_url=cover_url or None,
+        category=category or None,
         user_id=current_user.id,
     )
     db.add(course)

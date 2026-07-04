@@ -29,6 +29,8 @@ import {
     ThinkingStatus, NoteToastHost, InlineQuiz, type SavedNoteToast,
 } from './TeachingComponents';
 import MermaidDiagram from './MermaidDiagram';
+import { CategoryBadge, CategoryFilter } from './CategoryUI';
+import { CATEGORY_ORDER } from '@/lib/categories';
 
 type View =
     | { kind: 'books' }
@@ -114,6 +116,9 @@ export default function BookPanel() {
 
     // TOC confirmation
     const [enabledChapters, setEnabledChapters] = useState<Record<string, boolean>>({});
+
+    // Category filter for the shelf
+    const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
 
     // Chat
     const [messages, setMessages] = useState<CourseMessage[]>([]);
@@ -675,7 +680,12 @@ export default function BookPanel() {
                     {course.book_authors && course.book_authors.length > 0 && (
                         <p className="text-[10px] text-dark-500 truncate">{course.book_authors.join(', ')}</p>
                     )}
-                    <p className="text-[10px] text-dark-600 mt-0.5">
+                    {course.category && (
+                        <div className="mt-1">
+                            <CategoryBadge category={course.category} size="xs" />
+                        </div>
+                    )}
+                    <p className="text-[10px] text-dark-600 mt-1">
                         {isCompleted
                             ? `${course.completed_units}/${course.enabled_units} Kapitel · fertig`
                             : `${course.completed_units}/${course.enabled_units} Kapitel`}
@@ -687,8 +697,10 @@ export default function BookPanel() {
 
     // ── Render: Books list ───────────────────────────────────────────
     const renderBooksList = () => {
-        const activeDraft = courses.filter(c => c.status !== 'completed');
-        const completed = courses.filter(c => c.status === 'completed');
+        const present = CATEGORY_ORDER.filter(cat => courses.some(c => c.category === cat));
+        const matches = (c: CourseListItem) => !categoryFilter || c.category === categoryFilter;
+        const activeDraft = courses.filter(c => c.status !== 'completed' && matches(c));
+        const completed = courses.filter(c => c.status === 'completed' && matches(c));
 
         return (
             <div className="h-full flex flex-col">
@@ -741,6 +753,15 @@ export default function BookPanel() {
                         </div>
                     ) : (
                         <div className="max-w-4xl mx-auto space-y-8">
+                            {present.length > 1 && (
+                                <CategoryFilter
+                                    categories={present}
+                                    active={categoryFilter}
+                                    onSelect={setCategoryFilter}
+                                    accentActive="bg-amber-600 text-white border-amber-500"
+                                />
+                            )}
+
                             {activeDraft.length > 0 && (
                                 <div>
                                     <h3 className="text-[11px] font-semibold uppercase tracking-wider text-dark-500 mb-4 px-1">
@@ -761,6 +782,12 @@ export default function BookPanel() {
                                         {completed.map((course) => renderShelfBook(course, true))}
                                     </div>
                                 </div>
+                            )}
+
+                            {activeDraft.length === 0 && completed.length === 0 && (
+                                <p className="text-center text-sm text-dark-500 py-8">
+                                    Keine Bücher in dieser Kategorie.
+                                </p>
                             )}
                         </div>
                     )}
@@ -802,6 +829,11 @@ export default function BookPanel() {
                             <div>
                                 <h3 className="text-lg font-bold text-white">{bookInfo.title}</h3>
                                 <p className="text-sm text-dark-400 mt-1">{bookInfo.authors?.join(', ')}</p>
+                                {bookInfo.category && (
+                                    <div className="mt-2">
+                                        <CategoryBadge category={bookInfo.category} />
+                                    </div>
+                                )}
                             </div>
                         </div>
 

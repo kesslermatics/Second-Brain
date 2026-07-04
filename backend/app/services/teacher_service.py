@@ -10,6 +10,7 @@ from app.services.ai_service import (
     generate_json, generate_with_search_sources, PRO_MODEL, FLASH_MODEL,
 )
 from app.config import get_settings
+from app.categories import categories_prompt_block, normalize_category, DEFAULT_CATEGORY
 import json
 import re
 import logging
@@ -262,6 +263,7 @@ CURRICULUM_SCHEMA = {
     "properties": {
         "title": {"type": "string"},
         "description": {"type": "string"},
+        "category": {"type": "string"},
         "units": {
             "type": "array",
             "items": {
@@ -374,7 +376,10 @@ WICHTIG:
 - Die Lektionsnamen sollen das THEMA beschreiben, nicht "Stunde 1" oder "Lektion 1"
 - Module (level 1) sind übergeordnete Themenbereiche, Lektionen (level 2) sind die konkreten Unterrichtseinheiten
 - unit_number als String: Module "1", "2", ...; Lektionen "1.1", "1.2", ...
-- Bei Lektionen die vorhandenes Wissen des Studenten vertiefen: "builds_on_existing": true"""
+- Bei Lektionen die vorhandenes Wissen des Studenten vertiefen: "builds_on_existing": true
+
+KATEGORIE des Kurses (Feld "category"):
+{categories_prompt_block()}"""
 
     # Add knowledge-base awareness to the prompt
     if knowledge_block:
@@ -394,6 +399,7 @@ WICHTIG:
         return {
             "title": result.get("title", topic),
             "description": result.get("description", ""),
+            "category": normalize_category(result.get("category")),
             "units": result.get("units", []),
         }
 
@@ -404,10 +410,11 @@ WICHTIG:
         return {
             "title": parsed.get("title", topic),
             "description": parsed.get("description", ""),
+            "category": normalize_category(parsed.get("category")),
             "units": parsed.get("units", []),
         }
 
-    return {"title": topic, "description": "", "units": []}
+    return {"title": topic, "description": "", "category": DEFAULT_CATEGORY, "units": []}
 
 
 async def chat_with_teacher(

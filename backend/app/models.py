@@ -255,6 +255,7 @@ class Course(Base):
     book_isbn = Column(String(50), nullable=True)
     book_publisher = Column(String(255), nullable=True)
     book_cover_url = Column(String(1024), nullable=True)  # public cover image URL
+    category = Column(String(100), nullable=True)  # AI-assigned content category
     parent_course_id = Column(UUID(as_uuid=True), ForeignKey("courses.id", ondelete="SET NULL"), nullable=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
