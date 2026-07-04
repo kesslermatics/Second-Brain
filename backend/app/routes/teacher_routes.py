@@ -753,10 +753,9 @@ async def unit_chat_stream(
     previous_summary = _build_previous_units_summary(list(course.units), unit.order_index)
     next_title = _get_next_unit_title(list(course.units), unit.order_index)
 
-    # Knowledge-base awareness: what does the student already have on this topic?
-    knowledge_hits = await get_relevant_knowledge(
-        f"{unit.title} {unit.description or ''}", str(current_user.id), db, limit=6
-    )
+    # NOTE: no upfront knowledge lookup here — the agent decides on its own when
+    # to call search_my_notes, so a blocking vector search before streaming would
+    # only delay the first token without being used.
 
     # Sections
     if not unit.sections:

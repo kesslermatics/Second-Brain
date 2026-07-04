@@ -827,14 +827,9 @@ async def generate_lesson_sections(
             f'KAPITEL: "{title}"'
         )
         subject_word = "des Kapitels"
-        research_hint = (
-            "Recherchiere bei Bedarf den tatsächlichen Inhalt dieses Kapitels und teile ihn "
-            "in eine sinnvolle Reihenfolge von Lernabschnitten ein.\n"
-        )
     else:
         subject_block = f'LEKTION: "{title}"\n{description}'
         subject_word = "der Lektion"
-        research_hint = ""
 
     prompt = f"""Du bist ein erfahrener Didaktiker. Teile die folgende Lerneinheit in eine
 sinnvolle Abfolge kleiner, fokussierter ABSCHNITTE ein, die ein Tutor nacheinander mit dem
@@ -845,25 +840,36 @@ Studenten durchgeht. Jeder Abschnitt behandelt EIN Teilkonzept {subject_word}.
 LERNZIELE:
 {objectives_str}
 
-{research_hint}REGELN:
+REGELN:
 - Erstelle 3 bis 6 Abschnitte (je nach Umfang des Themas) — nicht mehr, nicht weniger
 - Die Abschnitte bauen logisch aufeinander auf (vom Grundlegenden zum Komplexeren)
 - Jeder Abschnitt ist ein abgeschlossener Lernschritt, den man in 1-3 Tutor-Nachrichten erklären kann
 - Der letzte Abschnitt soll das Gelernte abrunden / zusammenführen
 - Der "title" ist kurz und konkret (das Teilkonzept selbst, NICHT "Abschnitt 1")
-- Der "focus" beschreibt in 1-2 Sätzen, was in diesem Abschnitt genau vermittelt wird
+- Der "focus" beschreibt in 1-2 Sätzen, was in diesem Abschnitt genau vermittelt wird"""
 
-Antworte NUR mit dem JSON, kein anderer Text:
-{{
-    "sections": [
-        {{"title": "Konkretes Teilkonzept", "focus": "Was in diesem Abschnitt vermittelt wird"}}
-    ]
-}}"""
+    # Section splitting is a pure structuring task — no web grounding needed.
+    # Use fast structured JSON output on the cheap model so the lesson starts quickly.
+    schema = {
+        "type": "object",
+        "properties": {
+            "sections": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "focus": {"type": "string"},
+                    },
+                    "required": ["title"],
+                },
+            },
+        },
+        "required": ["sections"],
+    }
 
-    text = (await generate_with_search(prompt)).strip()
-
-    result = _extract_json(text)
-    if result:
+    result = await generate_json(prompt, schema, model=FLASH_MODEL, temperature=0.4)
+    if result and isinstance(result, dict):
         sections = result.get("sections", [])
         clean: list[dict] = []
         for s in sections:
@@ -874,7 +880,7 @@ Antworte NUR mit dem JSON, kein anderer Text:
         if clean:
             return clean
 
-    _logger.warning("Failed to generate sections for %s — raw: %s", title, text[:300])
+    _logger.warning("Failed to generate sections for %s", title)
     # Fallback: a single section covering the whole lesson
     return [{"title": title, "focus": description or ""}]
 

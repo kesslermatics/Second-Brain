@@ -321,6 +321,10 @@ async def run_teacher_agent(
     # a tool round runs.
     latest_thought = ""
 
+    # Immediate feedback so the UI never sits on the generic default line while
+    # the (potentially multi-second) first model round is still in flight.
+    yield {"type": "status", "content": "Ich bereite die Erklärung vor …"}
+
     for round_num in range(max_rounds + 1):
         function_calls = []
         text_parts = []
