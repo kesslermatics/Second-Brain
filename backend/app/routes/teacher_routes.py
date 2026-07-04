@@ -871,7 +871,6 @@ async def unit_chat_stream(
 
     async def event_stream():
         full_response_parts = []
-        agent_advanced = False
         collected_final: dict = {}
 
         async for event in run_teacher_agent(
@@ -905,8 +904,6 @@ async def unit_chat_stream(
                 yield f"data: {json.dumps({'type': 'checkpoint', 'question': event.get('question', '')}, ensure_ascii=False)}\n\n"
             elif etype == "diagram":
                 yield f"data: {json.dumps({'type': 'diagram', 'code': event.get('code', ''), 'caption': event.get('caption', '')}, ensure_ascii=False)}\n\n"
-            elif etype == "advance_section":
-                agent_advanced = True
             elif etype == "done":
                 collected_final = event
 
@@ -917,9 +914,10 @@ async def unit_chat_stream(
         diagrams = collected_final.get("diagrams", [])
         checkpoints = collected_final.get("checkpoints", [])
 
-        # Persist: assistant message (with any diagrams/checkpoints as metadata) +
-        # advance section if the model chose to. Notes were already saved live by
-        # the agent, so we just record a marker for them.
+        # Persist: assistant message (with any diagrams/checkpoints as metadata).
+        # Section progression already happened via [ABSCHNITT_WEITER] before the
+        # stream, so current_section_idx is authoritative here. Notes were saved
+        # live by the agent — we just record a marker for them.
         new_section_idx = current_section_idx
         msg_metadata = {}
         if diagrams:
@@ -946,14 +944,6 @@ async def unit_chat_stream(
                         metadata_={"note_titles": titles, "auto": True},
                     )
                     save_db.add(marker)
-
-            if agent_advanced and sections_list and current_section_idx < len(sections_list) - 1:
-                fresh_unit = await save_db.get(CourseUnit, unit.id)
-                if fresh_unit:
-                    new_section_idx = (fresh_unit.current_section or 0) + 1
-                    if new_section_idx > len(sections_list) - 1:
-                        new_section_idx = len(sections_list) - 1
-                    fresh_unit.current_section = new_section_idx
 
             await save_db.commit()
             msg_id = str(assistant_msg.id)

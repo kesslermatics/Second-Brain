@@ -200,19 +200,13 @@ def _teacher_tools() -> list:
         },
     )
 
-    advance_section = types.FunctionDeclaration(
-        name="advance_section",
-        description=(
-            "Gehe zum nächsten Abschnitt der Lektion über, wenn der aktuelle Abschnitt verstanden ist "
-            "und der Student bereit ist weiterzumachen."
-        ),
-        parameters={"type": "object", "properties": {}},
-    )
+    # NOTE: no autonomous `advance_section` tool. Section progression is driven
+    # exclusively by the student's "Weiter" button ([ABSCHNITT_WEITER]) so the
+    # displayed progress and the explained section can never desync.
 
     return [types.Tool(function_declarations=[
         search_my_notes, propose_quiz, set_difficulty, mark_understanding,
         save_note, update_note, create_folder, ask_checkpoint, draw_diagram,
-        advance_section,
     ])]
 
 
@@ -228,9 +222,8 @@ Du unterrichtest wie ein echter, kluger Lehrer — nicht wie ein Textgenerator:
 - Du hältst gelerntes Wissen EIGENSTÄNDIG und STILL als Notizen fest: Wenn ein abgeschlossenes Konzept es wert ist, nutze `save_note` (es wird sofort und ohne Rückfrage gespeichert). Prüfe VORHER mit `search_my_notes`, ob es das schon gibt — wenn ja, ergänze die bestehende Notiz mit `update_note` statt eine neue anzulegen. Du entscheidest selbst, was festgehalten wird — der Student muss nichts bestätigen.
 - Du wirfst hin und wieder eine beiläufige Zwischenfrage ein (`ask_checkpoint`), um den Studenten aktiv zu halten.
 - Bei klar strukturierten Themen (Abläufe, Hierarchien, Zeitachsen) kannst du ein kleines Diagramm zeichnen (`draw_diagram`) — aber nur, wenn es wirklich hilft.
-- Du gehst mit `advance_section` zum nächsten Abschnitt über, wenn der aktuelle sitzt.
 
-ABSCHNITTSWEISES LEHREN: Behandle immer nur den aktuell markierten Abschnitt — substantiell, mit Beispiel (in der Regel 2-4 Absätze), fokussiert auf dieses eine Teilkonzept. Wirf nicht die ganze Lektion auf einmal raus.
+ABSCHNITTSWEISES LEHREN: Behandle immer nur den aktuell markierten Abschnitt — substantiell, mit Beispiel (in der Regel 2-4 Absätze), fokussiert auf dieses eine Teilkonzept. Wirf nicht die ganze Lektion auf einmal raus. Den Wechsel zum nächsten Abschnitt löst ausschließlich der Student per Weiter-Button aus — du selbst wechselst NICHT eigenständig den Abschnitt.
 
 RECALL: Ab und zu (nicht immer) bittest du den Studenten am Ende eines Abschnitts, das eben Gelernte in einem Satz selbst zusammenzufassen — das festigt das Wissen. Er kann aber auch einfach weitermachen.
 
@@ -314,7 +307,6 @@ async def run_teacher_agent(
         "understanding": [],
         "checkpoints": [],
         "diagrams": [],
-        "advance": False,
     }
 
     # Track the latest thinking text so we can turn it into a status line before
@@ -424,9 +416,6 @@ async def run_teacher_agent(
                     d = {"code": code, "caption": args.get("caption", "")}
                     collected["diagrams"].append(d)
                     yield {"type": "diagram", **d}
-            elif name == "advance_section":
-                collected["advance"] = True
-                yield {"type": "advance_section"}
 
             response_parts.append(types.Part.from_function_response(name=name, response=result))
 

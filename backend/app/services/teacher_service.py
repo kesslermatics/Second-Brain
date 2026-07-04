@@ -1483,27 +1483,30 @@ async def save_atomic_note(
     folder = await _ensure_folder(uid, db, folder_path or "Allgemein")
     tag_objs = await _resolve_tag_objects(uid, db, tags)
 
+    # Assign tags at construction time. Appending to note.tags AFTER a flush/refresh
+    # would trigger a lazy collection load — implicit IO that throws
+    # "greenlet_spawn has not been called" inside the streaming generator.
     note = Note(
         title=(title or "Notiz").strip()[:500],
         content=content or "",
         note_type="text",
         folder_id=folder.id,
         user_id=uid,
+        tags=tag_objs,
     )
     db.add(note)
     await db.flush()
-    await db.refresh(note)
-    for t in tag_objs:
-        note.tags.append(t)
+    note_id = str(note.id)
+    folder_path_val = folder.path
     await db.commit()
 
     try:
         from app.services.vector_service import upsert_note_embedding
-        upsert_note_embedding(str(note.id), str(uid), note.title, note.content, folder.path)
+        upsert_note_embedding(note_id, str(uid), title or "Notiz", content or "", folder_path_val)
     except Exception:
         pass
 
-    return {"note_id": str(note.id), "title": note.title, "folder": folder.path}
+    return {"note_id": note_id, "title": (title or "Notiz").strip()[:500], "folder": folder_path_val}
 
 
 async def update_atomic_note(
@@ -1529,17 +1532,27 @@ async def update_atomic_note(
             note.content = (note.content or "").rstrip() + "\n\n" + content
         else:
             note.content = content
+
+    # Capture values BEFORE commit — after commit the attributes are expired and
+    # touching them would trigger a lazy reload (implicit IO -> greenlet error).
+    note_id = str(note.id)
+    new_title = note.title
+    new_content = note.content
+    folder_id = note.folder_id
+
+    # Resolve the folder path before commit too.
+    folder = await db.get(Folder, folder_id)
+    folder_path_val = folder.path if folder else ""
+
     await db.commit()
-    await db.refresh(note)
 
     try:
-        folder = await db.get(Folder, note.folder_id)
         from app.services.vector_service import upsert_note_embedding
-        upsert_note_embedding(str(note.id), str(uid), note.title, note.content, folder.path if folder else "")
+        upsert_note_embedding(note_id, str(uid), new_title, new_content, folder_path_val)
     except Exception:
         pass
 
-    return {"note_id": str(note.id), "title": note.title, "updated": True}
+    return {"note_id": note_id, "title": new_title, "updated": True}
 
 
 # ── Curriculum editing via chat ───────────────────────────────────────

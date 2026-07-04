@@ -197,6 +197,14 @@ export default function BookPanel() {
         }
     }, [messages, view]);
 
+    // When a turn starts (also via the "Weiter" button, which adds no message),
+    // scroll the "thinking" indicator into view so the user sees activity.
+    useEffect(() => {
+        if (sendingChat && view.kind === 'lesson-chat') {
+            chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        }
+    }, [sendingChat, view.kind]);
+
     // Keep URL in sync with the current chapter
     useEffect(() => {
         if (view.kind === 'lesson-chat') {

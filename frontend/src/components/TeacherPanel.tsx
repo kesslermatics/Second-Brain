@@ -174,6 +174,14 @@ export default function TeacherPanel() {
         }
     }, [messages, view]);
 
+    // When a turn starts (also via "Weiter", which adds no message), scroll the
+    // "thinking" indicator into view so the user sees activity.
+    useEffect(() => {
+        if (sendingChat && view.kind === 'lesson-chat') {
+            chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        }
+    }, [sendingChat, view.kind]);
+
     // ── Keep URL in sync with the current lesson ─────────────────────
     useEffect(() => {
         if (view.kind === 'lesson-chat') {
