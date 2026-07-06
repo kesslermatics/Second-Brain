@@ -69,7 +69,7 @@ Du hast Zugriff auf alle Notizen, Ordner und Bilder des Benutzers über Tools �
    - Lieber ein Gespräch zu wenig verschriftlicht als der Chat voller ungewollter Notiz-Vorschläge. Zurückhaltung ist erwünscht.
 
 4. **BEARBEITEN STATT NEU ANLEGEN — sehr wichtig**: Dein Standardverhalten ist, bestehende Notizen zu ERWEITERN und zu PFLEGEN, nicht ständig neue anzulegen.
-   - Bevor du eine neue Notiz erstellst, suche IMMER zuerst mit `search_notes` (großzügig!) ob es schon eine Notiz zum gleichen oder einem eng verwandten Thema gibt.
+   - Bevor du eine neue Notiz erstellst, suche IMMER zuerst mit `search_notes` ob es schon eine Notiz zum gleichen oder einem eng verwandten Thema gibt. EINE breite Suche reicht in der Regel — kombiniere verwandte Begriffe statt mehrerer Einzelsuchen.
    - Wenn eine passende Notiz existiert: Lies sie mit `read_note`, dann nutze `update_note` um sie zu erweitern/verbessern. Du darfst die Notiz komplett neu schreiben — aber übernimm dabei ALLE bestehenden wertvollen Inhalte und ergänze das Neue sinnvoll integriert. Nichts Wichtiges darf verloren gehen.
    - Nutze deine bestehenden Notizen aktiv als Wissensquelle: Wenn du etwas erklärst oder planst, beziehe dich auf das was der Benutzer bereits notiert hat.
    - Erstelle nur dann eine NEUE Notiz, wenn es wirklich ein eigenständiges, neues Thema ist, das in keine bestehende Notiz passt.
@@ -104,6 +104,12 @@ Du hast Zugriff auf alle Notizen, Ordner und Bilder des Benutzers über Tools �
      - **Neu aus dem Web:** was er noch nicht hatte, ergänzende/aktuelle Infos (mit Quellen)
      - **Fazit/Synthese:** wie beides zusammenpasst, was neu ist, was er ergänzen sollte
    - Wenn zu einem Thema noch nichts in den Notizen steht, sag das ehrlich und biete an, eine Notiz daraus zu erstellen.
+   - `web_search` ist TEUER (löst einen eigenen Recherche-Durchlauf aus) — nutze es nur bei echten Wissens-/Aktualitätsfragen, nicht routinemäßig bei jeder Anfrage.
+
+9. **Sparsam mit Tool-Aufrufen**: Du hast ein begrenztes Kontingent an Tool-Runden pro Antwort. Plane deine Suchen effizient:
+   - Fasse verwandte Suchbegriffe in EINER `search_notes`-Anfrage zusammen, statt sie nacheinander einzeln abzusetzen.
+   - Wiederhole eine Suche NICHT mit nur leicht abgewandelten Begriffen ("Sponsor", dann "Sponsoring", dann "Sponsor Modell") — das ist Verschwendung. Wenn die erste Suche nichts Passendes fand, probiere einen grundlegend anderen Blickwinkel, nicht dieselbe Formulierung.
+   - Wenn du nach 2-3 Suchen genug Kontext hast, antworte — du musst nicht jeden Stein umdrehen.
 
 ## Antwortformat:
 - Nutze Markdown: **Fettdruck** für Kernbegriffe, Aufzählungen, Überschriften (##) wo sinnvoll
@@ -129,17 +135,23 @@ def _get_agent_tools() -> list:
     # We use manual FunctionDeclarations for more control over descriptions
     search_notes = types.FunctionDeclaration(
         name="search_notes",
-        description="Semantische und Volltextsuche über alle Notizen und Bilder des Benutzers. Nutze dies proaktiv um relevanten Kontext zu finden. Gibt standardmäßig bis zu 30 Treffer zurück.",
+        description=(
+            "Semantische und Volltextsuche über alle Notizen und Bilder des Benutzers. "
+            "Gibt standardmäßig bis zu 10 Treffer zurück. WICHTIG: Formuliere EINE breite, "
+            "kombinierte Suchanfrage statt mehrerer eng verwandter Einzelsuchen (z.B. 'Sponsoring "
+            "Kündigung Vertrag' statt drei separater Suchen für jeden Begriff). Wiederhole eine "
+            "Suche NICHT mit nur leicht abgewandelten Begriffen, wenn die erste schon Treffer lieferte."
+        ),
         parameters={
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Suchanfrage (semantisch + Volltext)",
+                    "description": "Breite Suchanfrage — kombiniere verwandte Begriffe in einem Aufruf",
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Maximale Anzahl Treffer (Standard 30, max 60). Nutze einen hohen Wert wenn du einen umfassenden Überblick über ein Thema brauchst.",
+                    "description": "Maximale Anzahl Treffer (Standard 10, max 30).",
                 },
             },
             "required": ["query"],
@@ -469,10 +481,10 @@ async def _execute_tool(name: str, args: dict, user_id: str, db: AsyncSession) -
     try:
         if name == "search_notes":
             try:
-                limit = int(args.get("limit") or 30)
+                limit = int(args.get("limit") or 10)
             except (ValueError, TypeError):
-                limit = 30
-            limit = max(1, min(limit, 60))
+                limit = 10
+            limit = max(1, min(limit, 30))
             results = await hybrid_search(
                 query=args.get("query", ""),
                 user_id=user_id,
@@ -1038,7 +1050,11 @@ async def run_agent_stream(
 
     proposals = []
     steps = []
-    max_tool_rounds = 15  # allow deeper multi-step reasoning for complex tasks
+    # Kept intentionally low: each round is a full model call (thinking tokens
+    # included). Without a tight cap the agent tends to fire many near-duplicate
+    # searches instead of a couple of broad ones. See AGENT_SYSTEM_INSTRUCTION for
+    # the matching "search broadly, don't repeat" guidance.
+    max_tool_rounds = 7
 
     for round_num in range(max_tool_rounds + 1):
         # For tool rounds (not the last), use non-streaming to avoid thought_signature issues
@@ -1122,8 +1138,36 @@ async def run_agent_stream(
         if not function_calls:
             break
 
-        # If we've exhausted rounds, break
+        # If we've exhausted rounds, force a final answer instead of silently
+        # stopping (previously: `break` here meant zero text was ever streamed
+        # if the model was still calling tools at the last round).
         if round_num >= max_tool_rounds:
+            steps.append({"type": "tool_call", "content": "Fasse zusammen …"})
+            yield {"type": "tool_call", "content": "Fasse zusammen …"}
+            # Nudge the model to answer now, without offering more tools.
+            contents.append(types.Content(
+                role="user",
+                parts=[types.Part.from_text(text=(
+                    "Du hast das Recherche-Limit für diese Anfrage erreicht. "
+                    "Antworte JETZT mit dem, was du bisher gefunden hast — nutze KEINE weiteren Tools."
+                ))],
+            ))
+            final_config = types.GenerateContentConfig(
+                system_instruction=AGENT_SYSTEM_INSTRUCTION,
+                temperature=0.8,
+                **({"thinking_config": thinking_config} if thinking_config else {}),
+            )
+            async for chunk in await client.aio.models.generate_content_stream(
+                model=AGENT_MODEL, contents=contents, config=final_config,
+            ):
+                if chunk.candidates:
+                    for candidate in chunk.candidates:
+                        if candidate.content and candidate.content.parts:
+                            for part in candidate.content.parts:
+                                if getattr(part, 'thought', False) and getattr(part, 'text', None):
+                                    yield {"type": "thinking", "content": part.text}
+                                elif getattr(part, 'text', None):
+                                    yield {"type": "chunk", "content": part.text}
             break
 
         # For round 0, model response already added to contents above
