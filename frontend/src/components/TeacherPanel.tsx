@@ -550,12 +550,15 @@ export default function TeacherPanel() {
     };
 
     // ── Delete course ────────────────────────────────────────────────
-    const handleDeleteCourse = async (courseId: string) => {
+    const handleDeleteCourse = async (courseId: string, title?: string): Promise<boolean> => {
+        if (!confirm(`„${title || 'Dieser Kurs'}" wirklich löschen? Der gesamte Fortschritt geht verloren.`)) return false;
         try {
             await deleteTeacherCourse(courseId);
             await loadCourses();
+            return true;
         } catch {
             setError('Fehler beim Löschen des Kurses.');
+            return false;
         }
     };
 
@@ -698,7 +701,7 @@ export default function TeacherPanel() {
                                     )}
                                 </button>
                                 <button
-                                    onClick={() => handleDeleteCourse(course.id)}
+                                    onClick={() => handleDeleteCourse(course.id, course.title)}
                                     className="p-2 text-dark-500 hover:text-red-400 hover:bg-dark-700 rounded-xl transition-colors"
                                     title="Kurs löschen"
                                 >
@@ -960,7 +963,10 @@ export default function TeacherPanel() {
                                 Kurs starten ({enabledCount(course)} Lektionen)
                             </button>
                             <button
-                                onClick={() => { handleDeleteCourse(course.id); setView({ kind: 'courses' }); }}
+                                onClick={async () => {
+                                    const deleted = await handleDeleteCourse(course.id, course.title);
+                                    if (deleted) setView({ kind: 'courses' });
+                                }}
                                 className="px-4 py-2.5 bg-dark-700 hover:bg-dark-600 text-dark-300 text-sm rounded-xl transition-colors"
                             >
                                 <FiX className="w-4 h-4" />

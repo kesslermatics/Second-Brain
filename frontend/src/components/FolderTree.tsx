@@ -58,8 +58,12 @@ export default function FolderTreeComponent({ folders, level }: Props) {
     const handleSelectNote = async (noteId: string) => {
         try {
             const note = await getNote(noteId);
-            if (activeView === 'agent') {
-                // When agent view is active, open note in the agent's left panel
+            // The agent view's note panel is a desktop-only split layout (hidden
+            // below the lg breakpoint) — on mobile there's no room for it, so
+            // just open the note normally like everywhere else in the app.
+            const isDesktop = typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches;
+            if (activeView === 'agent' && isDesktop) {
+                // When agent view is active on desktop, open note in the agent's left panel
                 setAgentViewingNote(note);
             } else {
                 setSelectedNote(note);

@@ -538,7 +538,8 @@ export default function BookPanel() {
         }
     };
 
-    const handleDeleteCourse = async (courseId: string) => {
+    const handleDeleteCourse = async (courseId: string, title?: string) => {
+        if (!confirm(`„${title || 'Dieses Buch'}" wirklich löschen? Der gesamte Fortschritt geht verloren.`)) return;
         try {
             await deleteTeacherCourse(courseId);
             await loadCourses();
@@ -695,7 +696,7 @@ export default function BookPanel() {
                             <FiFileText className="w-3.5 h-3.5" />
                         </span>
                         <span
-                            onClick={(e) => { e.stopPropagation(); handleDeleteCourse(course.id); }}
+                            onClick={(e) => { e.stopPropagation(); handleDeleteCourse(course.id, course.title); }}
                             className="p-2 bg-dark-900/90 hover:bg-dark-800 rounded-lg text-dark-400 hover:text-red-400 transition-colors"
                             title="Löschen"
                         >
