@@ -1695,13 +1695,13 @@ async def generate_thinking_phrases(
     if src:
         context += f"\nInterner Gedankengang (evtl. englisch):\n{src[:800]}"
 
-    prompt = f"""Formuliere GENAU 5 verschiedene, sehr kurze deutsche Statuszeilen (max 7 Wörter je),
+    prompt = f"""Formuliere GENAU 10 verschiedene, sehr kurze deutsche Statuszeilen (max 7 Wörter je),
 die zeigen was ein Tutor gerade tut oder denkt — warmherzig, in der ICH-Form, mit „ …" am Ende.
 Keine Anführungszeichen, kein Punkt, jede Zeile eine eigenständige Variante desselben Moments.
 {context}
 
 Antworte NUR als JSON-Array, z.B.:
-["Ich schaue nach ...", "Ich durchstöbere ...", "Ich suche ...", "Ich prüfe ...", "Ich vergleiche ..."]
+["Ich schaue nach ...", "Ich durchstöbere ...", "Ich suche ...", "Ich prüfe ...", "Ich vergleiche ...", "Ich checke ...", "Ich finde ...", "Ich überlege ...", "Ich scanne ...", "Ich erkunde ..."]
 
 Array:"""
 
@@ -1719,10 +1719,10 @@ Array:"""
                     if isinstance(p, str) and p.strip() and len(p.strip()) <= 100
                 ]
                 if len(clean) >= 2:
-                    # Pad to 5 with fallbacks if the model returned fewer
-                    while len(clean) < 5:
+                    # Pad to 10 with fallbacks if the model returned fewer
+                    while len(clean) < 10:
                         clean.append(fallbacks[len(clean) % len(fallbacks)])
-                    return clean[:5]
+                    return clean[:10]
     except Exception:
         pass
     return fallbacks

@@ -189,7 +189,7 @@ export default function BookPanel() {
             statusIntervalRef.current = setInterval(() => {
                 i = (i + 1) % phrases.length;
                 setStatusPhraseIndex(i);
-            }, 3000);
+            }, 8000);
         }
     }, []);
 

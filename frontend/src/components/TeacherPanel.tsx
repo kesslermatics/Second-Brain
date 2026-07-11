@@ -125,13 +125,12 @@ export default function TeacherPanel() {
 
     const toggleExpandCourse = useCallback(async (courseId: string) => {
         setExpandedCourseId((prev) => (prev === courseId ? null : courseId));
-        if (!courseDetailCache[courseId]) {
-            try {
-                const detail = await getTeacherCourse(courseId);
-                setCourseDetailCache((prev) => ({ ...prev, [courseId]: detail }));
-            } catch { /* non-fatal — card still shows summary */ }
-        }
-    }, [courseDetailCache]);
+        // Always reload detail on expand to get fresh completion counts
+        try {
+            const detail = await getTeacherCourse(courseId);
+            setCourseDetailCache((prev) => ({ ...prev, [courseId]: detail }));
+        } catch { /* non-fatal — card still shows summary */ }
+    }, []);
 
     const chatEndRef = useRef<HTMLDivElement>(null);
     const lastAssistantRef = useRef<HTMLDivElement>(null);
@@ -166,7 +165,7 @@ export default function TeacherPanel() {
             statusIntervalRef.current = setInterval(() => {
                 i = (i + 1) % phrases.length;
                 setStatusPhraseIndex(i);
-            }, 3000);
+            }, 8000);
         }
     }, []);
 
@@ -551,6 +550,12 @@ export default function TeacherPanel() {
         const currentCourse = view.course;
         const currentUnit = view.unit;
         updateCourseUnit(currentCourse.id, currentUnit.id, { status: 'completed' }).catch(() => { });
+        // Invalidate the detail cache so the course card shows fresh progress on return
+        setCourseDetailCache((prev) => {
+            const next = { ...prev };
+            delete next[currentCourse.id];
+            return next;
+        });
         setRecap(null);
         setLoadingRecap(true);
         setView({ kind: 'lesson-complete', course: currentCourse, unit: currentUnit });
@@ -681,11 +686,21 @@ export default function TeacherPanel() {
 
     // ── Render: a single course card (modern, expand-on-click) ───────
     const renderCourseCard = (course: CourseListItem, done: boolean) => {
-        const pct = course.enabled_units > 0
-            ? Math.round((course.completed_units / course.enabled_units) * 100)
-            : 0;
         const isExpanded = expandedCourseId === course.id;
         const detail = courseDetailCache[course.id];
+
+        // If we have fresh detail data, compute live counts from it (level 2 only).
+        // The CourseListItem summary can be stale between list reloads.
+        const completedUnits = detail
+            ? detail.units.filter((u) => u.enabled && u.level === 2 && u.status === 'completed').length
+            : course.completed_units;
+        const enabledUnits = detail
+            ? detail.units.filter((u) => u.enabled && u.level === 2).length
+            : course.enabled_units;
+        const pct = enabledUnits > 0
+            ? Math.round((completedUnits / enabledUnits) * 100)
+            : 0;
+
         const lessons = detail
             ? [...detail.units].filter((u) => u.enabled && u.level === 2).sort((a, b) => a.order_index - b.order_index)
             : [];
@@ -724,7 +739,7 @@ export default function TeacherPanel() {
                             {course.description || 'Keine Beschreibung'}
                         </p>
                         <p className="text-[10px] text-dark-600 mt-2 font-medium">
-                            {course.completed_units}/{course.enabled_units} Lektionen · {pct}%
+                            {completedUnits}/{enabledUnits} Lektionen · {pct}%
                         </p>
                     </div>
 
