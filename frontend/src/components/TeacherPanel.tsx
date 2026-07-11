@@ -91,7 +91,9 @@ export default function TeacherPanel() {
     const [messages, setMessages] = useState<CourseMessage[]>([]);
     const [chatInput, setChatInput] = useState('');
     const [sendingChat, setSendingChat] = useState(false);
-    const [statusLine, setStatusLine] = useState('');
+    const [statusPhrases, setStatusPhrases] = useState<string[]>([]);
+    const [statusPhraseIndex, setStatusPhraseIndex] = useState(0);
+    const statusIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     // Silent-save toasts + tutor-driven inline quiz
     const [toasts, setToasts] = useState<SavedNoteToast[]>([]);
@@ -152,6 +154,29 @@ export default function TeacherPanel() {
     }, []);
     const dismissBubble = useCallback((id: string) => {
         setBubbles((prev) => prev.filter((b) => b.id !== id));
+    }, []);
+
+    // ── Rotating status phrases helper ───────────────────────────────
+    const startStatusRotation = useCallback((phrases: string[]) => {
+        if (statusIntervalRef.current) clearInterval(statusIntervalRef.current);
+        setStatusPhrases(phrases);
+        setStatusPhraseIndex(0);
+        if (phrases.length > 1) {
+            let i = 0;
+            statusIntervalRef.current = setInterval(() => {
+                i = (i + 1) % phrases.length;
+                setStatusPhraseIndex(i);
+            }, 3000);
+        }
+    }, []);
+
+    const clearStatus = useCallback(() => {
+        if (statusIntervalRef.current) {
+            clearInterval(statusIntervalRef.current);
+            statusIntervalRef.current = null;
+        }
+        setStatusPhrases([]);
+        setStatusPhraseIndex(0);
     }, []);
 
     // ── Load courses ─────────────────────────────────────────────────
@@ -328,7 +353,7 @@ export default function TeacherPanel() {
 
     // ── Reset per-lesson ephemeral state ─────────────────────────────
     const resetLessonEphemeral = () => {
-        setStatusLine('');
+        clearStatus();
         setInlineQuiz(null);
     };
 
@@ -359,7 +384,7 @@ export default function TeacherPanel() {
             setMessages(msgs);
             if (msgs.length === 0) {
                 setSendingChat(true);
-                setStatusLine('');
+                clearStatus();
                 const response = await streamTurn(course.id, unit.id, '[START]');
                 setMessages([
                     { id: 'start', role: 'user', content: '[START]', metadata: null, created_at: null },
@@ -407,10 +432,13 @@ export default function TeacherPanel() {
     // ── Shared stream handler ────────────────────────────────────────
     // Runs one streamed turn, wiring live status lines + silent-save toasts.
     const streamTurn = async (courseId: string, unitId: string, message: string) => {
-        setStatusLine('');
+        clearStatus();
         return sendTeacherChatStream(courseId, unitId, message, (event) => {
             if (event.type === 'status') {
-                setStatusLine(event.content);
+                // Legacy single-phrase status — wrap as single-item rotation
+                startStatusRotation([event.content]);
+            } else if (event.type === 'status_phrases') {
+                startStatusRotation(event.phrases);
             } else if (event.type === 'note_saved') {
                 pushToast(event.note);
                 pushBubble({
@@ -444,7 +472,7 @@ export default function TeacherPanel() {
         unitId: string,
         response: Awaited<ReturnType<typeof sendTeacherChatStream>>,
     ) => {
-        setStatusLine('');
+        clearStatus();
         // The tutor decided a quick check makes sense — load + show it inline.
         if (response.quiz_suggested) {
             try {
@@ -481,7 +509,7 @@ export default function TeacherPanel() {
             setError('Fehler beim Senden der Nachricht.');
             setMessages((prev) => prev.filter((m) => m.id !== tempId));
         } finally {
-            setStatusLine('');
+            clearStatus();
             setSendingChat(false);
             chatInputRef.current?.focus();
         }
@@ -511,7 +539,7 @@ export default function TeacherPanel() {
         } catch {
             setError('Fehler beim Laden des nächsten Abschnitts.');
         } finally {
-            setStatusLine('');
+            clearStatus();
             setSendingChat(false);
         }
     };
@@ -1188,7 +1216,7 @@ export default function TeacherPanel() {
                     {sendingChat && (
                         <div className="flex justify-start">
                             <div className="bg-dark-800 border border-dark-700 rounded-2xl rounded-bl-md px-4 py-3 max-w-[85%]">
-                                <ThinkingStatus status={statusLine} accent="teal" />
+                                <ThinkingStatus phrases={statusPhrases} phraseIndex={statusPhraseIndex} accent="teal" />
                             </div>
                         </div>
                     )}

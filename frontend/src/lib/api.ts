@@ -484,6 +484,7 @@ export interface TeacherUnderstanding {
 export type TeacherStreamEvent =
   | { type: 'thinking'; content: string }
   | { type: 'status'; content: string }
+  | { type: 'status_phrases'; phrases: string[] }
   | { type: 'chunk'; content: string }
   | { type: 'quiz_suggested' }
   | { type: 'note_saved'; note: TeacherSavedNote }

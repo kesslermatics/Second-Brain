@@ -43,7 +43,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.ai_service import get_client, PRO_MODEL
 from app.services.teacher_service import (
     get_relevant_knowledge, _build_sections_block, FORMATTING_RULES, _current_year,
-    save_atomic_note, update_atomic_note, summarize_thinking_status,
+    save_atomic_note, update_atomic_note, summarize_thinking_status, generate_thinking_phrases,
 )
 
 logger = logging.getLogger(__name__)
@@ -383,16 +383,17 @@ async def run_teacher_agent(
             # Capture latest_thought before clearing it for this tool call.
             thought_snapshot = latest_thought
             latest_thought = ""
-            status_task = asyncio.create_task(
-                summarize_thinking_status(
+            phrases_task = asyncio.create_task(
+                generate_thinking_phrases(
                     thinking_text=thought_snapshot, tool_name=name, tool_args=args,
                 )
             )
             tool_task = asyncio.create_task(
                 _execute_teacher_tool(name, args, user_id, db, collected, default_folder)
             )
-            status, result = await asyncio.gather(status_task, tool_task)
-            yield {"type": "status", "content": status}
+            phrases, result = await asyncio.gather(phrases_task, tool_task)
+            # Send all phrases at once — the frontend rotates them every ~3s
+            yield {"type": "status_phrases", "phrases": phrases}
 
             # Emit side-channel events for the frontend
             if name == "propose_quiz":

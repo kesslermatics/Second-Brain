@@ -1601,35 +1601,88 @@ Antworte ausschließlich im JSON-Format des Lehrplans."""
 
 # ── "Thinking" status line (Flash-powered, German, short) ─────────────
 
-async def summarize_thinking_status(
+async def generate_thinking_phrases(
     thinking_text: str | None = None,
     tool_name: str | None = None,
     tool_args: dict | None = None,
-) -> str:
-    """Turn the agent's raw (English, verbose) reasoning / tool step into a short,
-    warm German status line, as if the tutor were briefly thinking out loud.
+) -> list[str]:
+    """Generate 5 short rotating German status phrases for the current agent step.
 
-    Uses the cheap FLASH_MODEL. Kept intentionally tiny (a half sentence). On any
-    failure it falls back to a deterministic phrase so the UI is never empty.
+    All 5 are produced in a single Flash call so the UI can cycle through them
+    while the heavier Pro-model call runs. Falls back to deterministic phrases on
+    any error.
     """
-    # Deterministic fallback per tool — always available, never blocks.
-    fallback_by_tool = {
-        "search_my_notes": "Ich schaue, was du dazu schon weißt …",
-        "propose_quiz": "Ich überlege mir eine kleine Verständnisfrage …",
-        "set_difficulty": "Ich passe das Tempo an dich an …",
-        "mark_understanding": "Ich merke mir, wie es bei dir sitzt …",
-        "save_note": "Ich halte das für dich als Notiz fest …",
-        "update_note": "Ich ergänze eine bestehende Notiz …",
-        "create_folder": "Ich sortiere das sauber ein …",
-        "ask_checkpoint": "Ich formuliere eine kurze Zwischenfrage …",
-        "draw_diagram": "Ich skizziere das für dich …",
-        "advance_section": "Weiter zum nächsten Abschnitt …",
+    # Deterministic fallbacks per tool — always available without a network call.
+    fallbacks_by_tool: dict[str, list[str]] = {
+        "search_my_notes": [
+            "Ich schaue, was du dazu schon weißt …",
+            "Ich durchstöbere dein Second Brain …",
+            "Ich suche nach passendem Vorwissen …",
+            "Ich vergleiche mit deinen Notizen …",
+            "Ich prüfe, was wir überspringen können …",
+        ],
+        "propose_quiz": [
+            "Ich überlege mir eine kleine Verständnisfrage …",
+            "Ich formuliere einen kurzen Check …",
+            "Ich teste, ob es sitzt …",
+            "Mal sehen, was hängen geblieben ist …",
+            "Ich bereite eine Übung vor …",
+        ],
+        "set_difficulty": [
+            "Ich passe das Tempo an dich an …",
+            "Ich justiere den Schwierigkeitsgrad …",
+            "Ich finde die richtige Flughöhe …",
+            "Ich schaue, wo wir stehen …",
+            "Ich passe den Kurs an …",
+        ],
+        "mark_understanding": [
+            "Ich merke mir, wie es bei dir sitzt …",
+            "Ich halte fest, was klar ist …",
+            "Ich notiere deinen Fortschritt …",
+            "Ich beobachte dein Verständnis …",
+            "Ich aktualisiere dein Lernprofil …",
+        ],
+        "save_note": [
+            "Ich halte das für dich als Notiz fest …",
+            "Ich sichere das Gelernte …",
+            "Ich schreibe das in dein Brain …",
+            "Ich speichere das Konzept …",
+            "Ich lege das dauerhaft ab …",
+        ],
+        "update_note": [
+            "Ich ergänze eine bestehende Notiz …",
+            "Ich baue dein Wissen aus …",
+            "Ich füge das neue Wissen hinzu …",
+            "Ich aktualisiere deine Notiz …",
+            "Ich verknüpfe das mit dem Bisherigen …",
+        ],
+        "draw_diagram": [
+            "Ich skizziere das für dich …",
+            "Ich zeichne das Bild dazu …",
+            "Ich visualisiere die Struktur …",
+            "Ich erstelle ein Diagramm …",
+            "Ich mache es anschaulicher …",
+        ],
+        "ask_checkpoint": [
+            "Ich formuliere eine kurze Zwischenfrage …",
+            "Ich hake kurz nach …",
+            "Ich überprüfe, ob es sitzt …",
+            "Ich warte kurz auf dich …",
+            "Ich stelle dir eine Frage …",
+        ],
     }
-    fallback = fallback_by_tool.get(tool_name or "", "Ich denke kurz nach …")
+    default_fallbacks = [
+        "Ich denke kurz nach …",
+        "Ich überlege …",
+        "Ich verarbeite das …",
+        "Einen Moment noch …",
+        "Ich bin gleich so weit …",
+    ]
+    fallbacks = fallbacks_by_tool.get(tool_name or "", default_fallbacks)
 
     src = (thinking_text or "").strip()
     if not src and not tool_name:
-        return fallback
+        return fallbacks
 
     context = ""
     if tool_name:
@@ -1642,24 +1695,44 @@ async def summarize_thinking_status(
     if src:
         context += f"\nInterner Gedankengang (evtl. englisch):\n{src[:800]}"
 
-    prompt = f"""Formuliere eine EINZIGE, sehr kurze deutsche Statuszeile (max 6 Wörter),
-die zeigt, was ein Tutor gerade tut oder denkt — warmherzig, in der ICH-Form, mit einem
-abschließenden „ …". Keine Anführungszeichen, kein Punkt am Ende, nur die Zeile.
+    prompt = f"""Formuliere GENAU 5 verschiedene, sehr kurze deutsche Statuszeilen (max 7 Wörter je),
+die zeigen was ein Tutor gerade tut oder denkt — warmherzig, in der ICH-Form, mit „ …" am Ende.
+Keine Anführungszeichen, kein Punkt, jede Zeile eine eigenständige Variante desselben Moments.
 {context}
 
-Beispiele für den Stil:
-- „Ich suche ein gutes Beispiel …"
-- „Ich knüpfe an dein Vorwissen an …"
-- „Ich fasse das Wichtigste zusammen …"
+Antworte NUR als JSON-Array, z.B.:
+["Ich schaue nach ...", "Ich durchstöbere ...", "Ich suche ...", "Ich prüfe ...", "Ich vergleiche ..."]
 
-Statuszeile:"""
+Array:"""
 
     try:
-        line = (await generate(prompt, model=FLASH_MODEL, temperature=0.4)).strip()
-        line = line.strip('"\'').strip()
-        # Guard against the model returning a paragraph.
-        if not line or len(line) > 80:
-            return fallback
-        return line
+        raw = (await generate(prompt, model=FLASH_MODEL, temperature=0.8)).strip()
+        # Extract JSON array from the response
+        import re as _re
+        m = _re.search(r'\[.*?\]', raw, _re.DOTALL)
+        if m:
+            phrases = json.loads(m.group())
+            if isinstance(phrases, list):
+                clean = [
+                    str(p).strip().strip('"\'')
+                    for p in phrases
+                    if isinstance(p, str) and p.strip() and len(p.strip()) <= 100
+                ]
+                if len(clean) >= 2:
+                    # Pad to 5 with fallbacks if the model returned fewer
+                    while len(clean) < 5:
+                        clean.append(fallbacks[len(clean) % len(fallbacks)])
+                    return clean[:5]
     except Exception:
-        return fallback
+        pass
+    return fallbacks
+
+
+# Keep old name as a thin shim for any code that still calls the single-phrase version
+async def summarize_thinking_status(
+    thinking_text: str | None = None,
+    tool_name: str | None = None,
+    tool_args: dict | None = None,
+) -> str:
+    phrases = await generate_thinking_phrases(thinking_text, tool_name, tool_args)
+    return phrases[0] if phrases else "Ich denke kurz nach …"

@@ -899,6 +899,8 @@ async def unit_chat_stream(
                     yield {"type": "thinking", "content": event["content"]}
                 elif etype == "status":
                     yield {"type": "status", "content": event["content"]}
+                elif etype == "status_phrases":
+                    yield {"type": "status_phrases", "phrases": event["phrases"]}
                 elif etype == "chunk":
                     full_response_parts.append(event["content"])
                     yield {"type": "chunk", "content": event["content"]}
