@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import type React from 'react';
 import {
     FiCheck, FiX, FiChevronRight, FiTarget, FiMap, FiArrowRight,
 } from 'react-icons/fi';
@@ -381,44 +382,86 @@ export function ThinkingStatus({ status, accent }: { status: string; accent: Acc
     );
 }
 
-// ── Silent note-saved toast ──────────────────────────────────────────
-// The tutor saves notes on its own. We surface that with a small, self-dismissing
-// toast so the student notices without any interaction being required.
+// ── Activity bubbles ────────────────────────────────────────────────
+// Replaces the old single-type NoteToast. Every meaningful background action
+// the tutor takes shows up as a small, self-dismissing bubble bottom-right.
+//
+// ThinkingStatus  = what the tutor is *doing right now* (process, fleeting)
+// ActivityBubble  = what the tutor *actually did*       (result, confirmed)
+
+export type ActivityBubbleKind =
+    | 'note_created'
+    | 'note_updated'
+    | 'understanding_mastered'
+    | 'understanding_struggling'
+    | 'difficulty_up'
+    | 'difficulty_down'
+    | 'diagram';
+
+export interface ActivityBubble {
+    id: string;
+    kind: ActivityBubbleKind;
+    /** primary label — note title, concept name, etc. */
+    label: string;
+}
+
+// Kept for backwards-compat so existing callers don't need to change
 export interface SavedNoteToast {
     id: string;
     title: string;
     action: 'created' | 'updated';
 }
 
-export function NoteToastHost({
-    toasts,
-    accent,
+function _bubbleConfig(kind: ActivityBubbleKind): {
+    icon: React.ReactNode;
+    label: string;
+    iconBg: string;
+    iconColor: string;
+} {
+    switch (kind) {
+        case 'note_created':
+            return { icon: <FiCheck className="w-3.5 h-3.5" />, label: 'Notiz gespeichert', iconBg: 'bg-teal-600/20', iconColor: 'text-teal-400' };
+        case 'note_updated':
+            return { icon: <FiCheck className="w-3.5 h-3.5" />, label: 'Notiz ergänzt', iconBg: 'bg-teal-600/20', iconColor: 'text-teal-400' };
+        case 'understanding_mastered':
+            return { icon: <FiTarget className="w-3.5 h-3.5" />, label: 'Verstanden ✓', iconBg: 'bg-green-600/20', iconColor: 'text-green-400' };
+        case 'understanding_struggling':
+            return { icon: <FiTarget className="w-3.5 h-3.5" />, label: 'Noch offen', iconBg: 'bg-orange-600/20', iconColor: 'text-orange-400' };
+        case 'difficulty_up':
+            return { icon: <FiArrowRight className="w-3.5 h-3.5 rotate-[-45deg]" />, label: 'Tempo erhöht', iconBg: 'bg-blue-600/20', iconColor: 'text-blue-400' };
+        case 'difficulty_down':
+            return { icon: <FiArrowRight className="w-3.5 h-3.5 rotate-[45deg]" />, label: 'Tempo verlangsamt', iconBg: 'bg-purple-600/20', iconColor: 'text-purple-400' };
+        case 'diagram':
+            return { icon: <LuListChecks className="w-3.5 h-3.5" />, label: 'Diagramm erstellt', iconBg: 'bg-amber-600/20', iconColor: 'text-amber-400' };
+    }
+}
+
+export function ActivityBubbleHost({
+    bubbles,
     onDismiss,
 }: {
-    toasts: SavedNoteToast[];
-    accent: Accent;
+    bubbles: ActivityBubble[];
     onDismiss: (id: string) => void;
 }) {
-    const a = ACCENTS[accent];
     return (
         <div className="pointer-events-none absolute bottom-24 right-4 z-30 flex flex-col gap-2 items-end">
-            {toasts.map((t) => (
-                <NoteToast key={t.id} toast={t} accent={a} onDismiss={() => onDismiss(t.id)} />
+            {bubbles.map((b) => (
+                <_ActivityBubbleItem key={b.id} bubble={b} onDismiss={() => onDismiss(b.id)} />
             ))}
         </div>
     );
 }
 
-function NoteToast({
-    toast,
-    accent,
+function _ActivityBubbleItem({
+    bubble,
     onDismiss,
 }: {
-    toast: SavedNoteToast;
-    accent: AccentClasses;
+    bubble: ActivityBubble;
     onDismiss: () => void;
 }) {
     const [leaving, setLeaving] = useState(false);
+    const cfg = _bubbleConfig(bubble.kind);
+
     useEffect(() => {
         const t1 = setTimeout(() => setLeaving(true), 3200);
         const t2 = setTimeout(onDismiss, 3600);
@@ -429,17 +472,38 @@ function NoteToast({
         <div
             className={`pointer-events-auto flex items-center gap-2.5 pl-2.5 pr-3 py-2 rounded-xl bg-dark-800/95 backdrop-blur border border-dark-700 shadow-lg shadow-black/30 max-w-xs ${leaving ? 'toast-leave' : 'toast-enter'}`}
         >
-            <div className={`flex items-center justify-center w-6 h-6 rounded-lg ${accent.bgSoft} flex-shrink-0`}>
-                <FiCheck className={`w-3.5 h-3.5 ${accent.text} check-pop`} />
+            <div className={`flex items-center justify-center w-6 h-6 rounded-lg ${cfg.iconBg} flex-shrink-0`}>
+                <span className={`${cfg.iconColor} check-pop`}>{cfg.icon}</span>
             </div>
             <div className="min-w-0">
                 <p className="text-[10px] uppercase tracking-wider text-dark-500 leading-none mb-0.5">
-                    {toast.action === 'updated' ? 'Notiz ergänzt' : 'Notiz gespeichert'}
+                    {cfg.label}
                 </p>
-                <p className="text-xs text-dark-100 truncate">{toast.title}</p>
+                <p className="text-xs text-dark-100 truncate">{bubble.label}</p>
             </div>
         </div>
     );
+}
+
+// ── Backwards-compat shims so BookPanel & TeacherPanel don't need to be ──
+// touched before we migrate them in a follow-up.
+/** @deprecated Use ActivityBubbleHost + ActivityBubble instead */
+export function NoteToastHost({
+    toasts,
+    accent,
+    onDismiss,
+}: {
+    toasts: SavedNoteToast[];
+    accent: Accent;
+    onDismiss: (id: string) => void;
+}) {
+    // Convert old SavedNoteToast to ActivityBubble format
+    const bubbles: ActivityBubble[] = toasts.map((t) => ({
+        id: t.id,
+        kind: t.action === 'updated' ? 'note_updated' : 'note_created',
+        label: t.title,
+    }));
+    return <ActivityBubbleHost bubbles={bubbles} onDismiss={onDismiss} />;
 }
 
 // ── Inline quiz card (lives inside the chat, not a full screen) ───────

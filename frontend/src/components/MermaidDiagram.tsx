@@ -16,7 +16,35 @@ async function getMermaid() {
     if (!mermaidLoaded) {
         mermaid.initialize({
             startOnLoad: false,
-            theme: 'dark',
+            theme: 'base',
+            themeVariables: {
+                background: '#1a1a2e',
+                primaryColor: '#1e293b',
+                primaryTextColor: '#cbd5e1',
+                primaryBorderColor: '#334155',
+                lineColor: '#64748b',
+                secondaryColor: '#0f172a',
+                tertiaryColor: '#1e293b',
+                edgeLabelBackground: '#1e293b',
+                nodeBorder: '#334155',
+                clusterBkg: '#0f172a',
+                titleColor: '#94a3b8',
+                nodeTextColor: '#cbd5e1',
+                mainBkg: '#1e293b',
+                labelBackground: '#1e293b',
+                textColor: '#cbd5e1',
+                // Ensure the model's inline style overrides can't introduce
+                // bright hardcoded colors. securityLevel:strict strips most,
+                // but setting sensible base values here is a safe fallback.
+                fillType0: '#1e293b',
+                fillType1: '#0f172a',
+                fillType2: '#1e293b',
+                fillType3: '#0f172a',
+                fillType4: '#1e293b',
+                fillType5: '#0f172a',
+                fillType6: '#1e293b',
+                fillType7: '#0f172a',
+            },
             securityLevel: 'strict',
             fontFamily: 'inherit',
         });

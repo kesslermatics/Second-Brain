@@ -27,7 +27,7 @@ import type {
 import {
     LessonObjectivesCard, LearningPathButton, LearningPathOverlay,
     LessonCompleteCelebration, isControlMessage,
-    ThinkingStatus, NoteToastHost, InlineQuiz, type SavedNoteToast,
+    ThinkingStatus, NoteToastHost, ActivityBubbleHost, type ActivityBubble, InlineQuiz, type SavedNoteToast,
 } from './TeachingComponents';
 import MermaidDiagram from './MermaidDiagram';
 import { CategoryBadge, CategoryFilter } from './CategoryUI';
@@ -134,6 +134,7 @@ export default function BookPanel() {
 
     // Silent-save toasts + tutor-driven inline quiz
     const [toasts, setToasts] = useState<SavedNoteToast[]>([]);
+    const [bubbles, setBubbles] = useState<ActivityBubble[]>([]);
     const [inlineQuiz, setInlineQuiz] = useState<QuizQuestion[] | null>(null);
 
     // Recap / learning path
@@ -167,6 +168,14 @@ export default function BookPanel() {
     }, []);
     const dismissToast = useCallback((id: string) => {
         setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, []);
+
+    const pushBubble = useCallback((bubble: Omit<ActivityBubble, 'id'>) => {
+        const id = `bubble-${Date.now()}-${Math.random()}`;
+        setBubbles((prev) => [...prev, { ...bubble, id }]);
+    }, []);
+    const dismissBubble = useCallback((id: string) => {
+        setBubbles((prev) => prev.filter((b) => b.id !== id));
     }, []);
 
     // ── Load book courses ────────────────────────────────────────────
@@ -401,6 +410,27 @@ export default function BookPanel() {
                 setStatusLine(event.content);
             } else if (event.type === 'note_saved') {
                 pushToast(event.note);
+                pushBubble({
+                    kind: event.note.action === 'updated' ? 'note_updated' : 'note_created',
+                    label: event.note.title,
+                });
+            } else if (event.type === 'understanding') {
+                if (event.status === 'mastered' || event.status === 'struggling') {
+                    pushBubble({
+                        kind: event.status === 'mastered' ? 'understanding_mastered' : 'understanding_struggling',
+                        label: event.concept,
+                    });
+                }
+            } else if (event.type === 'difficulty') {
+                const level = event.level;
+                if (level === 'harder' || level === 'easier') {
+                    pushBubble({
+                        kind: level === 'harder' ? 'difficulty_up' : 'difficulty_down',
+                        label: level === 'harder' ? 'Tieferes Niveau' : 'Einfacheres Niveau',
+                    });
+                }
+            } else if (event.type === 'diagram') {
+                pushBubble({ kind: 'diagram', label: event.caption || 'Diagramm' });
             }
         });
     };
@@ -1232,7 +1262,8 @@ export default function BookPanel() {
                     </div>
                 </div>
 
-                <NoteToastHost toasts={toasts} accent="amber" onDismiss={dismissToast} />
+                {/* Activity bubbles — confirmed actions (notes, understanding, difficulty, diagrams) */}
+                <ActivityBubbleHost bubbles={bubbles} onDismiss={dismissBubble} />
             </div>
         );
     };
