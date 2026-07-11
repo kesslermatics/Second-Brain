@@ -523,23 +523,23 @@ async function _streamJobEvents(
   let fromIndex = 0;
   let done = false;
 
-  // Track the active reader so we can cancel it on visibility change
-  let activeController: AbortController | null = null;
+  // Explicit type annotation prevents TypeScript from narrowing to `never`
+  // when the variable is assigned inside a nested function closure.
+  const controllerRef: { current: AbortController | null } = { current: null };
 
   const connect = async (): Promise<void> => {
-    // Cancel any previous connection
-    if (activeController) activeController.abort();
-    activeController = new AbortController();
+    controllerRef.current?.abort();
+    controllerRef.current = new AbortController();
 
     const url = `${API_URL}/api/jobs/${jobId}/events?from=${fromIndex}`;
     let response: Response;
     try {
       response = await fetch(url, {
-        signal: activeController.signal,
+        signal: controllerRef.current.signal,
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       });
     } catch (e: unknown) {
-      if ((e as Error)?.name === 'AbortError') return; // intentional cancel
+      if ((e as Error)?.name === 'AbortError') return;
       throw e;
     }
     if (!response.ok) throw new Error(`Job stream failed: ${response.status}`);
@@ -569,7 +569,6 @@ async function _streamJobEvents(
           if (!jsonStr) continue;
           try {
             const event = JSON.parse(jsonStr) as Record<string, unknown>;
-            // Track position for reconnect
             if (typeof event._idx === 'number') fromIndex = (event._idx as number) + 1;
             if (event.type === 'done') done = true;
             onEvent?.(event);
@@ -581,12 +580,12 @@ async function _streamJobEvents(
     }
   };
 
-  // Re-connect immediately when the page becomes visible again
-  // (browser may have paused JS or dropped the connection while backgrounded)
+  // When the page becomes visible again, abort the stalled connection so the
+  // reconnect loop picks up immediately (rather than waiting for a timeout).
   const onVisibilityChange = () => {
-    if (document.visibilityState === 'visible' && !done) {
-      // Cancel the current stalled connection and trigger a fresh reconnect
-      if (activeController) activeController.abort();
+    if (typeof document !== 'undefined' &&
+        document.visibilityState === 'visible' && !done) {
+      controllerRef.current?.abort();
     }
   };
   if (typeof document !== 'undefined') {
@@ -594,7 +593,6 @@ async function _streamJobEvents(
   }
 
   try {
-    // Reconnect loop: if connection drops and job isn't finished yet, retry
     while (!done) {
       try {
         await connect();
@@ -602,12 +600,8 @@ async function _streamJobEvents(
         if (done) break;
       }
       if (done) break;
-      // Brief pause before reconnecting to avoid hammering the server,
-      // but only if the page is visible (backgrounded tabs don't need to rush)
-      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
-        await new Promise((r) => setTimeout(r, 500));
-      } else {
-        // Page is hidden — wait until it becomes visible again via the event
+      // If the page is hidden, wait for it to become visible before retrying
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
         await new Promise<void>((resolve) => {
           const handler = () => {
             if (document.visibilityState === 'visible') {
@@ -617,13 +611,15 @@ async function _streamJobEvents(
           };
           document.addEventListener('visibilitychange', handler);
         });
+      } else {
+        await new Promise((r) => setTimeout(r, 500));
       }
     }
   } finally {
     if (typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', onVisibilityChange);
     }
-    if (activeController) activeController.abort();
+    controllerRef.current?.abort();
   }
 }
 
