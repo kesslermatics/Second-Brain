@@ -330,9 +330,50 @@ async def run_teacher_agent(
     # a tool round runs.
     latest_thought = ""
 
-    # Immediate feedback so the UI never sits on the generic default line while
-    # the (potentially multi-second) first model round is still in flight.
-    yield {"type": "status", "content": "Ich bereite die Erklärung vor …"}
+    # Immediate feedback: fire a set of warm-up phrases the UI can rotate through
+    # while the (potentially multi-second) first model round is in flight.
+    # These are context-aware — [START] gets lesson-opener phrases, [ABSCHNITT_WEITER]
+    # gets transition phrases, anything else gets generic thinking phrases.
+    if user_message == "[START]":
+        warmup_phrases = [
+            "Ich bereite die Erklärung vor …",
+            "Ich schaue, was du dazu schon weißt …",
+            "Ich suche den besten Einstieg …",
+            "Ich denke mir einen guten Hook aus …",
+            "Gleich geht es los …",
+            "Ich baue auf deinem Wissen auf …",
+            "Ich formuliere das für dich …",
+            "Ich überlege, wie ich das anschaulich mache …",
+            "Ich hole dich beim Richtigen ab …",
+            "Einen Moment noch …",
+        ]
+    elif user_message == "[ABSCHNITT_WEITER]":
+        warmup_phrases = [
+            "Ich knüpfe an das Vorherige an …",
+            "Ich bereite den nächsten Abschnitt vor …",
+            "Ich überlege, wie ich das aufbaue …",
+            "Ich verbinde das mit dem, was wir hatten …",
+            "Weiter geht's — ich formuliere das …",
+            "Ich denke mir ein gutes Beispiel aus …",
+            "Ich schaue, was als Nächstes wichtig ist …",
+            "Ich baue das logisch auf …",
+            "Gleich geht es weiter …",
+            "Ich bereite die Erklärung vor …",
+        ]
+    else:
+        warmup_phrases = [
+            "Ich denke kurz nach …",
+            "Ich überlege …",
+            "Ich schaue mir das an …",
+            "Ich formuliere eine Antwort …",
+            "Ich verarbeite deine Frage …",
+            "Einen Moment noch …",
+            "Ich bin gleich so weit …",
+            "Ich überlege, wie ich das erkläre …",
+            "Ich gehe deiner Frage nach …",
+            "Ich arbeite daran …",
+        ]
+    yield {"type": "status_phrases", "phrases": warmup_phrases}
 
     for round_num in range(max_rounds + 1):
         function_calls = []
