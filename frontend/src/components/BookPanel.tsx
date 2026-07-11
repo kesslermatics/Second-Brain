@@ -391,6 +391,28 @@ export default function BookPanel() {
                 setSection({ current: response.current_section, total: response.total_sections });
                 await afterTurn(course.id, unit.id, response);
                 setSendingChat(false);
+            } else {
+                // Check if we interrupted mid-turn (last message is from user, no assistant reply)
+                const lastMsg = msgs[msgs.length - 1];
+                const lastIsPending =
+                    lastMsg.role === 'user' &&
+                    !isControlMessage(lastMsg.content);
+                const lastIsControlWithNoReply =
+                    lastMsg.role === 'user' &&
+                    isControlMessage(lastMsg.content) &&
+                    lastMsg.content !== '[START]';
+
+                if (lastIsPending || lastIsControlWithNoReply) {
+                    setSendingChat(true);
+                    clearStatus();
+                    try {
+                        const response = await streamTurn(course.id, unit.id, lastMsg.content);
+                        setMessages((prev) => [...prev, response.message]);
+                        setSection({ current: response.current_section, total: response.total_sections });
+                        await afterTurn(course.id, unit.id, response);
+                    } catch { /* non-fatal */ }
+                    setSendingChat(false);
+                }
             }
             prefetchNextUnit(course, unit);
         } catch {

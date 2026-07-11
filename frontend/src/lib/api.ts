@@ -523,11 +523,25 @@ async function _streamJobEvents(
   let fromIndex = 0;
   let done = false;
 
-  const connect = async () => {
+  // Track the active reader so we can cancel it on visibility change
+  let activeController: AbortController | null = null;
+
+  const connect = async (): Promise<void> => {
+    // Cancel any previous connection
+    if (activeController) activeController.abort();
+    activeController = new AbortController();
+
     const url = `${API_URL}/api/jobs/${jobId}/events?from=${fromIndex}`;
-    const response = await fetch(url, {
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    });
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        signal: activeController.signal,
+        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      });
+    } catch (e: unknown) {
+      if ((e as Error)?.name === 'AbortError') return; // intentional cancel
+      throw e;
+    }
     if (!response.ok) throw new Error(`Job stream failed: ${response.status}`);
 
     const reader = response.body?.getReader();
@@ -535,40 +549,81 @@ async function _streamJobEvents(
     const decoder = new TextDecoder();
     let buffer = '';
 
-    while (true) {
-      const { done: streamDone, value } = await reader.read();
-      if (streamDone) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const jsonStr = line.slice(6).trim();
-        if (!jsonStr) continue;
+    try {
+      while (true) {
+        let result: ReadableStreamReadResult<Uint8Array>;
         try {
-          const event = JSON.parse(jsonStr) as Record<string, unknown>;
-          // Track position for reconnect
-          if (typeof event._idx === 'number') fromIndex = (event._idx as number) + 1;
-          if (event.type === 'done') done = true;
-          onEvent?.(event);
-        } catch { /* skip */ }
+          result = await reader.read();
+        } catch {
+          break; // aborted or network error — outer loop will reconnect
+        }
+        if (result.done) break;
+
+        buffer += decoder.decode(result.value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const jsonStr = line.slice(6).trim();
+          if (!jsonStr) continue;
+          try {
+            const event = JSON.parse(jsonStr) as Record<string, unknown>;
+            // Track position for reconnect
+            if (typeof event._idx === 'number') fromIndex = (event._idx as number) + 1;
+            if (event.type === 'done') done = true;
+            onEvent?.(event);
+          } catch { /* skip malformed */ }
+        }
       }
+    } finally {
+      reader.releaseLock();
     }
   };
 
-  // Reconnect loop: if connection drops (e.g. tab was backgrounded) and job
-  // isn't finished yet, reconnect from where we left off.
-  while (!done) {
-    try {
-      await connect();
-    } catch {
-      if (done) break;
-      // Wait briefly before reconnecting to avoid hammering the server
-      await new Promise((r) => setTimeout(r, 1000));
+  // Re-connect immediately when the page becomes visible again
+  // (browser may have paused JS or dropped the connection while backgrounded)
+  const onVisibilityChange = () => {
+    if (document.visibilityState === 'visible' && !done) {
+      // Cancel the current stalled connection and trigger a fresh reconnect
+      if (activeController) activeController.abort();
     }
-    if (done) break;
+  };
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', onVisibilityChange);
+  }
+
+  try {
+    // Reconnect loop: if connection drops and job isn't finished yet, retry
+    while (!done) {
+      try {
+        await connect();
+      } catch {
+        if (done) break;
+      }
+      if (done) break;
+      // Brief pause before reconnecting to avoid hammering the server,
+      // but only if the page is visible (backgrounded tabs don't need to rush)
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        await new Promise((r) => setTimeout(r, 500));
+      } else {
+        // Page is hidden — wait until it becomes visible again via the event
+        await new Promise<void>((resolve) => {
+          const handler = () => {
+            if (document.visibilityState === 'visible') {
+              document.removeEventListener('visibilitychange', handler);
+              resolve();
+            }
+          };
+          document.addEventListener('visibilitychange', handler);
+        });
+      }
+    }
+  } finally {
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    }
+    if (activeController) activeController.abort();
   }
 }
 

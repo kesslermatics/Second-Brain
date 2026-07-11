@@ -100,6 +100,38 @@ export default function AgentView() {
                 }
             }
             setAppliedProposals(restored);
+
+            // Auto-retry: if the last message is from the user (agent never responded),
+            // re-send it silently so the user doesn't have to repeat themselves.
+            const last = parsed[parsed.length - 1];
+            if (last?.role === 'user' && !loading) {
+                const retryContent = last.content;
+                const sessionId = activeAgentSession.id;
+                // Small delay to let state settle before triggering
+                setTimeout(async () => {
+                    setLoading(true);
+                    setStreamingThought('');
+                    setStreamingSteps([]);
+                    const msgId = `stream-${Date.now()}`;
+                    let fullContent = '';
+                    let fullThought = '';
+                    const allSteps: AgentStep[] = [];
+                    const allProposals: AgentProposal[] = [];
+                    try {
+                        await runAgentStream(sessionId, retryContent, false, undefined, (event: AgentStreamEvent) => {
+                            if (event.type === 'thinking') { fullThought += event.content; setStreamingThought(fullThought); }
+                            else if (event.type === 'chunk') { fullContent += event.content; }
+                            else if (event.type === 'tool_call') { allSteps.push({ type: 'tool_call', content: event.content }); setStreamingSteps([...allSteps]); }
+                            else if (event.type === 'tool_result') { allSteps.push({ type: 'tool_result', content: event.content }); setStreamingSteps([...allSteps]); }
+                            else if (event.type === 'proposal') { allProposals.push(event.proposal); }
+                        });
+                        setStreamingThought(''); setStreamingSteps([]);
+                        setParsedMessages((p) => [...p, { id: msgId, role: 'assistant', content: fullContent, thought: fullThought || undefined, steps: allSteps.length > 0 ? allSteps : undefined, proposals: allProposals.length > 0 ? allProposals : undefined, created_at: new Date().toISOString() }]);
+                        loadFolderTree(); loadAgentSessions();
+                    } catch { setStreamingThought(''); setStreamingSteps([]); }
+                    finally { setLoading(false); }
+                }, 300);
+            }
         } else {
             setParsedMessages([]);
             setAppliedProposals(new Set());

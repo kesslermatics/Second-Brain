@@ -382,6 +382,7 @@ export default function TeacherPanel() {
             const msgs = await getUnitMessages(course.id, unit.id);
             setMessages(msgs);
             if (msgs.length === 0) {
+                // Brand new lesson — trigger the opening greeting
                 setSendingChat(true);
                 clearStatus();
                 const response = await streamTurn(course.id, unit.id, '[START]');
@@ -392,6 +393,31 @@ export default function TeacherPanel() {
                 setSection({ current: response.current_section, total: response.total_sections });
                 await afterTurn(course.id, unit.id, response);
                 setSendingChat(false);
+            } else {
+                // Check if we interrupted mid-turn: last visible message is from the user
+                // (or a control message like [ABSCHNITT_WEITER]) but no assistant reply followed.
+                const lastMsg = msgs[msgs.length - 1];
+                const lastIsPending =
+                    lastMsg.role === 'user' &&
+                    !isControlMessage(lastMsg.content);
+                const lastIsControlWithNoReply =
+                    lastMsg.role === 'user' &&
+                    isControlMessage(lastMsg.content) &&
+                    lastMsg.content !== '[START]'; // [START] always has a reply
+
+                if (lastIsPending || lastIsControlWithNoReply) {
+                    // The agent never responded — retry silently
+                    setSendingChat(true);
+                    clearStatus();
+                    try {
+                        const retryMsg = lastMsg.content; // re-send the same message
+                        const response = await streamTurn(course.id, unit.id, retryMsg);
+                        setMessages((prev) => [...prev, response.message]);
+                        setSection({ current: response.current_section, total: response.total_sections });
+                        await afterTurn(course.id, unit.id, response);
+                    } catch { /* non-fatal — user can retry manually */ }
+                    setSendingChat(false);
+                }
             }
             prefetchNextUnit(course, unit);
         } catch {
