@@ -349,7 +349,10 @@ Richte den Lehrplan gezielt an diesen Wünschen aus und vertiefe die genannten A
         )
     else:
         lessons_instruction = (
-            "- Erstelle einen UMFASSENDEN Lehrplan mit mindestens 5 Modulen und insgesamt 15-30 Lektionen"
+            "- Erstelle einen UMFASSENDEN Lehrplan mit 4-8 Modulen und insgesamt 10-16 Lektionen. "
+            "Lieber weniger, inhaltlich dichtere Lektionen als viele kleine — jede Lektion darf und "
+            "soll mehrere zusammenhängende Teilthemen abdecken, statt für jede Kleinigkeit eine eigene "
+            "Lektion anzulegen"
         )
 
     year = _current_year()
@@ -841,7 +844,9 @@ LERNZIELE:
 {objectives_str}
 
 REGELN:
-- Erstelle 3 bis 6 Abschnitte (je nach Umfang des Themas) — nicht mehr, nicht weniger
+- Erstelle 3 bis 5 Abschnitte — so wenige wie möglich, so viele wie nötig. Nutze 3 für kompakte
+  Themen und nur bei wirklich umfangreichen Themen 4-5. Fasse eng verwandte Teilkonzepte in
+  einem Abschnitt zusammen statt sie künstlich aufzuteilen
 - Die Abschnitte bauen logisch aufeinander auf (vom Grundlegenden zum Komplexeren)
 - Jeder Abschnitt ist ein abgeschlossener Lernschritt, den man in 1-3 Tutor-Nachrichten erklären kann
 - Der letzte Abschnitt soll das Gelernte abrunden / zusammenführen

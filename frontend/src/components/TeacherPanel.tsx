@@ -202,7 +202,7 @@ export default function TeacherPanel() {
                 const course = await getTeacherCourse(courseId);
                 const unit = unitId
                     ? course.units.find((u) => u.id === unitId)
-                    : course.units.find((u) => u.enabled && (u.status === 'active' || u.status === 'pending'));
+                    : course.units.find((u) => u.enabled && u.level === 2 && (u.status === 'active' || u.status === 'pending'));
                 if (unit) {
                     await openUnitChat(course, unit);
                 }
@@ -291,7 +291,9 @@ export default function TeacherPanel() {
             }
             await updateCourseStatus(course.id, 'active');
             const updated = await getTeacherCourse(course.id);
-            const firstUnit = updated.units.find((u) => u.enabled && u.status === 'pending');
+            // Module (level 1) sind reine Kapitel-Überschriften ohne eigenen Lerninhalt —
+            // nur echte Lektionen (level 2) werden als Chat geöffnet.
+            const firstUnit = updated.units.find((u) => u.enabled && u.level === 2 && u.status === 'pending');
             if (firstUnit) await openUnitChat(updated, firstUnit);
         } catch {
             setError('Fehler beim Starten des Kurses.');
@@ -303,7 +305,7 @@ export default function TeacherPanel() {
         try {
             const course = await getTeacherCourse(courseId);
             const currentUnit = course.units.find(
-                (u) => u.enabled && (u.status === 'active' || u.status === 'pending')
+                (u) => u.enabled && u.level === 2 && (u.status === 'active' || u.status === 'pending')
             );
             if (currentUnit) {
                 await openUnitChat(course, currentUnit);
@@ -371,7 +373,7 @@ export default function TeacherPanel() {
         const sorted = [...course.units].sort((a, b) => a.order_index - b.order_index);
         const curIdx = sorted.findIndex(u => u.id === currentUnit.id);
         const nextUnit = sorted.slice(curIdx + 1).find(
-            u => u.enabled && (u.status === 'pending' || u.status === 'active')
+            u => u.enabled && u.level === 2 && (u.status === 'pending' || u.status === 'active')
         );
         if (!nextUnit) return;
         if (prefetchedMessagesRef.current.has(nextUnit.id)) return;
@@ -496,7 +498,7 @@ export default function TeacherPanel() {
         const sorted = [...currentCourse.units].sort((a, b) => a.order_index - b.order_index);
         const curIdx = sorted.findIndex(u => u.id === currentUnit.id);
         const nextUnit = sorted.slice(curIdx + 1).find(
-            u => u.enabled && (u.status === 'pending' || u.status === 'active')
+            u => u.enabled && u.level === 2 && (u.status === 'pending' || u.status === 'active')
         );
         if (nextUnit) {
             await openUnitChat(currentCourse, nextUnit);
@@ -519,7 +521,7 @@ export default function TeacherPanel() {
         const sorted = [...currentCourse.units].sort((a, b) => a.order_index - b.order_index);
         const curIdx = sorted.findIndex(u => u.id === currentUnit.id);
         const nextUnit = sorted.slice(curIdx + 1).find(
-            u => u.enabled && (u.status === 'pending' || u.status === 'active')
+            u => u.enabled && u.level === 2 && (u.status === 'pending' || u.status === 'active')
         );
         updateCourseUnit(currentCourse.id, currentUnit.id, { status: 'skipped' }).catch(() => { });
         if (nextUnit) {
@@ -580,16 +582,31 @@ export default function TeacherPanel() {
         course.units.filter((u) => enabledUnits[u.id] !== false).length;
 
     const getUnitProgress = (course: CourseDetail, currentUnit: CourseUnit) => {
-        const enabled = course.units.filter((u) => u.enabled);
-        const currentIndex = enabled.findIndex((u) => u.id === currentUnit.id);
-        return { current: currentIndex + 1, total: enabled.length };
+        // Nur echte Lektionen (level 2) zählen — Module (level 1) sind reine Überschriften
+        // und würden den Zähler verzerren (z.B. "Lektion 1/24" statt "Lektion 1/18").
+        const lessons = course.units.filter((u) => u.enabled && u.level === 2);
+        const currentIndex = lessons.findIndex((u) => u.id === currentUnit.id);
+        return { current: currentIndex + 1, total: lessons.length };
+    };
+
+    const getModuleProgress = (course: CourseDetail, currentUnit: CourseUnit) => {
+        const sorted = [...course.units].sort((a, b) => a.order_index - b.order_index);
+        const modules = sorted.filter((u) => u.enabled && u.level === 1);
+        const curIdx = sorted.findIndex((u) => u.id === currentUnit.id);
+        // The module this unit belongs to is the closest preceding (or equal) level-1 unit.
+        const moduleIdx = modules.reduce((acc, m, i) => {
+            const mIdx = sorted.findIndex((u) => u.id === m.id);
+            return mIdx <= curIdx ? i : acc;
+        }, -1);
+        if (moduleIdx < 0 || modules.length === 0) return null;
+        return { current: moduleIdx + 1, total: modules.length, title: modules[moduleIdx].title };
     };
 
     const isLastEnabledUnit = (course: CourseDetail, currentUnit: CourseUnit) => {
         const sorted = [...course.units].sort((a, b) => a.order_index - b.order_index);
         const curIdx = sorted.findIndex(u => u.id === currentUnit.id);
         return !sorted.slice(curIdx + 1).some(
-            u => u.enabled && (u.status === 'pending' || u.status === 'active')
+            u => u.enabled && u.level === 2 && (u.status === 'pending' || u.status === 'active')
         );
     };
 
@@ -983,6 +1000,7 @@ export default function TeacherPanel() {
         if (view.kind !== 'lesson-chat') return null;
         const { course, unit } = view;
         const progress = getUnitProgress(course, unit);
+        const moduleProgress = getModuleProgress(course, unit);
         const hasSections = section.total > 0;
         const onLastSection = !hasSections || section.current >= section.total - 1;
         const currentSectionTitle =
@@ -1006,6 +1024,11 @@ export default function TeacherPanel() {
                             </button>
                             <div className="min-w-0">
                                 <div className="flex items-center gap-2">
+                                    {moduleProgress && (
+                                        <span className="text-[10px] text-dark-500 font-medium">
+                                            Kapitel {moduleProgress.current}/{moduleProgress.total} ·
+                                        </span>
+                                    )}
                                     <span className="text-[10px] text-teal-400 font-medium">
                                         Lektion {progress.current}/{progress.total}
                                     </span>
