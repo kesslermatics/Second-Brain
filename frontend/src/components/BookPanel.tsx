@@ -469,6 +469,17 @@ export default function BookPanel() {
         }
     };
 
+    // ── Primary action: send text if typed, otherwise advance/complete ──
+    const handlePrimaryAction = (isLastSection: boolean) => {
+        if (chatInput.trim()) {
+            handleSendMessage();
+        } else if (isLastSection) {
+            handleCompleteUnit();
+        } else {
+            handleNextSection();
+        }
+    };
+
     const isLastEnabledUnit = (course: CourseDetail, currentUnit: CourseUnit) => {
         const sorted = [...course.units].sort((a, b) => a.order_index - b.order_index);
         const curIdx = sorted.findIndex(u => u.id === currentUnit.id);
@@ -1178,40 +1189,44 @@ export default function BookPanel() {
                             onKeyDown={(e) => {
                                 if (e.key === 'Enter' && !e.shiftKey) {
                                     e.preventDefault();
-                                    handleSendMessage();
+                                    handlePrimaryAction(onLastSection);
                                 }
                             }}
-                            placeholder="Frage stellen oder diskutieren..."
+                            placeholder="Frage stellen — oder Enter / Weiter drücken"
                             rows={1}
                             className="flex-1 px-3 py-2.5 bg-dark-800 border border-dark-700 rounded-xl text-white text-sm placeholder-dark-600 focus:outline-none focus:border-amber-500 resize-none min-h-[40px] max-h-[120px]"
                         />
-                        <button
-                            onClick={handleSendMessage}
-                            disabled={!chatInput.trim() || sendingChat}
-                            className="p-2.5 bg-dark-700 hover:bg-dark-600 text-white rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
-                            title="Nachricht senden"
-                        >
-                            <FiSend className="w-4 h-4" />
-                        </button>
-                        {!onLastSection ? (
+                        {chatInput.trim() ? (
+                            /* Text eingegeben → senden */
                             <button
-                                onClick={handleNextSection}
-                                disabled={sendingChat || messages.length < 2}
-                                title="Weiter zum nächsten Abschnitt"
-                                className="flex items-center gap-1.5 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white text-sm font-semibold rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
+                                onClick={() => handlePrimaryAction(onLastSection)}
+                                disabled={sendingChat}
+                                className="p-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
+                                title="Nachricht senden"
                             >
-                                Weiter
-                                <FiChevronRight className="w-4 h-4" />
+                                <FiSend className="w-4 h-4" />
                             </button>
-                        ) : (
+                        ) : onLastSection ? (
+                            /* Letztes Kapitel, kein Text → Abschließen */
                             <button
-                                onClick={handleCompleteUnit}
+                                onClick={() => handlePrimaryAction(onLastSection)}
                                 disabled={sendingChat || messages.length < 2}
                                 title="Kapitel abschließen"
                                 className="flex items-center gap-1.5 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white text-sm font-semibold rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
                             >
                                 <FiCheck className="w-4 h-4" />
                                 Abschließen
+                            </button>
+                        ) : (
+                            /* Nächstes Kapitel, kein Text → Weiter */
+                            <button
+                                onClick={() => handlePrimaryAction(onLastSection)}
+                                disabled={sendingChat || messages.length < 2}
+                                title="Weiter zum nächsten Abschnitt"
+                                className="flex items-center gap-1.5 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white text-sm font-semibold rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
+                            >
+                                Weiter
+                                <FiChevronRight className="w-4 h-4" />
                             </button>
                         )}
                     </div>

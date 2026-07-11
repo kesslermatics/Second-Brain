@@ -457,6 +457,17 @@ export default function TeacherPanel() {
         }
     };
 
+    // ── Primary action: send text if typed, otherwise advance/complete ──
+    const handlePrimaryAction = (isLastSection: boolean) => {
+        if (chatInput.trim()) {
+            handleSendMessage();
+        } else if (isLastSection) {
+            handleCompleteUnit();
+        } else {
+            handleNextSection();
+        }
+    };
+
     // ── Advance to the next section ──────────────────────────────────
     const handleNextSection = async () => {
         if (view.kind !== 'lesson-chat' || sendingChat) return;
@@ -1165,40 +1176,44 @@ export default function TeacherPanel() {
                             onKeyDown={(e) => {
                                 if (e.key === 'Enter' && !e.shiftKey) {
                                     e.preventDefault();
-                                    handleSendMessage();
+                                    handlePrimaryAction(onLastSection);
                                 }
                             }}
-                            placeholder="Frage stellen oder diskutieren..."
+                            placeholder="Frage stellen — oder Enter / Weiter drücken"
                             rows={1}
                             className="flex-1 px-3 py-2.5 bg-dark-800 border border-dark-700 rounded-xl text-white text-sm placeholder-dark-600 focus:outline-none focus:border-teal-500 resize-none min-h-[40px] max-h-[120px]"
                         />
-                        <button
-                            onClick={handleSendMessage}
-                            disabled={!chatInput.trim() || sendingChat}
-                            className="p-2.5 bg-dark-700 hover:bg-dark-600 text-white rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
-                            title="Nachricht senden"
-                        >
-                            <FiSend className="w-4 h-4" />
-                        </button>
-                        {!onLastSection ? (
+                        {chatInput.trim() ? (
+                            /* Text eingegeben → senden */
                             <button
-                                onClick={handleNextSection}
-                                disabled={sendingChat || messages.length < 2}
-                                title="Weiter zum nächsten Abschnitt"
-                                className="flex items-center gap-1.5 px-4 py-2.5 bg-teal-600 hover:bg-teal-500 text-white text-sm font-semibold rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
+                                onClick={() => handlePrimaryAction(onLastSection)}
+                                disabled={sendingChat}
+                                className="p-2.5 bg-teal-600 hover:bg-teal-500 text-white rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
+                                title="Nachricht senden"
                             >
-                                Weiter
-                                <FiChevronRight className="w-4 h-4" />
+                                <FiSend className="w-4 h-4" />
                             </button>
-                        ) : (
+                        ) : onLastSection ? (
+                            /* Letzter Abschnitt, kein Text → Abschließen */
                             <button
-                                onClick={handleCompleteUnit}
+                                onClick={() => handlePrimaryAction(onLastSection)}
                                 disabled={sendingChat || messages.length < 2}
                                 title="Lektion abschließen"
                                 className="flex items-center gap-1.5 px-4 py-2.5 bg-teal-600 hover:bg-teal-500 text-white text-sm font-semibold rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
                             >
                                 <FiCheck className="w-4 h-4" />
                                 Abschließen
+                            </button>
+                        ) : (
+                            /* Nächster Abschnitt, kein Text → Weiter */
+                            <button
+                                onClick={() => handlePrimaryAction(onLastSection)}
+                                disabled={sendingChat || messages.length < 2}
+                                title="Weiter zum nächsten Abschnitt"
+                                className="flex items-center gap-1.5 px-4 py-2.5 bg-teal-600 hover:bg-teal-500 text-white text-sm font-semibold rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
+                            >
+                                Weiter
+                                <FiChevronRight className="w-4 h-4" />
                             </button>
                         )}
                     </div>
