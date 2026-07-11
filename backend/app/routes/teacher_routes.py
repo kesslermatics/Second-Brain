@@ -765,7 +765,16 @@ async def unit_chat_stream(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Stream a teacher response via SSE with thinking + text chunks."""
+    """Start a background teacher-agent job and return a job_id.
+
+    The client immediately gets {"job_id": "..."} and opens
+    GET /api/jobs/{job_id}/events to receive the SSE stream.
+    Because the job runs as an independent asyncio.Task, the stream
+    survives tab switches, phone app changes, and brief network blips —
+    the client can reconnect and replay any missed events via ?from=N.
+    """
+    from app.services.job_store import job_store
+
     user_message = data.get("message", "").strip()
     if not user_message:
         raise HTTPException(status_code=400, detail="Message required")
@@ -801,11 +810,7 @@ async def unit_chat_stream(
     previous_summary = _build_previous_units_summary(list(course.units), unit.order_index)
     next_title = _get_next_unit_title(list(course.units), unit.order_index)
 
-    # NOTE: no upfront knowledge lookup here — the agent decides on its own when
-    # to call search_my_notes, so a blocking vector search before streaming would
-    # only delay the first token without being used.
-
-    # Sections
+    # Sections — lazily generate and persist before background task starts
     if not unit.sections:
         try:
             is_book = (course.kind or "teacher") == "book"
@@ -828,7 +833,7 @@ async def unit_chat_stream(
     sections_list = unit.sections or None
     current_section_idx = unit.current_section or 0
 
-    # Save user message
+    # Save user message and flush DB state before the background task
     user_msg = CourseMessage(course_id=course.id, unit_id=unit.id, role="user", content=user_message)
     db.add(user_msg)
     await db.flush()
@@ -864,98 +869,102 @@ async def unit_chat_stream(
         if next_title:
             subject_block += f'\nNÄCHSTES THEMA: "{next_title}"'
 
-    # Where teacher-generated notes should live by default
     default_folder = (
         f"Bücher/{course.title}" if is_book else f"Kurse/{course.title}"
     )
 
-    async def event_stream():
-        full_response_parts = []
+    # Snapshot immutable data needed by the background job
+    course_id_str = str(course.id)
+    unit_id_str = str(unit.id)
+    user_id_str = str(current_user.id)
+
+    async def _generate_events():
+        """Async generator that drives the agent and yields normalised event dicts."""
+        full_response_parts: list[str] = []
         collected_final: dict = {}
 
-        async for event in run_teacher_agent(
-            user_id=str(current_user.id),
-            db=db,
-            subject_block=subject_block,
-            sections=sections_list,
-            current_section=current_section_idx,
-            chat_history=chat_history,
-            user_message=user_message,
-            default_folder=default_folder,
-        ):
-            etype = event.get("type")
-            if etype == "thinking":
-                # Raw reasoning — not shown in the UI, but forwarded for completeness.
-                yield f"data: {json.dumps({'type': 'thinking', 'content': event['content']}, ensure_ascii=False)}\n\n"
-            elif etype == "status":
-                yield f"data: {json.dumps({'type': 'status', 'content': event['content']}, ensure_ascii=False)}\n\n"
-            elif etype == "chunk":
-                full_response_parts.append(event["content"])
-                yield f"data: {json.dumps({'type': 'chunk', 'content': event['content']}, ensure_ascii=False)}\n\n"
-            elif etype == "quiz_suggested":
-                yield f"data: {json.dumps({'type': 'quiz_suggested'}, ensure_ascii=False)}\n\n"
-            elif etype == "note_saved":
-                yield f"data: {json.dumps({'type': 'note_saved', 'note': event['note']}, ensure_ascii=False)}\n\n"
-            elif etype == "difficulty":
-                yield f"data: {json.dumps({'type': 'difficulty', 'level': event.get('level')}, ensure_ascii=False)}\n\n"
-            elif etype == "understanding":
-                yield f"data: {json.dumps({'type': 'understanding', 'concept': event.get('concept'), 'status': event.get('status')}, ensure_ascii=False)}\n\n"
-            elif etype == "checkpoint":
-                yield f"data: {json.dumps({'type': 'checkpoint', 'question': event.get('question', '')}, ensure_ascii=False)}\n\n"
-            elif etype == "diagram":
-                yield f"data: {json.dumps({'type': 'diagram', 'code': event.get('code', ''), 'caption': event.get('caption', '')}, ensure_ascii=False)}\n\n"
-            elif etype == "done":
-                collected_final = event
+        async with async_session() as bg_db:
+            async for event in run_teacher_agent(
+                user_id=user_id_str,
+                db=bg_db,
+                subject_block=subject_block,
+                sections=sections_list,
+                current_section=current_section_idx,
+                chat_history=chat_history,
+                user_message=user_message,
+                default_folder=default_folder,
+            ):
+                etype = event.get("type")
+                if etype == "thinking":
+                    yield {"type": "thinking", "content": event["content"]}
+                elif etype == "status":
+                    yield {"type": "status", "content": event["content"]}
+                elif etype == "chunk":
+                    full_response_parts.append(event["content"])
+                    yield {"type": "chunk", "content": event["content"]}
+                elif etype == "quiz_suggested":
+                    yield {"type": "quiz_suggested"}
+                elif etype == "note_saved":
+                    yield {"type": "note_saved", "note": event["note"]}
+                elif etype == "difficulty":
+                    yield {"type": "difficulty", "level": event.get("level")}
+                elif etype == "understanding":
+                    yield {"type": "understanding", "concept": event.get("concept"), "status": event.get("status")}
+                elif etype == "checkpoint":
+                    yield {"type": "checkpoint", "question": event.get("question", "")}
+                elif etype == "diagram":
+                    yield {"type": "diagram", "code": event.get("code", ""), "caption": event.get("caption", "")}
+                elif etype == "done":
+                    collected_final = event
 
-        full_text = "".join(full_response_parts).strip()
-        quiz_suggested = bool(collected_final.get("quiz_suggested"))
-        saved_notes = collected_final.get("saved_notes", [])
-        understanding = collected_final.get("understanding", [])
-        diagrams = collected_final.get("diagrams", [])
-        checkpoints = collected_final.get("checkpoints", [])
+            # Persist the assistant message
+            full_text = "".join(full_response_parts).strip()
+            quiz_suggested = bool(collected_final.get("quiz_suggested"))
+            saved_notes = collected_final.get("saved_notes", [])
+            understanding = collected_final.get("understanding", [])
+            diagrams = collected_final.get("diagrams", [])
+            checkpoints = collected_final.get("checkpoints", [])
 
-        # Persist: assistant message (with any diagrams/checkpoints as metadata).
-        # Section progression already happened via [ABSCHNITT_WEITER] before the
-        # stream, so current_section_idx is authoritative here. Notes were saved
-        # live by the agent — we just record a marker for them.
-        new_section_idx = current_section_idx
-        msg_metadata = {}
-        if diagrams:
-            msg_metadata["diagrams"] = diagrams
-        if checkpoints:
-            msg_metadata["checkpoints"] = checkpoints
-        if understanding:
-            msg_metadata["understanding"] = understanding
+            msg_metadata: dict = {}
+            if diagrams:
+                msg_metadata["diagrams"] = diagrams
+            if checkpoints:
+                msg_metadata["checkpoints"] = checkpoints
+            if understanding:
+                msg_metadata["understanding"] = understanding
 
-        async with async_session() as save_db:
             assistant_msg = CourseMessage(
-                course_id=course.id, unit_id=unit.id, role="assistant",
-                content=full_text, metadata_=msg_metadata or None,
+                course_id=uuid.UUID(course_id_str),
+                unit_id=uuid.UUID(unit_id_str),
+                role="assistant",
+                content=full_text,
+                metadata_=msg_metadata or None,
             )
-            save_db.add(assistant_msg)
+            bg_db.add(assistant_msg)
 
-            # Record a note_generated marker so the "already saved" logic still works
             if saved_notes:
                 titles = [n.get("title", "") for n in saved_notes if n.get("title")]
                 if titles:
                     marker = CourseMessage(
-                        course_id=course.id, unit_id=unit.id, role="note_generated",
+                        course_id=uuid.UUID(course_id_str),
+                        unit_id=uuid.UUID(unit_id_str),
+                        role="note_generated",
                         content=f"Notizen automatisch gespeichert: {', '.join(titles)}",
                         metadata_={"note_titles": titles, "auto": True},
                     )
-                    save_db.add(marker)
+                    bg_db.add(marker)
 
-            await save_db.commit()
+            await bg_db.commit()
             msg_id = str(assistant_msg.id)
 
         total = len(sections_list) if sections_list else 0
-        is_last = total == 0 or new_section_idx >= total - 1
+        is_last = total == 0 or current_section_idx >= total - 1
 
-        done_data = json.dumps({
+        yield {
             "type": "done",
             "message_id": msg_id,
             "sections": sections_list or [],
-            "current_section": new_section_idx,
+            "current_section": current_section_idx,
             "total_sections": total,
             "is_last_section": is_last,
             "quiz_suggested": quiz_suggested,
@@ -963,14 +972,14 @@ async def unit_chat_stream(
             "diagrams": diagrams,
             "checkpoints": checkpoints,
             "understanding": understanding,
-        }, ensure_ascii=False)
-        yield f"data: {done_data}\n\n"
+        }
 
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
-    )
+    # Register job and fire the background task
+    job_id = str(uuid.uuid4())
+    job_store.create_job(job_id)
+    asyncio.create_task(job_store.run_job(job_id, _generate_events()))
+
+    return {"job_id": job_id}
 
 
 # ── Note Generation ───────────────────────────────────────────────────

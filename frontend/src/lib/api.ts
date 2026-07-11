@@ -505,6 +505,69 @@ export type TeacherStreamEvent =
       understanding?: TeacherUnderstanding[];
     };
 
+/**
+ * Shared helper: connect to GET /api/jobs/{job_id}/events and stream events.
+ * Automatically reconnects (with the last received index) when the page becomes
+ * visible again or the connection drops — so tab switches and phone-app changes
+ * no longer interrupt a running job.
+ */
+async function _streamJobEvents(
+  jobId: string,
+  token: string | null,
+  onEvent?: (event: Record<string, unknown>) => void,
+): Promise<void> {
+  let fromIndex = 0;
+  let done = false;
+
+  const connect = async () => {
+    const url = `${API_URL}/api/jobs/${jobId}/events?from=${fromIndex}`;
+    const response = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    });
+    if (!response.ok) throw new Error(`Job stream failed: ${response.status}`);
+
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('No reader available');
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done: streamDone, value } = await reader.read();
+      if (streamDone) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const jsonStr = line.slice(6).trim();
+        if (!jsonStr) continue;
+        try {
+          const event = JSON.parse(jsonStr) as Record<string, unknown>;
+          // Track position for reconnect
+          if (typeof event._idx === 'number') fromIndex = (event._idx as number) + 1;
+          if (event.type === 'done') done = true;
+          onEvent?.(event);
+        } catch { /* skip */ }
+      }
+    }
+  };
+
+  // Reconnect loop: if connection drops (e.g. tab was backgrounded) and job
+  // isn't finished yet, reconnect from where we left off.
+  while (!done) {
+    try {
+      await connect();
+    } catch {
+      if (done) break;
+      // Wait briefly before reconnecting to avoid hammering the server
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    if (done) break;
+  }
+}
+
 export const sendTeacherChatStream = async (
   courseId: string,
   unitId: string,
@@ -513,7 +576,8 @@ export const sendTeacherChatStream = async (
 ): Promise<TeacherChatResponse> => {
   const token = typeof window !== 'undefined' ? localStorage.getItem('brain_token') : null;
 
-  const response = await fetch(`${API_URL}/api/teacher/courses/${courseId}/units/${unitId}/chat/stream`, {
+  // Step 1: POST to start the background job — returns immediately with a job_id
+  const startResponse = await fetch(`${API_URL}/api/teacher/courses/${courseId}/units/${unitId}/chat/stream`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -521,40 +585,19 @@ export const sendTeacherChatStream = async (
     },
     body: JSON.stringify({ message }),
   });
+  if (!startResponse.ok) throw new Error(`Teacher stream failed: ${startResponse.status}`);
+  const { job_id } = await startResponse.json();
 
-  if (!response.ok) {
-    throw new Error(`Teacher stream failed: ${response.status}`);
-  }
-
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error('No reader available');
-
-  const decoder = new TextDecoder();
-  let buffer = '';
+  // Step 2: Stream events from the job
   let fullContent = '';
   let doneEvent: TeacherStreamEvent | null = null;
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-
-    for (const line of lines) {
-      if (line.startsWith('data: ')) {
-        const jsonStr = line.slice(6).trim();
-        if (!jsonStr) continue;
-        try {
-          const event = JSON.parse(jsonStr) as TeacherStreamEvent;
-          if (event.type === 'chunk') fullContent += event.content;
-          if (event.type === 'done') doneEvent = event;
-          onEvent?.(event);
-        } catch { /* skip */ }
-      }
-    }
-  }
+  await _streamJobEvents(job_id, token, (event) => {
+    const e = event as unknown as TeacherStreamEvent;
+    if (e.type === 'chunk') fullContent += e.content;
+    if (e.type === 'done') doneEvent = e;
+    onEvent?.(e);
+  });
 
   // Return a compatible TeacherChatResponse
   const done = doneEvent as Extract<TeacherStreamEvent, { type: 'done' }> | null;
@@ -721,45 +764,17 @@ export const runAgentStream = async (
 
   const token = typeof window !== 'undefined' ? localStorage.getItem('brain_token') : null;
 
-  const response = await fetch(`${API_URL}/api/agent/sessions/${sessionId}/messages/stream`, {
+  // Step 1: POST to start the background job — returns immediately with a job_id
+  const startResponse = await fetch(`${API_URL}/api/agent/sessions/${sessionId}/messages/stream`, {
     method: 'POST',
-    headers: {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: formData,
   });
+  if (!startResponse.ok) throw new Error(`Agent stream failed: ${startResponse.status}`);
+  const { job_id } = await startResponse.json();
 
-  if (!response.ok) {
-    throw new Error(`Agent stream failed: ${response.status}`);
-  }
-
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error('No reader available');
-
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-
-    for (const line of lines) {
-      if (line.startsWith('data: ')) {
-        const jsonStr = line.slice(6).trim();
-        if (!jsonStr) continue;
-        try {
-          const event = JSON.parse(jsonStr) as AgentStreamEvent;
-          onEvent?.(event);
-        } catch {
-          // Skip malformed events
-        }
-      }
-    }
-  }
+  // Step 2: Stream events from the job — reconnects automatically on visibility change
+  await _streamJobEvents(job_id, token, onEvent as (e: Record<string, unknown>) => void);
 };
 
 export const applyAgentProposals = async (proposals: unknown[]) => {

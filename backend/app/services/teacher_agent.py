@@ -33,6 +33,7 @@ Streaming SSE events (consumed by the frontend):
   {"type": "done", ...}                     final event
 """
 
+import asyncio
 import logging
 from typing import AsyncGenerator
 
@@ -374,15 +375,21 @@ async def run_teacher_agent(
             name = fc.name
             args = dict(fc.args) if fc.args else {}
 
-            # Emit a short, warm German status line (Flash-powered, one at a time).
-            # Sequential on the critical path — as requested; we evaluate later.
-            status = await summarize_thinking_status(
-                thinking_text=latest_thought, tool_name=name, tool_args=args,
-            )
+            # Parallelise: run the Flash status-line generation AND the actual tool
+            # call at the same time so neither blocks the other.
+            # Capture latest_thought before clearing it for this tool call.
+            thought_snapshot = latest_thought
             latest_thought = ""
+            status_task = asyncio.create_task(
+                summarize_thinking_status(
+                    thinking_text=thought_snapshot, tool_name=name, tool_args=args,
+                )
+            )
+            tool_task = asyncio.create_task(
+                _execute_teacher_tool(name, args, user_id, db, collected, default_folder)
+            )
+            status, result = await asyncio.gather(status_task, tool_task)
             yield {"type": "status", "content": status}
-
-            result = await _execute_teacher_tool(name, args, user_id, db, collected, default_folder)
 
             # Emit side-channel events for the frontend
             if name == "propose_quiz":

@@ -6,6 +6,7 @@ Uses the existing ChatSession/ChatMessage models with session_type='agent'.
 import json
 import os
 import re
+import asyncio
 import uuid as _uuid
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Form
@@ -16,7 +17,7 @@ from uuid import UUID
 from pydantic import BaseModel
 from typing import Optional, List
 
-from app.database import get_db
+from app.database import get_db, async_session
 from app.auth import get_current_user
 from app.models import User, Note, Folder, Tag, NoteVersion, note_tags, ChatSession, ChatMessage, Image
 from app.schemas import ChatMessageResponse
@@ -278,10 +279,15 @@ async def agent_stream_message(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Send a message to the agent and stream the response via SSE.
-    Streams thinking, tool calls, text chunks, and proposals in real-time.
-    Supports all file types: images, PDFs, documents.
+    Start a background agent job and return a job_id.
+
+    The client immediately gets {"job_id": "..."} and opens
+    GET /api/jobs/{job_id}/events to receive the SSE stream.
+    The job survives tab switches and app changes — reconnect with ?from=N
+    to replay missed events.
     """
+    from app.services.job_store import job_store
+
     # Verify session
     session = await db.get(ChatSession, session_id)
     if not session or session.user_id != current_user.id:
@@ -326,77 +332,76 @@ async def agent_stream_message(
 
     await db.commit()
 
-    # Stream the agent response
-    async def event_stream():
-        full_response_parts = []
-        all_proposals = []
-        all_steps = []
+    # Snapshot for background job
+    session_id_str = str(session_id)
+    user_id_str = str(current_user.id)
 
-        async for event in run_agent_stream(
-            instruction=user_content,
-            user_id=str(current_user.id),
-            db=db,
-            chat_history=chat_history[:-1],
-            auto_accept=auto_accept,
-            image_context=file_descriptions if file_descriptions else None,
-        ):
-            event_type = event.get("type")
+    async def _generate_events():
+        full_response_parts: list[str] = []
+        all_proposals: list = []
+        all_steps: list = []
 
-            if event_type == "thinking":
-                data = json.dumps({"type": "thinking", "content": event["content"]}, ensure_ascii=False)
-                yield f"data: {data}\n\n"
-            elif event_type == "chunk":
-                full_response_parts.append(event["content"])
-                data = json.dumps({"type": "chunk", "content": event["content"]}, ensure_ascii=False)
-                yield f"data: {data}\n\n"
-            elif event_type == "tool_call":
-                all_steps.append(event)
-                data = json.dumps({"type": "tool_call", "content": event["content"]}, ensure_ascii=False)
-                yield f"data: {data}\n\n"
-            elif event_type == "tool_result":
-                all_steps.append(event)
-                data = json.dumps({"type": "tool_result", "content": event["content"]}, ensure_ascii=False)
-                yield f"data: {data}\n\n"
-            elif event_type == "proposal":
-                all_proposals.append(event["proposal"])
-                data = json.dumps({"type": "proposal", "proposal": event["proposal"]}, ensure_ascii=False)
-                yield f"data: {data}\n\n"
-            elif event_type == "done":
-                all_proposals = event.get("proposals", all_proposals)
-                all_steps = event.get("steps", all_steps)
+        async with async_session() as bg_db:
+            async for event in run_agent_stream(
+                instruction=user_content,
+                user_id=user_id_str,
+                db=bg_db,
+                chat_history=chat_history[:-1],
+                auto_accept=auto_accept,
+                image_context=file_descriptions if file_descriptions else None,
+            ):
+                event_type = event.get("type")
 
-        # Save assistant message to DB
-        from app.database import async_session
-        agent_response = "".join(full_response_parts)
-        metadata = {}
-        if all_proposals:
-            metadata["proposals"] = all_proposals
-        if all_steps:
-            metadata["steps"] = all_steps
+                if event_type == "thinking":
+                    yield {"type": "thinking", "content": event["content"]}
+                elif event_type == "chunk":
+                    full_response_parts.append(event["content"])
+                    yield {"type": "chunk", "content": event["content"]}
+                elif event_type == "tool_call":
+                    all_steps.append(event)
+                    yield {"type": "tool_call", "content": event["content"]}
+                elif event_type == "tool_result":
+                    all_steps.append(event)
+                    yield {"type": "tool_result", "content": event["content"]}
+                elif event_type == "proposal":
+                    all_proposals.append(event["proposal"])
+                    yield {"type": "proposal", "proposal": event["proposal"]}
+                elif event_type == "sources":
+                    yield {"type": "sources", "sources": event.get("sources", [])}
+                elif event_type == "done":
+                    all_proposals = event.get("proposals", all_proposals)
+                    all_steps = event.get("steps", all_steps)
 
-        stored_content = agent_response
-        if metadata:
-            stored_content += f"\n\n<!-- AGENT_META\n{json.dumps(metadata, ensure_ascii=False)}\nAGENT_META -->"
+            # Save assistant message to DB
+            agent_response = "".join(full_response_parts)
+            metadata: dict = {}
+            if all_proposals:
+                metadata["proposals"] = all_proposals
+            if all_steps:
+                metadata["steps"] = all_steps
 
-        async with async_session() as save_db:
+            stored_content = agent_response
+            if metadata:
+                stored_content += f"\n\n<!-- AGENT_META\n{json.dumps(metadata, ensure_ascii=False)}\nAGENT_META -->"
+
             assistant_msg = ChatMessage(
-                session_id=session_id, role="assistant", content=stored_content,
+                session_id=UUID(session_id_str), role="assistant", content=stored_content,
             )
-            save_db.add(assistant_msg)
+            bg_db.add(assistant_msg)
 
             # Auto-generate title on first messages
-            count_result = await save_db.execute(
-                select(func.count(ChatMessage.id)).where(ChatMessage.session_id == session_id)
+            count_result = await bg_db.execute(
+                select(func.count(ChatMessage.id)).where(ChatMessage.session_id == UUID(session_id_str))
             )
             count = count_result.scalar()
             if count <= 2:
                 try:
                     ai_title = await generate_chat_title(content)
-                    s = await save_db.get(ChatSession, session_id)
+                    s = await bg_db.get(ChatSession, UUID(session_id_str))
                     if s:
                         s.title = ai_title
                 except Exception:
-                    s = await save_db.get(ChatSession, session_id)
+                    s = await bg_db.get(ChatSession, UUID(session_id_str))
                     if s:
                         s.title = content[:50] + ("..." if len(content) > 50 else "")
 
@@ -406,31 +411,27 @@ async def agent_stream_message(
                 apply_result = await _apply_proposals(
                     proposals=all_proposals,
                     user_id=current_user.id,
-                    db=save_db,
+                    db=bg_db,
                     background_tasks=background_tasks,
                 )
 
-            await save_db.commit()
+            await bg_db.commit()
 
-        # Send final done event
-        done_data = json.dumps({
+        yield {
             "type": "done",
             "proposals": all_proposals,
             "steps": all_steps,
             "apply_result": apply_result,
             "image_urls": file_urls,
-        }, ensure_ascii=False)
-        yield f"data: {done_data}\n\n"
+        }
 
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    # Register job and fire the background task
+    import uuid as _uuid_mod
+    job_id = str(_uuid_mod.uuid4())
+    job_store.create_job(job_id)
+    asyncio.create_task(job_store.run_job(job_id, _generate_events()))
+
+    return {"job_id": job_id}
 
 
 @router.post("/apply")
