@@ -123,15 +123,15 @@ def _teacher_tools() -> list:
             "(kein Bestätigungsschritt — sie wird direkt im Second Brain des Studenten abgelegt). "
             "Nutze dies eigenständig, wenn ein in sich abgeschlossenes Konzept behandelt wurde und "
             "es sich lohnt, es dauerhaft festzuhalten. Prüfe VORHER mit search_my_notes auf Dopplungen — "
-            "wenn es das Konzept schon als Notiz gibt, nutze stattdessen update_note."
+            "wenn es das Konzept schon als Notiz gibt, nutze stattdessen update_note. "
+            "WICHTIG: Gib KEINEN 'folder'-Parameter an — der Ordner wird automatisch gesetzt."
         ),
         parameters={
             "type": "object",
             "properties": {
-                "title": {"type": "string", "description": "Der Begriff / das Konzept als Titel"},
+                "title": {"type": "string", "description": "Der Begriff / das Konzept als Titel — kurz und präzise, KEIN 'Lektion X:' Präfix"},
                 "content": {"type": "string", "description": "Markdown-Inhalt der atomaren Notiz"},
                 "tags": {"type": "array", "items": {"type": "string"}},
-                "folder": {"type": "string", "description": "Optionaler Ordnerpfad, z.B. 'Kurse/Lineare Algebra'"},
             },
             "required": ["title", "content"],
         },
@@ -141,8 +141,9 @@ def _teacher_tools() -> list:
         name="update_note",
         description=(
             "Ergänze oder überarbeite eine BESTEHENDE Notiz, statt eine neue anzulegen. Nutze dies, "
-            "wenn search_my_notes ergeben hat, dass es zum Konzept schon eine Notiz gibt — so vermeidest "
-            "du Dopplungen und baust das Wissen des Studenten sauber aus. Erfolgt sofort im Hintergrund."
+            "wenn search_my_notes ergeben hat, dass es zum Konzept schon eine Notiz gibt. "
+            "Bei längeren Notizen (wo der preview aus search_my_notes nicht ausreicht): "
+            "lies sie VORHER mit read_note, damit du ihren vollen Inhalt kennst und nichts Wichtiges überschreibst."
         ),
         parameters={
             "type": "object",
@@ -155,30 +156,33 @@ def _teacher_tools() -> list:
         },
     )
 
-    create_folder = types.FunctionDeclaration(
-        name="create_folder",
+    read_note = types.FunctionDeclaration(
+        name="read_note",
         description=(
-            "Lege einen Ordner (Pfad) im Second Brain an, um Notizen sauber zu organisieren. "
-            "Ordner werden bei save_note ohnehin automatisch erstellt — nutze dies nur, wenn du "
-            "explizit eine Struktur vorbereiten willst."
+            "Lies den vollständigen Inhalt einer bestehenden Notiz. Nutze dies bevor du `update_note` "
+            "aufrufst, wenn der preview aus search_my_notes zu kurz ist — so siehst du was bereits drin steht "
+            "und kannst das Neue sinnvoll integrieren ohne Bestehendes zu verlieren."
         ),
         parameters={
             "type": "object",
-            "properties": {"path": {"type": "string", "description": "Ordnerpfad, z.B. 'Kurse/Thema/Unterthema'"}},
-            "required": ["path"],
+            "properties": {
+                "note_id": {"type": "string", "description": "Die ID der Notiz (aus search_my_notes)"},
+            },
+            "required": ["note_id"],
         },
     )
 
     ask_checkpoint = types.FunctionDeclaration(
         name="ask_checkpoint",
         description=(
-            "Wirf eine EINZELNE, beiläufige Verständnisfrage mitten in die Erklärung ein — leichter als "
-            "ein Quiz, um den Studenten aktiv zu halten. Er kann antworten ODER einfach weitermachen. "
-            "Nutze dies mit Fingerspitzengefühl, nicht in jeder Nachricht."
+            "Stelle eine kurze Verständnisfrage — aber NUR wenn es sich wirklich natürlich ergibt. "
+            "NICHT nach jedem Abschnitt, NICHT als formelles 'Ein kurzer Checkpoint für dich:', "
+            "NICHT als letzter Satz einer Erklärung. Maximal einmal pro Lektion. "
+            "Die Frage soll wie eine spontane Nachfrage eines echten Lehrers klingen, nicht wie ein Test-Format."
         ),
         parameters={
             "type": "object",
-            "properties": {"question": {"type": "string", "description": "Die kurze Frage an den Studenten"}},
+            "properties": {"question": {"type": "string", "description": "Die kurze Frage an den Studenten — kurz, direkt, kein Präfix"}},
             "required": ["question"],
         },
     )
@@ -209,7 +213,7 @@ def _teacher_tools() -> list:
 
     return [types.Tool(function_declarations=[
         search_my_notes, propose_quiz, set_difficulty, mark_understanding,
-        save_note, update_note, create_folder, ask_checkpoint, draw_diagram,
+        save_note, update_note, read_note, ask_checkpoint, draw_diagram,
     ])]
 
 
@@ -223,12 +227,17 @@ Du unterrichtest wie ein echter, kluger Lehrer — nicht wie ein Textgenerator:
 - Du hältst mit `mark_understanding` fest, was sitzt und was nicht.
 - Du wirfst EIGENSTÄNDIG kurze Verständnis-Quizze ein (`propose_quiz`), wenn ein Baustein sitzt — mit Fingerspitzengefühl, nicht ständig.
 - Du hältst gelerntes Wissen VERBINDLICH als Notizen fest: Nach JEDEM abgeschlossenen Abschnitt (also bei [ABSCHNITT_WEITER] und am Ende einer Lektion) MUSST du das vermittelte Wissen sichern — entweder als neue Notiz (`save_note`) oder als Ergänzung einer bestehenden (`update_note`). Prüfe IMMER zuerst mit `search_my_notes`, ob es das Konzept schon gibt. Wenn ja: ergänze mit `update_note`. Wenn nein: erstelle mit `save_note`. Diese Notiz-Pflege ist NICHT optional — sie gehört zu jedem Abschnitt dazu, genauso wie die Erklärung selbst.
-- Du wirfst hin und wieder eine beiläufige Zwischenfrage ein (`ask_checkpoint`), um den Studenten aktiv zu halten.
+
+NOTIZ-REGELN (sehr wichtig für konsistente Ablage):
+- Notiz-Titel = das Konzept/Thema selbst, kurz und präzise. NIEMALS "Lektion X:", "Modul Y:", "Abschnitt Z:" oder ähnliche Präfixe — nur der reine Begriff, z.B. "Stoizismus", "Pythagoras", "Executive Presence"
+- Alle Notizen landen automatisch im richtigen Kurs-/Buch-Ordner — du gibst KEINEN `folder`-Parameter an, das wird serverseitig gesetzt
+- Erstelle KEINE Unterordner via `create_folder` — die Notizen liegen alle flach im Kurs-Ordner
+- Du wirfst SEHR SELTEN und nur wenn es sich wirklich natürlich ergibt eine beiläufige Zwischenfrage ein (`ask_checkpoint`). Maximal einmal pro Lektion, nicht nach jedem Abschnitt — und NIEMALS als letzter Satz einer Erklärung mit "Ein kurzer Checkpoint für dich:" oder ähnlichem. Wenn überhaupt, dann fließt die Frage organisch in den Text ein, als würde ein echter Lehrer kurz nachfragen.
 - Bei klar strukturierten Themen (Abläufe, Hierarchien, Zeitachsen) kannst du ein kleines Diagramm zeichnen (`draw_diagram`) — aber nur, wenn es wirklich hilft.
 
 ABSCHNITTSWEISES LEHREN: Behandle immer nur den aktuell markierten Abschnitt — substantiell, mit Beispiel (in der Regel 2-4 Absätze), fokussiert auf dieses eine Teilkonzept. Wirf nicht die ganze Lektion auf einmal raus. Den Wechsel zum nächsten Abschnitt löst ausschließlich der Student per Weiter-Button aus — du selbst wechselst NICHT eigenständig den Abschnitt.
 
-RECALL: Ab und zu (nicht immer) bittest du den Studenten am Ende eines Abschnitts, das eben Gelernte in einem Satz selbst zusammenzufassen — das festigt das Wissen. Er kann aber auch einfach weitermachen.
+RECALL: Bitte den Studenten NUR SEHR SELTEN (maximal einmal pro 3-4 Abschnitte, wenn es sich wirklich anbietet) das Gelernte kurz in eigenen Worten zusammenzufassen. Nicht nach jedem Abschnitt — das unterbricht den Lernfluss. Wenn gar nicht, ist das besser als zu oft.
 
 SPEZIAL-NACHRICHTEN:
 - "[START]": Der Student hat die Lektion/das Kapitel gerade geöffnet. Steige mit einem kurzen, neugierig machenden Hook ein (1-2 Sätze), dann erkläre den ERSTEN Abschnitt substantiell. Keine Begrüßungsfloskeln.
@@ -291,7 +300,11 @@ async def run_teacher_agent(
     contents = _build_contents(chat_history, user_message, context_block)
 
     try:
-        thinking_config = types.ThinkingConfig(include_thoughts=True)
+        # Use LOW thinking level for the teacher agent: didactic explanation is a
+        # well-defined task, not a hard reasoning problem. LOW reduces time-to-first-token
+        # from ~10-40s (HIGH default) to ~2-5s while matching quality on tool-calling tasks.
+        # gemini-3.5-flash uses the thinking_level enum (minimal|low|medium|high).
+        thinking_config = types.ThinkingConfig(thinking_level="low")
     except Exception:
         thinking_config = None
 
@@ -399,6 +412,17 @@ async def run_teacher_agent(
             if name == "propose_quiz":
                 collected["quiz_suggested"] = True
                 yield {"type": "quiz_suggested", "reason": args.get("reason", "")}
+                yield {"type": "quiz_ready"}
+            elif name == "search_my_notes":
+                count = result.get("count", 0)
+                hits = result.get("results", [])
+                if count > 0:
+                    strong_hits = [h for h in hits if h.get("score", 0) >= 0.6]
+                    if strong_hits:
+                        top = strong_hits[0]
+                        top_title = top.get("title", "")
+                        top_score_pct = round(top.get("score", 0) * 100)
+                        yield {"type": "knowledge_searched", "count": len(strong_hits), "top_title": top_title, "top_score_pct": top_score_pct, "query": args.get("query", "")}
             elif name == "save_note":
                 if result.get("note_id"):
                     saved = {"note_id": result["note_id"], "title": result.get("title", ""), "folder": result.get("folder", ""), "action": "created"}
@@ -409,6 +433,9 @@ async def run_teacher_agent(
                     saved = {"note_id": result["note_id"], "title": result.get("title", ""), "action": "updated"}
                     collected["saved_notes"].append(saved)
                     yield {"type": "note_saved", "note": saved}
+            elif name == "read_note":
+                if result.get("note_id"):
+                    yield {"type": "note_read", "note_id": result["note_id"], "title": result.get("title", "")}
             elif name == "set_difficulty":
                 collected["difficulty"] = args.get("level")
                 yield {"type": "difficulty", "level": args.get("level"), "reason": args.get("reason", "")}
@@ -455,7 +482,8 @@ async def _execute_teacher_tool(
                 user_id, db,
                 title=args.get("title", "Notiz"),
                 content=args.get("content", ""),
-                folder_path=args.get("folder") or default_folder,
+                # Always use default_folder — the agent must not create sub-folders
+                folder_path=default_folder,
                 tags=args.get("tags", []),
             )
             return {"status": "saved", **res}
@@ -467,6 +495,22 @@ async def _execute_teacher_tool(
                 append=bool(args.get("append", True)),
             )
             return {"status": "updated", **res}
+        elif name == "read_note":
+            from app.models import Note, Folder
+            from uuid import UUID
+            try:
+                note = await db.get(Note, UUID(args.get("note_id", "")))
+                if not note or str(note.user_id) != user_id:
+                    return {"error": "Notiz nicht gefunden"}
+                folder = await db.get(Folder, note.folder_id)
+                return {
+                    "note_id": str(note.id),
+                    "title": note.title,
+                    "content": note.content[:8000],  # cap to avoid huge context
+                    "folder_path": folder.path if folder else "",
+                }
+            except Exception as e:
+                return {"error": f"Fehler beim Lesen: {e}"}
         elif name == "create_folder":
             from app.services.teacher_service import _ensure_folder
             folder = await _ensure_folder(user_id, db, args.get("path", ""))

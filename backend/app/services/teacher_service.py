@@ -24,11 +24,12 @@ async def get_relevant_knowledge(
     user_id: str,
     db,
     limit: int = 8,
+    min_score: float = 0.45,
 ) -> list[dict]:
     """Search the user's existing notes for a topic. Returns lightweight hits.
 
-    Used to make the teacher build on what the student already has instead of
-    starting every lesson from scratch. Fails soft — returns [] on any error.
+    Only returns results above min_score to avoid flooding the prompt with
+    irrelevant notes. Fails soft — returns [] on any error.
     """
     if not user_id or db is None:
         return []
@@ -41,8 +42,10 @@ async def get_relevant_knowledge(
                 "title": r["title"],
                 "folder_path": r.get("folder_path", ""),
                 "preview": (r.get("content_preview") or "")[:400],
+                "score": round(r.get("score", 0), 4),
             }
             for r in results
+            if r.get("score", 0) >= min_score
         ]
     except Exception as e:
         logging.getLogger(__name__).warning(f"get_relevant_knowledge failed: {e}")

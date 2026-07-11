@@ -444,6 +444,18 @@ export default function TeacherPanel() {
                     kind: event.note.action === 'updated' ? 'note_updated' : 'note_created',
                     label: event.note.title,
                 });
+            } else if (event.type === 'note_read') {
+                pushBubble({ kind: 'note_read', label: event.title });
+            } else if (event.type === 'knowledge_searched') {
+                if (event.count > 0) {
+                    const pct = event.top_score_pct > 0 ? ` · ${event.top_score_pct}%` : '';
+                    pushBubble({
+                        kind: 'knowledge_found',
+                        label: `${event.top_title || event.query}${pct}`,
+                    });
+                }
+            } else if (event.type === 'quiz_ready') {
+                pushBubble({ kind: 'quiz_ready', label: 'Quiz verfügbar' });
             } else if (event.type === 'understanding') {
                 if (event.status === 'mastered' || event.status === 'struggling') {
                     pushBubble({

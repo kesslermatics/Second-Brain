@@ -3,9 +3,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import type React from 'react';
 import {
-    FiCheck, FiX, FiChevronRight, FiTarget, FiMap, FiArrowRight,
+    FiCheck, FiX, FiChevronRight, FiTarget, FiMap, FiArrowRight, FiSearch,
 } from 'react-icons/fi';
-import { LuListChecks, LuPartyPopper } from 'react-icons/lu';
+import { LuListChecks, LuPartyPopper, LuBrain } from 'react-icons/lu';
 import ReactMarkdown from 'react-markdown';
 import { markdownComponents, remarkPlugins, rehypePlugins } from '@/lib/markdownComponents';
 import type { CourseUnit, QuizQuestion, LessonRecap } from '@/lib/types';
@@ -399,11 +399,14 @@ export function ThinkingStatus({ phrases, phraseIndex, accent }: {
 export type ActivityBubbleKind =
     | 'note_created'
     | 'note_updated'
+    | 'note_read'
     | 'understanding_mastered'
     | 'understanding_struggling'
     | 'difficulty_up'
     | 'difficulty_down'
-    | 'diagram';
+    | 'diagram'
+    | 'knowledge_found'
+    | 'quiz_ready';
 
 export interface ActivityBubble {
     id: string;
@@ -430,6 +433,8 @@ function _bubbleConfig(kind: ActivityBubbleKind): {
             return { icon: <FiCheck className="w-3.5 h-3.5" />, label: 'Notiz gespeichert', iconBg: 'bg-teal-600/20', iconColor: 'text-teal-400' };
         case 'note_updated':
             return { icon: <FiCheck className="w-3.5 h-3.5" />, label: 'Notiz ergänzt', iconBg: 'bg-teal-600/20', iconColor: 'text-teal-400' };
+        case 'note_read':
+            return { icon: <FiSearch className="w-3.5 h-3.5" />, label: 'Notiz gelesen', iconBg: 'bg-slate-600/20', iconColor: 'text-slate-400' };
         case 'understanding_mastered':
             return { icon: <FiTarget className="w-3.5 h-3.5" />, label: 'Verstanden ✓', iconBg: 'bg-green-600/20', iconColor: 'text-green-400' };
         case 'understanding_struggling':
@@ -440,6 +445,10 @@ function _bubbleConfig(kind: ActivityBubbleKind): {
             return { icon: <FiArrowRight className="w-3.5 h-3.5 rotate-[45deg]" />, label: 'Tempo verlangsamt', iconBg: 'bg-purple-600/20', iconColor: 'text-purple-400' };
         case 'diagram':
             return { icon: <LuListChecks className="w-3.5 h-3.5" />, label: 'Diagramm erstellt', iconBg: 'bg-amber-600/20', iconColor: 'text-amber-400' };
+        case 'knowledge_found':
+            return { icon: <FiSearch className="w-3.5 h-3.5" />, label: 'Vorwissen gefunden', iconBg: 'bg-indigo-600/20', iconColor: 'text-indigo-400' };
+        case 'quiz_ready':
+            return { icon: <LuBrain className="w-3.5 h-3.5" />, label: 'Quiz bereit', iconBg: 'bg-violet-600/20', iconColor: 'text-violet-400' };
     }
 }
 

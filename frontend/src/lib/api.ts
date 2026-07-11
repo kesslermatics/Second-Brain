@@ -487,7 +487,10 @@ export type TeacherStreamEvent =
   | { type: 'status_phrases'; phrases: string[] }
   | { type: 'chunk'; content: string }
   | { type: 'quiz_suggested' }
+  | { type: 'quiz_ready' }
+  | { type: 'knowledge_searched'; count: number; top_title: string; top_score_pct: number; query: string }
   | { type: 'note_saved'; note: TeacherSavedNote }
+  | { type: 'note_read'; note_id: string; title: string }
   | { type: 'difficulty'; level: string }
   | { type: 'understanding'; concept: string; status: string }
   | { type: 'checkpoint'; question: string }

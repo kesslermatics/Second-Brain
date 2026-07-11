@@ -491,6 +491,14 @@ async def _execute_tool(name: str, args: dict, user_id: str, db: AsyncSession) -
                 db=db,
                 limit=limit,
             )
+            # Filter out low-relevance results — passing noise to the LLM leads to
+            # hallucinated connections and bloated context.
+            MIN_SCORE = 0.35  # lower bar than teacher (workspace queries are broader)
+            filtered = [r for r in results if r.get("score", 0) >= MIN_SCORE]
+            # Always include at least the top 3 results even if below threshold,
+            # so the model has something to work with on sparse knowledge bases.
+            if len(filtered) < 3 and results:
+                filtered = results[:3]
             return {
                 "results": [
                     {
@@ -498,9 +506,9 @@ async def _execute_tool(name: str, args: dict, user_id: str, db: AsyncSession) -
                         "title": r["title"],
                         "folder_path": r["folder_path"],
                         "preview": r["content_preview"][:500],
-                        "score": r["score"],
+                        "relevance": f"{round(r['score'] * 100)}%",
                     }
-                    for r in results
+                    for r in filtered
                 ]
             }
 
@@ -1036,7 +1044,9 @@ async def run_agent_stream(
 
     # Agent config — enable thought summaries so the UI can surface the reasoning
     try:
-        thinking_config = types.ThinkingConfig(include_thoughts=True)
+        # medium is the right level for the workspace agent: it handles file ops,
+        # search, and multi-step reasoning but doesn't need full deep-think latency.
+        thinking_config = types.ThinkingConfig(thinking_level="medium")
     except Exception:
         thinking_config = None
 

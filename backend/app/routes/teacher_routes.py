@@ -579,6 +579,58 @@ async def update_course_status(
     return {"ok": True, "status": course.status}
 
 
+async def _pregen_all_sections(course_id: str, is_book: bool, course_title: str, book_authors: list | None):
+    """Background task: generate sections for all pending lessons in parallel.
+
+    Runs silently after course activation so the first [START] of every lesson
+    never needs to wait for a section-generation Flash call.
+    Each unit is processed concurrently (up to 8 at a time) to avoid hammering
+    the API while still being fast.
+    """
+    try:
+        async with async_session() as db:
+            result = await db.execute(
+                select(Course)
+                .options(selectinload(Course.units))
+                .where(Course.id == course_id)
+            )
+            course = result.scalars().first()
+            if not course:
+                return
+
+            lessons = [
+                u for u in course.units
+                if u.level == 2 and u.enabled and not u.sections
+            ]
+            if not lessons:
+                return
+
+            sem = asyncio.Semaphore(8)  # max 8 parallel Flash calls
+
+            async def _gen_one(unit: CourseUnit):
+                async with sem:
+                    try:
+                        sections = await generate_lesson_sections(
+                            title=unit.title,
+                            description=unit.description or "",
+                            learning_objectives=unit.learning_objectives or [],
+                            kind="book" if is_book else "lesson",
+                            book_title=course_title if is_book else None,
+                            book_authors=book_authors if is_book else None,
+                        )
+                        if sections:
+                            unit.sections = sections
+                            unit.current_section = 0
+                    except Exception:
+                        pass  # non-fatal — will be generated on demand
+
+            await asyncio.gather(*[_gen_one(u) for u in lessons])
+            await db.commit()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("_pregen_all_sections failed: %s", e)
+
+
 # ── Unit Chat ─────────────────────────────────────────────────────────
 
 @router.get("/courses/{course_id}/units/{unit_id}/messages")
@@ -906,8 +958,14 @@ async def unit_chat_stream(
                     yield {"type": "chunk", "content": event["content"]}
                 elif etype == "quiz_suggested":
                     yield {"type": "quiz_suggested"}
+                elif etype == "knowledge_searched":
+                    yield {"type": "knowledge_searched", "count": event.get("count", 0), "top_title": event.get("top_title", ""), "top_score_pct": event.get("top_score_pct", 0), "query": event.get("query", "")}
+                elif etype == "quiz_ready":
+                    yield {"type": "quiz_ready"}
                 elif etype == "note_saved":
                     yield {"type": "note_saved", "note": event["note"]}
+                elif etype == "note_read":
+                    yield {"type": "note_read", "note_id": event.get("note_id", ""), "title": event.get("title", "")}
                 elif etype == "difficulty":
                     yield {"type": "difficulty", "level": event.get("level")}
                 elif etype == "understanding":
