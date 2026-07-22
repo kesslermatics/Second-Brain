@@ -1054,6 +1054,7 @@ async def run_agent_stream(
         system_instruction=AGENT_SYSTEM_INSTRUCTION,
         tools=_get_agent_tools(),
         temperature=0.8,
+        max_output_tokens=8192,  # hard cap — prevents infinite generation loops
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         **({"thinking_config": thinking_config} if thinking_config else {}),
     )

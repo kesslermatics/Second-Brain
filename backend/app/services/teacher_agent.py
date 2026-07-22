@@ -312,6 +312,7 @@ async def run_teacher_agent(
         system_instruction=_system_instruction(year),
         tools=_teacher_tools(),
         temperature=0.75,
+        max_output_tokens=4096,  # hard cap — prevents infinite generation loops
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         **({"thinking_config": thinking_config} if thinking_config else {}),
     )
@@ -382,6 +383,7 @@ async def run_teacher_agent(
         if round_num == 0:
             # Stream the first round for immediate UX
             all_parts = []
+            accumulated_text_len = 0  # repetition guard: track how much text we've emitted
             async for chunk in await client.aio.models.generate_content_stream(
                 model=TEACHER_AGENT_MODEL, contents=contents, config=config,
             ):
@@ -394,11 +396,21 @@ async def run_teacher_agent(
                                     latest_thought += part.text
                                     yield {"type": "thinking", "content": part.text}
                                 elif getattr(part, "text", None) and not getattr(part, "function_call", None):
-                                    text_parts.append(part.text)
-                                    yield {"type": "chunk", "content": part.text}
+                                    chunk_text = part.text
+                                    text_parts.append(chunk_text)
+                                    accumulated_text_len += len(chunk_text)
+                                    yield {"type": "chunk", "content": chunk_text}
+                                    # Hard bail-out: if we've emitted an absurd amount of text
+                                    # without a function call or completion, the model is looping.
+                                    if accumulated_text_len > 12000:
+                                        logger.warning("Repetition guard triggered at %d chars — truncating stream", accumulated_text_len)
+                                        break
                 fc = chunk.function_calls
                 if fc:
                     function_calls.extend(fc)
+                # Break outer loop too if repetition guard fired
+                if accumulated_text_len > 12000:
+                    break
             if all_parts:
                 contents.append(types.Content(role="model", parts=all_parts))
         else:
