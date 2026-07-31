@@ -19,6 +19,30 @@ from datetime import datetime
 
 # ── Knowledge-base awareness ──────────────────────────────────────────
 
+def _needs_grounding(user_message: str) -> bool:
+    """Decide whether to use Google Search grounding for this teacher turn.
+
+    Grounding is expensive — skip it for short navigational messages
+    (e.g. 'ok', '[ABSCHNITT_WEITER]', 'weiter', 'ja verstanden') and only
+    enable it for genuine knowledge questions that benefit from fresh web data.
+    """
+    msg = user_message.strip().lower()
+    # Control messages and very short replies never need grounding
+    if len(msg) < 25:
+        return False
+    control = {'[start]', '[abschnitt_weiter]', '[notizen_erstellt]', 'weiter', 'ok', 'ja', 'nein', 'verstanden'}
+    if msg in control:
+        return False
+    # Explicit knowledge-question signals
+    knowledge_signals = (
+        'was ist', 'wie funktioniert', 'wie wird', 'warum', 'erkläre', 'erklar',
+        'beispiel', 'unterschied', 'zusammenhang', 'woher', 'wann', 'wer hat',
+        'was bedeutet', 'kannst du', 'wie hängt', 'wieso', 'weshalb', 'wozu',
+        'was macht', 'wie kann', 'was sind', 'tell me', 'explain', 'what is',
+    )
+    return any(k in msg for k in knowledge_signals)
+
+
 async def get_relevant_knowledge(
     query: str,
     user_id: str,
@@ -312,7 +336,7 @@ async def generate_curriculum(
     Returns: {title, description, units: [{unit_number, title, description, learning_objectives, level}]}
     """
     # Knowledge-base awareness: what does the student already have on this topic?
-    knowledge_hits = await get_relevant_knowledge(topic, user_id, db, limit=10) if user_id else []
+    knowledge_hits = await get_relevant_knowledge(topic, user_id, db, limit=5) if user_id else []
     knowledge_block = _format_knowledge_block(knowledge_hits)
     if knowledge_block:
         knowledge_block += (
@@ -456,7 +480,7 @@ Du kannst auf dieses Vorwissen aufbauen, ohne es komplett zu wiederholen.
 
     # Build conversation for Gemini
     history_text = ""
-    for msg in chat_history[-20:]:  # Keep last 20 messages for context
+    for msg in chat_history[-12:]:  # Keep last 12 messages for context
         role_label = "Student" if msg["role"] == "user" else "Lehrer"
         if msg["role"] == "note_generated":
             history_text += f"\n[System: Notiz wurde generiert: {msg.get('content', '')[:100]}]\n"
@@ -542,7 +566,7 @@ async def chat_with_teacher_stream(
     next_hint = f'\nNÄCHSTES THEMA: "{next_unit_title}"' if next_unit_title else ""
     knowledge_block = _format_knowledge_block(knowledge_hits) if knowledge_hits else ""
     history_text = ""
-    for msg in chat_history[-20:]:
+    for msg in chat_history[-12:]:
         role_label = "Student" if msg["role"] == "user" else "Lehrer"
         if msg["role"] != "note_generated":
             history_text += f"\n{role_label}: {msg['content']}\n"
@@ -564,7 +588,9 @@ Erkläre den aktuellen Abschnitt substantiell mit Beispiel (2-4 Absätze). Fokus
 {FORMATTING_RULES}
 Antworte auf Deutsch. DUZE den Studenten."""
 
-    async for event in generate_with_search_stream(prompt, model=PRO_MODEL):
+    use_grounding = _needs_grounding(user_message)
+    gen_fn = generate_with_search_stream if use_grounding else generate_stream
+    async for event in gen_fn(prompt, model=PRO_MODEL):
         yield event
 
 
@@ -586,9 +612,9 @@ async def generate_lesson_notes(
 
     objectives_str = "\n".join(f"  - {o}" for o in learning_objectives) if learning_objectives else ""
 
-    # Compress chat history for context — use generous limit so notes cover everything
+    # Compress chat history for context
     chat_text = ""
-    for msg in chat_history[-30:]:
+    for msg in chat_history[-20:]:
         role_label = "Student" if msg["role"] == "user" else "Lehrer"
         if msg["role"] != "note_generated" and msg.get("content", "") not in CONTROL_MESSAGES:
             chat_text += f"{role_label}: {msg['content'][:3000]}\n"
@@ -1138,7 +1164,7 @@ Du kannst auf dieses Vorwissen aufbauen, ohne es komplett zu wiederholen.
         next_hint = f'\nNÄCHSTES KAPITEL im Buch: "{next_chapter_title}" — du kannst gegen Ende natürlich dorthin überleiten.'
 
     history_text = ""
-    for msg in chat_history[-20:]:
+    for msg in chat_history[-12:]:
         role_label = "Student" if msg["role"] == "user" else "Tutor"
         if msg["role"] == "note_generated":
             history_text += f"\n[System: Notiz wurde generiert: {msg.get('content', '')[:100]}]\n"
@@ -1209,7 +1235,7 @@ async def chat_about_book_chapter_stream(
     next_hint = f'\nNÄCHSTES KAPITEL: "{next_chapter_title}"' if next_chapter_title else ""
     knowledge_block = _format_knowledge_block(knowledge_hits) if knowledge_hits else ""
     history_text = ""
-    for msg in chat_history[-20:]:
+    for msg in chat_history[-12:]:
         role_label = "Student" if msg["role"] == "user" else "Tutor"
         if msg["role"] != "note_generated":
             history_text += f"\n{role_label}: {msg['content']}\n"
@@ -1229,7 +1255,9 @@ Recherchiere den tatsächlichen Inhalt dieses Kapitels. Erkläre den aktuellen A
 {FORMATTING_RULES}
 Antworte auf Deutsch. DUZE den Studenten IMMER."""
 
-    async for event in generate_with_search_stream(prompt, model=PRO_MODEL):
+    use_grounding = _needs_grounding(user_message)
+    gen_fn = generate_with_search_stream if use_grounding else generate_stream
+    async for event in gen_fn(prompt, model=PRO_MODEL):
         yield event
 
 
@@ -1247,7 +1275,7 @@ async def generate_book_chapter_notes(
     tags_str = ", ".join(existing_tags) if existing_tags else "(keine)"
 
     chat_text = ""
-    for msg in chat_history[-30:]:
+    for msg in chat_history[-20:]:
         role_label = "Student" if msg["role"] == "user" else "Tutor"
         if msg["role"] != "note_generated" and msg.get("content", "") not in CONTROL_MESSAGES:
             chat_text += f"{role_label}: {msg['content'][:3000]}\n"

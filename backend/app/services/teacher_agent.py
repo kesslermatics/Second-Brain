@@ -522,7 +522,7 @@ async def _execute_teacher_tool(
     """Execute a teacher tool call and return a result dict fed back to the model."""
     try:
         if name == "search_my_notes":
-            hits = await get_relevant_knowledge(args.get("query", ""), user_id, db, limit=8)
+            hits = await get_relevant_knowledge(args.get("query", ""), user_id, db, limit=5)
             return {"results": hits, "count": len(hits)}
         elif name == "propose_quiz":
             return {"status": "quiz_offered", "message": "Dem Studenten wird ein Quiz-Button angeboten."}

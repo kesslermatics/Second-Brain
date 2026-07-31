@@ -63,10 +63,10 @@ Du hast Zugriff auf alle Notizen, Ordner und Bilder des Benutzers über Tools �
    - Erstelle oder bearbeite eine Notiz NUR wenn EINES davon zutrifft:
      (a) der Benutzer bittet dich AUSDRÜCKLICH darum ("speichere das", "mach eine Notiz", "halt das fest"), ODER
      (b) es wurde eine Datei hochgeladen (dann proaktiv ablegen), ODER
-     (c) ein Gespräch ist zu einem klaren, abgeschlossenen Ergebnis gekommen, das der Benutzer sichtbar behalten will — und selbst dann FRAGST du zuerst kurz nach ("Soll ich das als Notiz festhalten?").
+     (c) ein Gespräch ist zu einem klaren, abgeschlossenen Ergebnis gekommen, das der Benutzer sichtbar behalten will.
    - Beim Brainstormen, Ideen sammeln, Nachdenken, Rückfragen beantworten, Pläne durchsprechen: erstelle KEINE Notiz. Das ist einfach nur Gespräch. Auch wenn das Gespräch inhaltlich stark ist — nicht jeder gute Gedanke muss sofort abgespeichert werden.
-   - Falls du denkst, dass sich etwas zum Festhalten lohnt, biete es am Ende deiner Antwort in EINEM Satz an ("Wenn du willst, fasse ich das als Notiz zusammen.") statt es einfach zu tun.
-   - Lieber ein Gespräch zu wenig verschriftlicht als der Chat voller ungewollter Notiz-Vorschläge. Zurückhaltung ist erwünscht.
+   - Wenn du erkennst, dass etwas wirklich ins Second Brain gehört: Tue es einfach direkt — OHNE nachzufragen und OHNE es anzukündigen. Kein "Soll ich?", kein "Ich schlage vor", kein "Ich habe einen Entwurf erstellt". Handeln, fertig.
+   - Lieber ein Gespräch zu wenig verschriftlicht als der Chat voller Rückfragen.
 
 4. **BEARBEITEN STATT NEU ANLEGEN — sehr wichtig**: Dein Standardverhalten ist, bestehende Notizen zu ERWEITERN und zu PFLEGEN, nicht ständig neue anzulegen.
    - Bevor du eine neue Notiz erstellst, suche IMMER zuerst mit `search_notes` ob es schon eine Notiz zum gleichen oder einem eng verwandten Thema gibt. EINE breite Suche reicht in der Regel — kombiniere verwandte Begriffe statt mehrerer Einzelsuchen.
@@ -117,9 +117,9 @@ Du hast Zugriff auf alle Notizen, Ordner und Bilder des Benutzers über Tools �
 - Bei Brainstorming: Liste Ideen auf, diskutiere Pro/Contra, schlage nächste Schritte vor
 - Bei Fragen zu Notizen: Fasse zusammen, verknüpfe, gib Kontext
 
-## Proposals (Änderungen an der Wissensbasis):
+## Verhalten beim Speichern:
 
-Alle verändernden Aktionen (Notizen erstellen/ändern/löschen, Ordner anlegen/umbenennen/verschieben) werden dem Benutzer als VORSCHLÄGE vorgelegt — sie werden erst ausgeführt, wenn er sie annimmt. Sage NIE, dass du etwas bereits getan hast; sage, dass du es vorschlägst.
+Alle verändernden Aktionen (Notizen erstellen/ändern/löschen, Ordner anlegen/umbenennen/verschieben) werden **sofort und ohne Rückfrage ausgeführt**. Kündige sie NICHT im Chat an, frage NICHT nach Bestätigung. Tu es einfach. Der Benutzer sieht die Änderung im UI direkt.
 
 Schreibe Notiz-Inhalte immer in gut formatiertem Markdown mit Headings, Listen, Callouts.
 
@@ -743,103 +743,86 @@ async def _execute_tool(name: str, args: dict, user_id: str, db: AsyncSession) -
             }
 
         elif name == "create_note":
-            # Return as a proposal — will be applied by the route handler
-            return {
-                "status": "proposal_created",
-                "proposal": {
-                    "type": "create",
-                    "folder_path": args.get("folder_path", "Allgemein"),
-                    "title": args.get("title", "Neue Notiz"),
-                    "content": args.get("content", ""),
-                    "tags": args.get("tags", []),
-                    "attach_file_ids": args.get("attach_file_ids", []),
-                },
+            # Execute directly — no proposal flow
+            from app.routes.agent_routes import _apply_create as _do_create, _apply_update as _do_update, _apply_delete as _do_delete, _apply_rename_note as _do_rename, _apply_move_note as _do_move, _apply_create_folder as _do_create_folder, _apply_rename_folder as _do_rename_folder, _apply_delete_folder as _do_delete_folder
+            p = {
+                "type": "create",
+                "folder_path": args.get("folder_path", "Allgemein"),
+                "title": args.get("title", "Neue Notiz"),
+                "content": args.get("content", ""),
+                "tags": args.get("tags", []),
+                "attach_file_ids": args.get("attach_file_ids", []),
             }
+            result = await _do_create(p, UUID(user_id), db)
+            return {"status": "created", "note_id": result.get("note_id"), "title": result.get("title")}
 
         elif name == "update_note":
-            return {
-                "status": "proposal_created",
-                "proposal": {
-                    "type": "update",
-                    "note_id": args.get("note_id", ""),
-                    "new_title": args.get("new_title"),
-                    "new_content": args.get("new_content"),
-                },
+            from app.routes.agent_routes import _apply_update as _do_update
+            p = {
+                "type": "update",
+                "note_id": args.get("note_id", ""),
+                "new_title": args.get("new_title"),
+                "new_content": args.get("new_content"),
             }
+            result = await _do_update(p, UUID(user_id), db)
+            return {"status": "updated", "note_id": result.get("note_id"), "title": result.get("title")}
 
         elif name == "delete_note":
-            return {
-                "status": "proposal_created",
-                "proposal": {
-                    "type": "delete",
-                    "note_id": args.get("note_id", ""),
-                },
+            from app.routes.agent_routes import _apply_delete as _do_delete
+            p = {
+                "type": "delete",
+                "note_id": args.get("note_id", ""),
             }
+            await _do_delete(p, UUID(user_id), db)
+            return {"status": "deleted"}
 
         elif name == "rename_note":
-            # Resolve current title for a nicer proposal preview
-            current_title = ""
-            try:
-                note = await db.get(Note, UUID(args.get("note_id", "")))
-                if note and str(note.user_id) == user_id:
-                    current_title = note.title
-            except (ValueError, TypeError):
-                pass
-            return {
-                "status": "proposal_created",
-                "proposal": {
-                    "type": "rename_note",
-                    "note_id": args.get("note_id", ""),
-                    "title": current_title,
-                    "new_title": args.get("new_title", ""),
-                },
+            from app.routes.agent_routes import _apply_rename_note as _do_rename
+            p = {
+                "type": "rename_note",
+                "note_id": args.get("note_id", ""),
+                "new_title": args.get("new_title", ""),
             }
+            result = await _do_rename(p, UUID(user_id), db)
+            return {"status": "renamed", "note_id": result.get("note_id"), "title": result.get("title")}
 
         elif name == "move_note":
-            current_title = ""
-            try:
-                note = await db.get(Note, UUID(args.get("note_id", "")))
-                if note and str(note.user_id) == user_id:
-                    current_title = note.title
-            except (ValueError, TypeError):
-                pass
-            return {
-                "status": "proposal_created",
-                "proposal": {
-                    "type": "move_note",
-                    "note_id": args.get("note_id", ""),
-                    "title": current_title,
-                    "target_folder_path": args.get("target_folder_path", ""),
-                },
+            from app.routes.agent_routes import _apply_move_note as _do_move
+            p = {
+                "type": "move_note",
+                "note_id": args.get("note_id", ""),
+                "target_folder_path": args.get("target_folder_path", ""),
             }
+            result = await _do_move(p, UUID(user_id), db)
+            return {"status": "moved", "note_id": result.get("note_id"), "title": result.get("title")}
 
         elif name == "create_folder":
-            return {
-                "status": "proposal_created",
-                "proposal": {
-                    "type": "create_folder",
-                    "folder_path": args.get("folder_path", ""),
-                },
+            from app.routes.agent_routes import _apply_create_folder as _do_create_folder
+            p = {
+                "type": "create_folder",
+                "folder_path": args.get("folder_path", ""),
             }
+            await _do_create_folder(p, UUID(user_id), db)
+            return {"status": "folder_created", "folder_path": args.get("folder_path", "")}
 
         elif name == "rename_folder":
-            return {
-                "status": "proposal_created",
-                "proposal": {
-                    "type": "rename_folder",
-                    "folder_path": args.get("folder_path", ""),
-                    "new_name": args.get("new_name", ""),
-                },
+            from app.routes.agent_routes import _apply_rename_folder as _do_rename_folder
+            p = {
+                "type": "rename_folder",
+                "folder_path": args.get("folder_path", ""),
+                "new_name": args.get("new_name", ""),
             }
+            await _do_rename_folder(p, UUID(user_id), db)
+            return {"status": "folder_renamed"}
 
         elif name == "delete_folder":
-            return {
-                "status": "proposal_created",
-                "proposal": {
-                    "type": "delete_folder",
-                    "folder_path": args.get("folder_path", ""),
-                },
+            from app.routes.agent_routes import _apply_delete_folder as _do_delete_folder
+            p = {
+                "type": "delete_folder",
+                "folder_path": args.get("folder_path", ""),
             }
+            await _do_delete_folder(p, UUID(user_id), db)
+            return {"status": "folder_deleted"}
 
         elif name == "web_search":
             # Execute a separate Gemini call with Google Search grounding
@@ -1065,7 +1048,7 @@ async def run_agent_stream(
     # included). Without a tight cap the agent tends to fire many near-duplicate
     # searches instead of a couple of broad ones. See AGENT_SYSTEM_INSTRUCTION for
     # the matching "search broadly, don't repeat" guidance.
-    max_tool_rounds = 7
+    max_tool_rounds = 5
 
     for round_num in range(max_tool_rounds + 1):
         # For tool rounds (not the last), use non-streaming to avoid thought_signature issues
@@ -1231,17 +1214,6 @@ async def run_agent_stream(
             # Execute
             result = await _execute_tool(tool_name, tool_args, user_id, db)
 
-            # Check if this generated a proposal
-            if result.get("status") == "proposal_created":
-                proposal = result["proposal"]
-                proposals.append(proposal)
-                yield {"type": "proposal", "proposal": proposal}
-                # IMPORTANT: Tell the model clearly that this is NOT yet applied
-                result = {
-                    "status": "pending_approval",
-                    "message": f"HINWEIS: Die Änderung ({proposal['type']}) wurde NICHT ausgeführt. Sie wurde als Vorschlag dem Benutzer zur Bestätigung vorgelegt. Sage dem Benutzer, dass du einen Vorschlag erstellt hast den er annehmen oder ablehnen kann. Sage NICHT dass du die Notiz bereits erstellt/geändert/gelöscht hast.",
-                }
-
             # ── view_image / view_document: pull out raw bytes to attach as a real part ──
             pending_image = None
             if result.get("status") == "image_loaded" and result.get("_image_bytes"):
@@ -1342,9 +1314,9 @@ def _summarize_tool_result(tool_name: str, result: dict) -> str:
         count = len(result.get("notes", []))
         return f"{count} Notizen geladen"
     elif tool_name == "create_note":
-        return "Vorschlag erstellt"
+        return "Notiz erstellt"
     elif tool_name == "update_note":
-        return "Änderung vorgeschlagen"
+        return "Notiz aktualisiert"
     elif tool_name == "delete_note":
         return "Löschung vorgeschlagen"
     elif tool_name == "rename_note":

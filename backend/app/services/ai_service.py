@@ -37,7 +37,7 @@ def get_client() -> genai.Client:
 # ~1.4x faster and ~74% cheaper (far fewer thinking tokens). It also thinks and
 # grounds. We therefore use it as the primary model everywhere PRO_MODEL is used.
 FLASH_MODEL = "gemini-3-flash-preview"
-PRO_MODEL = "gemini-3.5-flash"
+PRO_MODEL = "gemini-3.6-flash"
 
 
 async def generate(prompt: str, model: str = None, system_instruction: str = None, temperature: float = None, tools=None) -> str:

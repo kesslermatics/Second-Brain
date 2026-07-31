@@ -1124,7 +1124,7 @@ async def unit_generate_notes(
     # ANYWHERE in the user's brain (not just this course's folder), so overlapping
     # topics across different courses/books don't produce duplicates.
     related_hits = await get_relevant_knowledge(
-        f"{unit.title} {unit.description or ''}", str(current_user.id), db, limit=12
+        f"{unit.title} {unit.description or ''}", str(current_user.id), db, limit=8
     )
     related_titles = [h["title"] for h in related_hits if h.get("title")]
     # Merge, preserving order and uniqueness
@@ -1522,7 +1522,7 @@ async def _auto_generate_and_save_notes(course_id: str, unit_id: str, user_id: s
             # Cross-course dedup: related titles from the whole brain
             is_book = (course.kind or "teacher") == "book"
             related_hits = await get_relevant_knowledge(
-                f"{unit.title} {unit.description or ''}", user_id, db, limit=12
+                f"{unit.title} {unit.description or ''}", user_id, db, limit=8
             )
             existing_note_titles = [h["title"] for h in related_hits if h.get("title")]
 
