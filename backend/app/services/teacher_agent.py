@@ -510,7 +510,7 @@ async def run_teacher_agent(
 
             response_parts.append(types.Part.from_function_response(name=name, response=result))
 
-        contents.append(types.Content(role="tool", parts=response_parts))
+        contents.append(types.Content(role="user", parts=response_parts))
 
     yield {"type": "done", **collected}
 
