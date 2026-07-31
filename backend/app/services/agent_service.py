@@ -1256,8 +1256,8 @@ async def run_agent_stream(
             if pending_image:
                 pending_images_to_show.append(pending_image)
 
-        # Add function responses to contents
-        contents.append(types.Content(role="tool", parts=function_response_parts))
+        # Add function responses to contents — Gemini API requires role="user" for function responses
+        contents.append(types.Content(role="user", parts=function_response_parts))
 
         # Attach any actual images/documents the model asked to view, as real
         # user-content parts so the multimodal model can genuinely SEE/READ them.
