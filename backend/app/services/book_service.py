@@ -91,11 +91,21 @@ async def get_pdf_toc(pdf_bytes: bytes, book_title: str, authors: list[str]) -> 
     # 1. Native PDF outline
     toc_from_meta = extract_pdf_toc_metadata(pdf_bytes)
     if toc_from_meta:
-        # Filter out front/back matter noise
+        # Filter out front/back matter noise — English and German variants
         skip_keywords = {
-            "vorwort", "preface", "danksagung", "acknowledgement", "inhaltsverzeichnis",
-            "contents", "index", "glossar", "glossary", "literatur", "bibliography",
-            "anhang", "appendix", "nachwort", "afterword", "über den autor", "about the author",
+            # German
+            "vorwort", "geleitwort", "danksagung", "widmung",
+            "inhaltsverzeichnis", "abbildungsverzeichnis", "tabellenverzeichnis",
+            "abkürzungsverzeichnis", "glossar", "stichwortverzeichnis", "register",
+            "literaturverzeichnis", "quellenverzeichnis", "bibliografie", "bibliography",
+            "anhang", "nachwort", "über den autor", "titelseite", "impressum",
+            # English
+            "preface", "foreword", "acknowledgement", "acknowledgment", "dedication",
+            "contents", "table of contents", "list of figures", "list of tables",
+            "list of abbreviations", "glossary", "index",
+            "references", "bibliography", "appendix", "afterword",
+            "about the author", "title page", "copyright", "half title",
+            "title card", "cover", "front matter", "back matter", "colophon",
         }
         filtered = [
             ch for ch in toc_from_meta
@@ -133,8 +143,16 @@ Antworte NUR mit dem JSON:
     "total_chapters": 10
 }}
 
-Lasse folgende Einträge KOMPLETT WEG:
-- Vorwort, Danksagung, Inhaltsverzeichnis, Index, Glossar, Literaturverzeichnis, Anhang, Nachwort, Über den Autor"""
+Lasse folgende Einträge KOMPLETT WEG (sie haben keinen inhaltlichen Mehrwert):
+- Titelseite, Impressum, Copyright, Half Title, Title Card, Cover
+- Vorwort, Geleitwort, Danksagung, Widmung
+- Preface, Foreword, Acknowledgements, Dedication
+- Inhaltsverzeichnis, Abbildungsverzeichnis, Tabellenverzeichnis, Abkürzungsverzeichnis
+- Table of Contents, List of Figures, List of Tables, List of Abbreviations
+- Index, Stichwortverzeichnis, Register, Glossar, Glossary
+- Literaturverzeichnis, Quellenverzeichnis, Bibliografie, Bibliography, References
+- Anhang, Appendix, Nachwort, Afterword, Colophon
+- Über den Autor, About the Author, Front Matter, Back Matter"""
 
     result = await generate_json(prompt, BOOK_TOC_SCHEMA, model=PRO_MODEL, temperature=0.1)
     if result and isinstance(result, dict) and result.get("chapters"):
@@ -664,14 +682,17 @@ WICHTIG: Gib ALLE Kapitel, Unterkapitel und Unterunterkapitel an, nicht nur die 
 Sei so vollständig wie möglich basierend auf dem tatsächlichen Inhaltsverzeichnis des Buches.
 
 Lasse folgende Einträge KOMPLETT WEG (sie haben keinen inhaltlichen Mehrwert):
-- Präambel, Vorwort, Geleitwort, Danksagung
+- Präambel, Vorwort, Geleitwort, Danksagung, Widmung
+- Titelseite, Impressum, Copyright, Half Title, Title Card, Cover
+- Preface, Foreword, Acknowledgements, Dedication
 - Inhaltsverzeichnis, Abbildungsverzeichnis, Tabellenverzeichnis
+- Table of Contents, List of Figures, List of Tables, List of Abbreviations
 - Index, Stichwortverzeichnis, Register
-- Glossar, Abkürzungsverzeichnis
-- Literaturverzeichnis, Quellenverzeichnis, Bibliografie
-- Anhang, Appendix
-- Nachwort, Endwort, Schlusswort
-- Über den Autor, About the Author
+- Glossar, Abkürzungsverzeichnis, Glossary
+- Literaturverzeichnis, Quellenverzeichnis, Bibliografie, Bibliography, References
+- Anhang, Appendix, Colophon
+- Nachwort, Endwort, Schlusswort, Afterword
+- Über den Autor, About the Author, Front Matter, Back Matter
 
 Nur inhaltliche Kapitel mit echtem Lerninhalt sollen aufgelistet werden."""
 

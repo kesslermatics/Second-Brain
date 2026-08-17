@@ -403,7 +403,7 @@ export const getBookTocFromPdf = async (pdf: File, title: string, authors: strin
   form.append('pdf', pdf);
   form.append('title', title);
   form.append('authors', JSON.stringify(authors));
-  const { data } = await api.post<BookTocResult & { source?: string }>('/books/pdf-toc', form, {
+  const { data } = await api.post<BookTocResult & { source?: string; cover_url?: string }>('/books/pdf-toc', form, {
     headers: { 'Content-Type': 'multipart/form-data' },
   });
   return data;

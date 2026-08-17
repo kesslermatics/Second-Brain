@@ -328,18 +328,26 @@ export default function BookPanel() {
         setView({ kind: 'loading-toc', bookInfo });
         setError(null);
         try {
-            const toc = pdfMode && pdfFile
-                ? await getBookTocFromPdf(pdfFile, bookInfo.title!, bookInfo.authors || [])
-                : await getBookToc(bookInfo.title!, bookInfo.authors || []);
+            let enrichedBookInfo = bookInfo;
+            let toc;
+            if (pdfMode && pdfFile) {
+                toc = await getBookTocFromPdf(pdfFile, bookInfo.title!, bookInfo.authors || []);
+                // Back-fill cover if searchBook didn't find one
+                if (!enrichedBookInfo.cover_url && toc.cover_url) {
+                    enrichedBookInfo = { ...enrichedBookInfo, cover_url: toc.cover_url };
+                }
+            } else {
+                toc = await getBookToc(bookInfo.title!, bookInfo.authors || []);
+            }
             if (toc.chapters.length === 0) {
                 setError('Konnte kein Inhaltsverzeichnis finden.');
-                setView({ kind: 'confirm-book', bookInfo });
+                setView({ kind: 'confirm-book', bookInfo: enrichedBookInfo });
                 return;
             }
             const defaults: Record<string, boolean> = {};
             toc.chapters.forEach((ch) => { defaults[ch.chapter_number] = true; });
             setEnabledChapters(defaults);
-            setView({ kind: 'confirm-toc', bookInfo, chapters: toc.chapters });
+            setView({ kind: 'confirm-toc', bookInfo: enrichedBookInfo, chapters: toc.chapters });
         } catch {
             setError('Fehler beim Laden des Inhaltsverzeichnisses.');
             setView({ kind: 'confirm-book', bookInfo });

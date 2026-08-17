@@ -10,6 +10,7 @@ from app.models import User, Folder, Tag, Note
 from app.services.book_service import (
     search_book, get_book_toc, generate_chapter_note, generate_topic_note,
     ai_edit_book_content, get_pdf_toc, generate_chapter_note_from_pdf, extract_pdf_text,
+    fetch_book_cover,
 )
 
 router = APIRouter(prefix="/books", tags=["books"])
@@ -249,6 +250,18 @@ async def book_pdf_toc(
         authors_list = []
 
     result = await get_pdf_toc(pdf_bytes, title.strip(), authors_list)
+
+    # Fetch a cover image in parallel (best-effort — never blocks TOC delivery)
+    try:
+        cover_url = await fetch_book_cover(
+            title=title.strip(),
+            authors=authors_list or None,
+        )
+        if cover_url:
+            result["cover_url"] = cover_url
+    except Exception:
+        pass  # Cover is optional — don't fail the whole request
+
     return result
 
 
