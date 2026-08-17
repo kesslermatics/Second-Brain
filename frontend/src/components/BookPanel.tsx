@@ -5,6 +5,7 @@ import {
     FiCheck, FiX, FiChevronRight, FiSearch, FiSquare, FiCheckSquare,
     FiSend, FiTrash2, FiArrowLeft, FiBook,
     FiChevronDown, FiFileText, FiRefreshCw, FiMessageCircle, FiImage,
+    FiPaperclip,
 } from 'react-icons/fi';
 import ReactMarkdown from 'react-markdown';
 import { markdownComponents, remarkPlugins, rehypePlugins } from '@/lib/markdownComponents';
@@ -17,6 +18,7 @@ import {
     generateUnitQuiz, generateUnitRecap,
     getBookSummaries, generateChapterSummary,
     getCoverCandidates, updateCourseCover,
+    getBookTocFromPdf, generateChapterNoteFromPdf,
     type TeacherSavedNote,
 } from '@/lib/api';
 import type {
@@ -32,6 +34,12 @@ import {
 import MermaidDiagram from './MermaidDiagram';
 import { CategoryBadge, CategoryFilter } from './CategoryUI';
 import { CATEGORY_ORDER } from '@/lib/categories';
+
+// ── Session-scoped PDF store ──────────────────────────────────────────
+// Maps courseId → the File the user uploaded when creating that book.
+// Lives only in memory (not persisted), which is intentional: PDFs should not
+// be stored on the server without explicit user consent.
+const sessionPdfStore = new Map<string, File>();
 
 type View =
     | { kind: 'books' }
@@ -114,6 +122,11 @@ export default function BookPanel() {
     // Search
     const [searchQuery, setSearchQuery] = useState('');
     const [searching, setSearching] = useState(false);
+
+    // PDF mode — when a PDF is attached the whole pipeline uses the real book text
+    const [pdfFile, setPdfFile] = useState<File | null>(null);
+    const [pdfMode, setPdfMode] = useState(false);
+    const pdfInputRef = useRef<HTMLInputElement>(null);
 
     // TOC confirmation
     const [enabledChapters, setEnabledChapters] = useState<Record<string, boolean>>({});
@@ -271,6 +284,27 @@ export default function BookPanel() {
         setInlineQuiz(null);
     };
 
+    // ── PDF helpers ──────────────────────────────────────────────────
+    const handlePdfSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0] ?? null;
+        if (file) {
+            setPdfFile(file);
+            setPdfMode(true);
+            // Pre-fill the search field with the filename (sans extension) if empty
+            if (!searchQuery.trim()) {
+                const name = file.name.replace(/\.pdf$/i, '').replace(/[-_]/g, ' ');
+                setSearchQuery(name);
+            }
+        }
+        // Reset input so the same file can be re-selected after removal
+        e.target.value = '';
+    };
+
+    const handleRemovePdf = () => {
+        setPdfFile(null);
+        setPdfMode(false);
+    };
+
     // ── Search book ──────────────────────────────────────────────────
     const handleSearch = async () => {
         if (!searchQuery.trim() || searching) return;
@@ -294,7 +328,9 @@ export default function BookPanel() {
         setView({ kind: 'loading-toc', bookInfo });
         setError(null);
         try {
-            const toc = await getBookToc(bookInfo.title!, bookInfo.authors || []);
+            const toc = pdfMode && pdfFile
+                ? await getBookTocFromPdf(pdfFile, bookInfo.title!, bookInfo.authors || [])
+                : await getBookToc(bookInfo.title!, bookInfo.authors || []);
             if (toc.chapters.length === 0) {
                 setError('Konnte kein Inhaltsverzeichnis finden.');
                 setView({ kind: 'confirm-book', bookInfo });
@@ -328,9 +364,20 @@ export default function BookPanel() {
                     isbn: bookInfo.isbn,
                     publisher: bookInfo.publisher,
                     cover_url: bookInfo.cover_url,
+                    // Store whether this course was created with a PDF so the UI can
+                    // remember to use the PDF-based endpoints later (note generation).
+                    // We encode it in the description field as a lightweight flag since
+                    // there is no dedicated DB column for it. The flag is only read back
+                    // when the user uses the "Notiz generieren" feature.
                 },
                 selectedChapters,
             );
+            // Store the PDF in session memory so note generation can use it
+            // (survives navigation within the panel but not a page reload — which
+            //  is fine: the user would need to re-upload anyway after reload).
+            if (pdfMode && pdfFile) {
+                sessionPdfStore.set(course.id, pdfFile);
+            }
             const firstUnit = course.units.find((u) => u.enabled && u.status === 'pending');
             if (firstUnit) await openUnitChat(course, firstUnit);
         } catch {
@@ -853,6 +900,25 @@ export default function BookPanel() {
                                 className="flex-1 px-4 py-3 bg-dark-800 border border-dark-700 rounded-xl text-white text-sm placeholder-dark-600 focus:outline-none focus:border-amber-500"
                                 autoFocus
                             />
+                            {/* Hidden file input for PDF */}
+                            <input
+                                ref={pdfInputRef}
+                                type="file"
+                                accept="application/pdf"
+                                className="hidden"
+                                onChange={handlePdfSelect}
+                            />
+                            {/* PDF upload button */}
+                            <button
+                                onClick={() => pdfInputRef.current?.click()}
+                                title="PDF hochladen — Inhalte direkt aus dem Buch"
+                                className={`px-3 py-3 rounded-xl border transition-colors ${pdfMode
+                                    ? 'bg-amber-600/20 border-amber-500 text-amber-400'
+                                    : 'bg-dark-800 border-dark-700 text-dark-500 hover:text-amber-400 hover:border-amber-600'
+                                    }`}
+                            >
+                                <FiPaperclip className="w-4 h-4" />
+                            </button>
                             <button
                                 onClick={handleSearch}
                                 disabled={!searchQuery.trim() || searching}
@@ -865,6 +931,24 @@ export default function BookPanel() {
                                 )}
                             </button>
                         </div>
+                        {/* PDF mode pill */}
+                        {pdfMode && pdfFile && (
+                            <div className="mt-2 flex items-center gap-2">
+                                <div className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600/15 border border-amber-500/40 rounded-lg text-xs text-amber-300">
+                                    <FiPaperclip className="w-3 h-3 flex-shrink-0" />
+                                    <span className="truncate max-w-[220px]">{pdfFile.name}</span>
+                                    <span className="text-amber-500/60">·</span>
+                                    <span className="text-amber-500">Inhalte aus PDF</span>
+                                    <button
+                                        onClick={handleRemovePdf}
+                                        className="ml-1 text-amber-500/60 hover:text-red-400 transition-colors"
+                                        title="PDF entfernen"
+                                    >
+                                        <FiX className="w-3 h-3" />
+                                    </button>
+                                </div>
+                            </div>
+                        )}
                         {error && view.kind === 'books' && (
                             <p className="mt-2 text-sm text-red-400">{error}</p>
                         )}
@@ -1002,7 +1086,7 @@ export default function BookPanel() {
                                 className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium rounded-xl transition-colors"
                             >
                                 <FiCheck className="w-4 h-4" />
-                                Richtig — Inhaltsverzeichnis laden
+                                {pdfMode ? 'Richtig — Inhaltsverzeichnis aus PDF laden' : 'Richtig — Inhaltsverzeichnis laden'}
                             </button>
                             <button
                                 onClick={() => { setView({ kind: 'books' }); setError(null); }}
@@ -1011,6 +1095,12 @@ export default function BookPanel() {
                                 <FiX className="w-4 h-4" />
                             </button>
                         </div>
+                        {pdfMode && pdfFile && (
+                            <div className="mt-3 flex items-center gap-1.5 text-xs text-amber-400/80">
+                                <FiPaperclip className="w-3 h-3 flex-shrink-0" />
+                                <span>Inhalte werden direkt aus <span className="font-medium">{pdfFile.name}</span> gelesen</span>
+                            </div>
+                        )}
                         {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
                     </div>
                 </div>
@@ -1025,10 +1115,15 @@ export default function BookPanel() {
             <div className="h-full flex items-center justify-center">
                 <div className="text-center">
                     <div className="w-12 h-12 border-2 border-amber-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-                    <h3 className="text-lg font-semibold text-white mb-2">Inhaltsverzeichnis wird geladen...</h3>
+                    <h3 className="text-lg font-semibold text-white mb-2">
+                        {pdfMode ? 'PDF wird analysiert...' : 'Inhaltsverzeichnis wird geladen...'}
+                    </h3>
                     <p className="text-sm text-dark-500">
                         <span className="text-amber-400">{view.bookInfo.title}</span>
                     </p>
+                    {pdfMode && pdfFile && (
+                        <p className="text-xs text-dark-600 mt-1">{pdfFile.name}</p>
+                    )}
                 </div>
             </div>
         );

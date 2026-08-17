@@ -8,6 +8,302 @@ from app.config import get_settings
 from app.categories import categories_prompt_block, normalize_category
 import asyncio
 import json
+import io
+import logging
+
+logger = logging.getLogger(__name__)
+
+# ── PDF text extraction ───────────────────────────────────────────────
+
+def extract_pdf_text(pdf_bytes: bytes) -> str:
+    """Extract all text from a PDF as a single string.
+
+    Uses pypdf which is pure-Python and needs no system dependencies.
+    Returns empty string on any failure so callers can fall back gracefully.
+    """
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        pages: list[str] = []
+        for page in reader.pages:
+            text = page.extract_text() or ""
+            if text.strip():
+                pages.append(text)
+        return "\n\n".join(pages)
+    except Exception as e:
+        logger.warning(f"PDF text extraction failed: {e}")
+        return ""
+
+
+def extract_pdf_toc_metadata(pdf_bytes: bytes) -> list[dict] | None:
+    """Try to read the PDF's built-in outline/bookmark tree.
+
+    Returns a flat list of {"title": str, "level": int} or None when no
+    bookmarks are present (caller must fall back to AI-extraction).
+    """
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        outline = reader.outline
+        if not outline:
+            return None
+
+        result: list[dict] = []
+        counter: dict[int, int] = {}  # level → running chapter number
+
+        def _walk(items, level: int = 1):
+            ch_at_level = 0
+            for item in items:
+                if isinstance(item, list):
+                    _walk(item, level + 1)
+                else:
+                    title = getattr(item, "title", None) or str(item)
+                    # Build a dotted chapter_number like "2.3.1"
+                    counter[level] = counter.get(level, 0) + 1
+                    # Reset deeper levels when a shallower one advances
+                    for deeper in list(counter.keys()):
+                        if deeper > level:
+                            del counter[deeper]
+                    chapter_number = ".".join(str(counter.get(l, 1)) for l in range(1, level + 1))
+                    result.append({
+                        "chapter_number": chapter_number,
+                        "title": title.strip(),
+                        "level": level,
+                    })
+                    ch_at_level += 1
+
+        _walk(outline)
+        return result if result else None
+    except Exception as e:
+        logger.warning(f"PDF TOC extraction failed: {e}")
+        return None
+
+
+# ── PDF-aware TOC extraction ──────────────────────────────────────────
+
+async def get_pdf_toc(pdf_bytes: bytes, book_title: str, authors: list[str]) -> dict:
+    """Extract the TOC from the actual PDF, falling back to AI text analysis.
+
+    Priority:
+      1. PDF bookmark/outline metadata (instant, no AI cost)
+      2. AI analysis of the first ~15 000 chars of extracted text
+    """
+    # 1. Native PDF outline
+    toc_from_meta = extract_pdf_toc_metadata(pdf_bytes)
+    if toc_from_meta:
+        # Filter out front/back matter noise
+        skip_keywords = {
+            "vorwort", "preface", "danksagung", "acknowledgement", "inhaltsverzeichnis",
+            "contents", "index", "glossar", "glossary", "literatur", "bibliography",
+            "anhang", "appendix", "nachwort", "afterword", "über den autor", "about the author",
+        }
+        filtered = [
+            ch for ch in toc_from_meta
+            if not any(kw in ch["title"].lower() for kw in skip_keywords)
+        ]
+        if filtered:
+            return {"chapters": filtered, "total_chapters": len(filtered), "source": "pdf_metadata"}
+
+    # 2. AI analysis of the raw text
+    full_text = extract_pdf_text(pdf_bytes)
+    if not full_text:
+        # PDF has no extractable text (scanned image) — fall back to web search
+        return await get_book_toc(book_title, authors)
+
+    # Feed the first chunk of the book to the AI so it can spot the TOC section
+    sample = full_text[:15000]
+    authors_str = ", ".join(authors) if authors else "Unbekannt"
+    prompt = f"""Das folgende ist der Anfang des Buches „{book_title}" von {authors_str}.
+Extrahiere das vollständige Inhaltsverzeichnis direkt aus diesem Text.
+
+BUCHTEXT (Anfang):
+{sample}
+
+Gib das Inhaltsverzeichnis als JSON zurück. Jeder Eintrag hat:
+- "title": Kapitelname (genau wie im Text)
+- "level": Verschachtelungstiefe (1 = Hauptkapitel, 2 = Unterkapitel, 3 = Unter-Unterkapitel)
+- "chapter_number": Kapitelnummer als String (z.B. "1", "1.1", "1.1.1")
+
+Antworte NUR mit dem JSON:
+{{
+    "chapters": [
+        {{"chapter_number": "1", "title": "Einleitung", "level": 1}},
+        {{"chapter_number": "1.1", "title": "Unterkapitel", "level": 2}}
+    ],
+    "total_chapters": 10
+}}
+
+Lasse folgende Einträge KOMPLETT WEG:
+- Vorwort, Danksagung, Inhaltsverzeichnis, Index, Glossar, Literaturverzeichnis, Anhang, Nachwort, Über den Autor"""
+
+    result = await generate_json(prompt, BOOK_TOC_SCHEMA, model=PRO_MODEL, temperature=0.1)
+    if result and isinstance(result, dict) and result.get("chapters"):
+        result["source"] = "pdf_text_ai"
+        result.setdefault("total_chapters", len(result["chapters"]))
+        return result
+
+    # Ultimate fallback: web search (like the non-PDF path)
+    fallback = await get_book_toc(book_title, authors)
+    fallback["source"] = "web_search_fallback"
+    return fallback
+
+
+# ── PDF-aware chapter note ────────────────────────────────────────────
+
+# How many characters of PDF text to feed per chapter.
+# ~12 000 chars ≈ 3 000 tokens — leaves plenty of room for the full prompt
+# while keeping costs reasonable for long books.
+PDF_CHAPTER_CHARS = 12_000
+
+
+def _slice_chapter_text(full_text: str, chapter: dict, all_chapters: list[dict]) -> str:
+    """Best-effort: find the chapter's text block inside the full PDF text.
+
+    Strategy: search for the chapter title, then read until the next chapter title
+    or PDF_CHAPTER_CHARS characters, whichever comes first.
+    """
+    title = chapter["title"].strip()
+    # Try an exact search first, then a case-insensitive search
+    idx = full_text.find(title)
+    if idx == -1:
+        idx = full_text.lower().find(title.lower())
+    if idx == -1:
+        # Cannot locate — return empty so the AI knows there's no context
+        return ""
+
+    # Find end: position of the NEXT chapter's title (any level)
+    end_idx = len(full_text)
+    for other in all_chapters:
+        if other["chapter_number"] == chapter["chapter_number"]:
+            continue
+        other_title = other["title"].strip()
+        pos = full_text.find(other_title, idx + len(title))
+        if pos == -1:
+            pos = full_text.lower().find(other_title.lower(), idx + len(title))
+        if pos != -1 and pos < end_idx:
+            end_idx = pos
+
+    snippet = full_text[idx: idx + min(PDF_CHAPTER_CHARS, end_idx - idx)]
+    return snippet.strip()
+
+
+async def generate_chapter_note_from_pdf(
+    pdf_text: str,
+    book_title: str,
+    authors: list[str],
+    chapter: dict,
+    all_chapters: list[dict],
+    folder_structure: list[dict],
+    existing_tags: list[str] | None = None,
+    existing_note_titles: list[str] | None = None,
+) -> dict:
+    """Generate a chapter note using the actual PDF text as source of truth.
+
+    Falls back to the normal (web-search) path if no text can be located for
+    the chapter — so quality degrades gracefully instead of erroring out.
+    """
+    authors_str = ", ".join(authors) if authors else "Unbekannt"
+    tags_str = ", ".join(existing_tags) if existing_tags else "(keine)"
+    chapter_ref = f"Kapitel {chapter['chapter_number']}: {chapter['title']}"
+
+    chapter_text = _slice_chapter_text(pdf_text, chapter, all_chapters)
+
+    if not chapter_text:
+        # No text found → fall back to AI-knowledge path
+        return await generate_chapter_note(
+            book_title=book_title,
+            authors=authors,
+            chapter=chapter,
+            folder_structure=folder_structure,
+            existing_tags=existing_tags,
+            existing_note_titles=existing_note_titles,
+        )
+
+    dedup_block = ""
+    if existing_note_titles:
+        titles_list = "\n".join(f"- {t}" for t in existing_note_titles)
+        dedup_block = f"""
+BEREITS EXISTIERENDE NOTIZEN zu diesem Buch (aus vorherigen Kapiteln):
+{titles_list}
+
+WICHTIGE REGEL ZUR VERMEIDUNG VON DUPLIKATEN:
+- Wiederhole KEINE Inhalte, die in den oben genannten Notizen bereits behandelt wurden.
+- Wenn ein Konzept bereits als Notiz existiert, verweise kurz darauf statt es erneut zu erklären.
+- Verwende ANDERE Beispiele als in vorherigen Kapiteln — bringe frische, kapitelspezifische Beispiele.
+"""
+
+    prompt = f"""Du bist ein Second Brain Assistent. Erstelle eine ausführliche, gut strukturierte Notiz
+für das folgende Buchkapitel. Der Inhalt MUSS ausschließlich auf dem bereitgestellten Buchtext basieren —
+erfinde oder ergänze NICHTS, das nicht im Text steht.
+
+Buch: "{book_title}" von {authors_str}
+Kapitel: {chapter_ref}
+{dedup_block}
+
+BUCHTEXT FÜR DIESES KAPITEL:
+\"\"\"
+{chapter_text}
+\"\"\"
+
+Erstelle die Notiz im folgenden JSON-Format (NUR das JSON, kein anderer Text):
+{{
+    "suggested_folder": "Bücher/{book_title}",
+    "suggested_title": "{chapter_ref}",
+    "formatted_content": "Der formatierte Inhalt der Notiz in Markdown",
+    "suggested_tags": ["tag1", "tag2"]
+}}
+
+Bestehende Tags im System: {tags_str}
+Bevorzuge bestehende Tags wenn sie passen. Erstelle neue nur wenn nötig.
+
+Formatierungsregeln für formatted_content (sehr wichtig!):
+- Beginne mit einer kurzen Einordnung: Aus welchem Buch, welches Kapitel
+- Strukturiere den Inhalt gut mit Markdown-Headings (##, ###)
+- Verwende **Fettdruck** für Schlüsselbegriffe
+- Verwende Aufzählungslisten für Hierarchien
+- Verwende Callouts für wichtige Konzepte:
+  > [!MERKSATZ]
+  > Für Kernaussagen aus dem Text
+  
+  > [!BEISPIEL]
+  > Für konkrete Beispiele aus dem Buchtext
+  
+  > [!DEFINITION]
+  > Für Begriffserklärungen aus dem Text
+
+- Fasse die WESENTLICHEN Inhalte des Kapitels zusammen — NUR was wirklich im Text steht
+- Schreibe sachlich, klar und informativ in neutraler Form
+- Die Notiz soll wie eine gute Zusammenfassung sein, die man zum Lernen nutzen kann
+- Schreibe in der Sprache des Buches"""
+
+    result = await generate_json(prompt, {
+        "type": "object",
+        "properties": {
+            "suggested_folder": {"type": "string"},
+            "suggested_title": {"type": "string"},
+            "formatted_content": {"type": "string"},
+            "suggested_tags": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["suggested_folder", "suggested_title", "formatted_content", "suggested_tags"],
+    }, model=PRO_MODEL, temperature=0.3)
+
+    if result and isinstance(result, dict) and result.get("formatted_content"):
+        return {
+            "suggested_folder": result.get("suggested_folder", f"Bücher/{book_title}"),
+            "suggested_title": result.get("suggested_title", chapter_ref),
+            "formatted_content": result["formatted_content"],
+            "suggested_tags": result.get("suggested_tags", []),
+        }
+
+    # JSON parse failed — fall back
+    return await generate_chapter_note(
+        book_title=book_title,
+        authors=authors,
+        chapter=chapter,
+        folder_structure=folder_structure,
+        existing_tags=existing_tags,
+        existing_note_titles=existing_note_titles,
+    )
 import re
 import httpx
 

@@ -398,6 +398,36 @@ export const aiEditBookContent = async (content: string, instruction: string) =>
   return data;
 };
 
+export const getBookTocFromPdf = async (pdf: File, title: string, authors: string[]) => {
+  const form = new FormData();
+  form.append('pdf', pdf);
+  form.append('title', title);
+  form.append('authors', JSON.stringify(authors));
+  const { data } = await api.post<BookTocResult & { source?: string }>('/books/pdf-toc', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return data;
+};
+
+export const generateChapterNoteFromPdf = async (
+  pdf: File,
+  bookTitle: string,
+  authors: string[],
+  chapter: BookChapter,
+  allChapters: BookChapter[],
+) => {
+  const form = new FormData();
+  form.append('pdf', pdf);
+  form.append('book_title', bookTitle);
+  form.append('authors', JSON.stringify(authors));
+  form.append('chapter', JSON.stringify(chapter));
+  form.append('all_chapters', JSON.stringify(allChapters));
+  const { data } = await api.post<BookChapterNoteResult & { source?: string }>('/books/pdf-chapter-note', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return data;
+};
+
 // User State (cross-device key-value persistence)
 export const getUserState = async (key: string): Promise<string | null> => {
   const { data } = await api.get<{ key: string; value: string | null }>(`/state/${encodeURIComponent(key)}`);

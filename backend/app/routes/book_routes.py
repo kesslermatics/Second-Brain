@@ -1,13 +1,16 @@
 """Book processing routes — search, TOC, chapter note generation."""
 
 import json
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import get_db
 from app.auth import get_current_user
 from app.models import User, Folder, Tag, Note
-from app.services.book_service import search_book, get_book_toc, generate_chapter_note, generate_topic_note, ai_edit_book_content
+from app.services.book_service import (
+    search_book, get_book_toc, generate_chapter_note, generate_topic_note,
+    ai_edit_book_content, get_pdf_toc, generate_chapter_note_from_pdf, extract_pdf_text,
+)
 
 router = APIRouter(prefix="/books", tags=["books"])
 
@@ -217,3 +220,148 @@ async def book_ai_edit_content(
 
     new_content = await ai_edit_book_content(content, instruction)
     return {"suggested_content": new_content}
+
+
+# ── PDF-based endpoints ───────────────────────────────────────────────
+
+@router.post("/pdf-toc")
+async def book_pdf_toc(
+    pdf: UploadFile = File(...),
+    title: str = Form(...),
+    authors: str = Form("[]"),
+    current_user: User = Depends(get_current_user),
+):
+    """Extract the table of contents directly from an uploaded PDF.
+
+    Falls back to AI web-search extraction when the PDF has no bookmarks
+    and the first pages don't contain a readable TOC.
+    """
+    if not pdf.content_type or "pdf" not in pdf.content_type.lower():
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+
+    pdf_bytes = await pdf.read()
+    if len(pdf_bytes) > 50 * 1024 * 1024:  # 50 MB guard
+        raise HTTPException(status_code=400, detail="PDF too large (max 50 MB)")
+
+    try:
+        authors_list = json.loads(authors)
+    except Exception:
+        authors_list = []
+
+    result = await get_pdf_toc(pdf_bytes, title.strip(), authors_list)
+    return result
+
+
+@router.post("/pdf-chapter-note")
+async def book_pdf_chapter_note(
+    pdf: UploadFile = File(...),
+    book_title: str = Form(...),
+    authors: str = Form("[]"),
+    chapter: str = Form(...),
+    all_chapters: str = Form("[]"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Generate a chapter note using the actual PDF text as the source of truth."""
+    if not pdf.content_type or "pdf" not in pdf.content_type.lower():
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+
+    pdf_bytes = await pdf.read()
+    if len(pdf_bytes) > 50 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="PDF too large (max 50 MB)")
+
+    try:
+        authors_list = json.loads(authors)
+        chapter_dict = json.loads(chapter)
+        all_chapters_list = json.loads(all_chapters)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON in form fields")
+
+    if not book_title.strip() or not chapter_dict:
+        raise HTTPException(status_code=400, detail="book_title and chapter required")
+
+    # Extract full text once for this request
+    pdf_text = extract_pdf_text(pdf_bytes)
+
+    # Get folder structure for context
+    folder_result = await db.execute(
+        select(Folder).where(Folder.user_id == current_user.id).order_by(Folder.path)
+    )
+    folders = folder_result.scalars().all()
+    folder_structure = [{"path": f.path, "name": f.name} for f in folders]
+
+    # Get existing tags
+    tag_result = await db.execute(
+        select(Tag).where(Tag.user_id == current_user.id).order_by(Tag.name)
+    )
+    all_tags = tag_result.scalars().all()
+    existing_tag_names = [t.name for t in all_tags]
+
+    # Existing note titles to avoid duplication
+    existing_note_titles = []
+    book_folder_result = await db.execute(
+        select(Folder).where(
+            Folder.user_id == current_user.id,
+            Folder.path.like(f"Bücher/{book_title.strip()}%"),
+        )
+    )
+    book_folders = book_folder_result.scalars().all()
+    if book_folders:
+        folder_ids = [f.id for f in book_folders]
+        notes_result = await db.execute(
+            select(Note.title).where(
+                Note.folder_id.in_(folder_ids),
+                Note.user_id == current_user.id,
+            )
+        )
+        existing_note_titles = [row[0] for row in notes_result.all()]
+
+    result = await generate_chapter_note_from_pdf(
+        pdf_text=pdf_text,
+        book_title=book_title.strip(),
+        authors=authors_list,
+        chapter=chapter_dict,
+        all_chapters=all_chapters_list,
+        folder_structure=folder_structure,
+        existing_tags=existing_tag_names,
+        existing_note_titles=existing_note_titles,
+    )
+
+    # Resolve / create tags
+    tag_ids = []
+    tag_display = []
+    for tag_name in result.get("suggested_tags", []):
+        tag_lower = tag_name.strip().lower()
+        if not tag_lower:
+            continue
+        found_tag = None
+        for t in all_tags:
+            if t.name_lower == tag_lower:
+                found_tag = t
+                break
+        if not found_tag:
+            import random
+            colors = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16']
+            found_tag = Tag(
+                name=tag_name.strip(),
+                name_lower=tag_lower,
+                color=random.choice(colors),
+                user_id=current_user.id,
+            )
+            db.add(found_tag)
+            await db.flush()
+            await db.refresh(found_tag)
+            all_tags.append(found_tag)
+        tag_ids.append(str(found_tag.id))
+        tag_display.append(found_tag.name)
+
+    await db.commit()
+
+    return {
+        "folder": result["suggested_folder"],
+        "title": result["suggested_title"],
+        "content": result["formatted_content"],
+        "tag_ids": tag_ids,
+        "tag_names": tag_display,
+        "source": "pdf",
+    }
