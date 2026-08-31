@@ -9,6 +9,7 @@ import re
 import asyncio
 import uuid as _uuid
 from pathlib import Path
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -275,6 +276,7 @@ async def agent_stream_message(
     auto_accept: bool = Form(False),
     images: List[UploadFile] = File(None),
     files: List[UploadFile] = File(None),
+    existing_message_id: Optional[UUID] = Form(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -295,33 +297,50 @@ async def agent_stream_message(
     if session.session_type != "agent":
         raise HTTPException(status_code=400, detail="Not an agent session")
 
-    # Merge images and files fields (backwards compat + new field)
-    all_files = []
-    if images:
-        all_files.extend(images)
-    if files:
-        all_files.extend(files)
+    # A restart reuses a persisted user message and first removes its stale
+    # descendants. A normal send creates a new message (and may process files).
+    if existing_message_id:
+        if images or files:
+            raise HTTPException(status_code=400, detail="Files cannot be attached when restarting a message")
+        existing_result = await db.execute(
+            select(ChatMessage)
+            .where(ChatMessage.session_id == session_id)
+            .order_by(ChatMessage.created_at, ChatMessage.id)
+        )
+        messages = existing_result.scalars().all()
+        message_index = next((i for i, message in enumerate(messages) if message.id == existing_message_id), None)
+        if message_index is None or messages[message_index].role != "user":
+            raise HTTPException(status_code=404, detail="User message not found")
+        user_msg = messages[message_index]
+        user_content = user_msg.content
+        for stale_message in messages[message_index + 1:]:
+            await db.delete(stale_message)
+        file_descriptions, file_urls = [], []
+    else:
+        # Merge images and files fields (backwards compat + new field)
+        all_files = []
+        if images:
+            all_files.extend(images)
+        if files:
+            all_files.extend(files)
 
-    # Process all uploaded files
-    file_descriptions, file_urls = await _process_uploaded_files(all_files, current_user, db)
+        file_descriptions, file_urls = await _process_uploaded_files(all_files, current_user, db)
 
-    # Build user message content
-    user_content = content
-    if file_descriptions:
-        file_context = "\n\n---\n**Angehängte Dateien:**\n"
-        for desc in file_descriptions:
-            icon = "📷" if desc["type"] == "image" else "📄"
-            file_context += f"\n{icon} **{desc['filename']}**\n"
-            file_context += f"Beschreibung: {desc['description']}\n"
-            file_context += f"URL: {desc['url']}\n"
-        user_content += file_context
+        user_content = content
+        if file_descriptions:
+            file_context = "\n\n---\n**Angehängte Dateien:**\n"
+            for desc in file_descriptions:
+                icon = "📷" if desc["type"] == "image" else "📄"
+                file_context += f"\n{icon} **{desc['filename']}**\n"
+                file_context += f"Beschreibung: {desc['description']}\n"
+                file_context += f"URL: {desc['url']}\n"
+            user_content += file_context
 
-    # Save user message
-    user_msg = ChatMessage(session_id=session_id, role="user", content=user_content)
-    db.add(user_msg)
-    await db.flush()
+        user_msg = ChatMessage(session_id=session_id, role="user", content=user_content)
+        db.add(user_msg)
+        await db.flush()
 
-    # Load chat history
+    # Load the final, committed chat history after creating/restarting the prompt.
     history_result = await db.execute(
         select(ChatMessage)
         .where(ChatMessage.session_id == session_id)
@@ -330,6 +349,7 @@ async def agent_stream_message(
     all_messages = history_result.scalars().all()
     chat_history = [{"role": m.role, "content": m.content} for m in all_messages]
 
+    session.updated_at = datetime.now(timezone.utc)
     await db.commit()
 
     # Snapshot for background job
@@ -428,10 +448,32 @@ async def agent_stream_message(
     # Register job and fire the background task
     import uuid as _uuid_mod
     job_id = str(_uuid_mod.uuid4())
-    job_store.create_job(job_id)
-    asyncio.create_task(job_store.run_job(job_id, _generate_events()))
+    job_store.create_job(
+        job_id,
+        owner_id=str(current_user.id),
+        session_id=session_id_str,
+        message_id=str(user_msg.id),
+    )
+    task = asyncio.create_task(job_store.run_job(job_id, _generate_events()))
+    job_store.set_task(job_id, task)
 
-    return {"job_id": job_id}
+    return {"job_id": job_id, "message_id": str(user_msg.id)}
+
+
+@router.post("/jobs/{job_id}/cancel")
+async def cancel_agent_job(
+    job_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Cancel a running agent job owned by the current user."""
+    from app.services.job_store import job_store
+
+    job = job_store.get_job(job_id)
+    if job is None or job.owner_id != str(current_user.id):
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not job_store.cancel(job_id):
+        return {"status": "already_finished"}
+    return {"status": "cancelled"}
 
 
 @router.post("/apply")

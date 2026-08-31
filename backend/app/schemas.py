@@ -194,6 +194,10 @@ class ChatMessageCreate(BaseModel):
     content: str
 
 
+class ChatMessageUpdate(BaseModel):
+    content: str
+
+
 class ChatMessageResponse(BaseModel):
     id: UUID
     session_id: UUID

@@ -177,7 +177,7 @@ export interface TagSuggestResponse {
 export interface ChatSession {
   id: string;
   title: string;
-  session_type: 'notes' | 'qa';
+  session_type: 'notes' | 'qa' | 'agent';
   created_at: string;
   updated_at: string;
 }

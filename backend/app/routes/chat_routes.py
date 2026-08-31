@@ -3,12 +3,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List
 from uuid import UUID
+from datetime import datetime, timezone
 from app.database import get_db
 from app.auth import get_current_user
 from app.models import User, ChatSession, ChatMessage
 from app.schemas import (
     ChatSessionCreate, ChatSessionResponse, ChatSessionDetailResponse,
-    ChatMessageResponse,
+    ChatMessageResponse, ChatMessageUpdate,
 )
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -115,3 +116,48 @@ async def update_session(
     await db.commit()
     return session
 
+
+
+@router.patch("/sessions/{session_id}/messages/{message_id}", response_model=ChatSessionDetailResponse)
+async def edit_message_and_truncate_history(
+    session_id: UUID,
+    message_id: UUID,
+    data: ChatMessageUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Edit a user prompt and remove the invalid conversation branch after it.
+
+    Assistant messages (and later user turns) were generated from the old prompt,
+    so keeping them would make the stored history inconsistent.
+    """
+    content = data.content.strip()
+    if not content:
+        raise HTTPException(status_code=422, detail="Message content must not be empty")
+
+    session = await db.get(ChatSession, session_id)
+    if not session or session.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    result = await db.execute(
+        select(ChatMessage)
+        .where(ChatMessage.session_id == session_id)
+        .order_by(ChatMessage.created_at, ChatMessage.id)
+    )
+    messages = result.scalars().all()
+    message_index = next((i for i, message in enumerate(messages) if message.id == message_id), None)
+    if message_index is None or messages[message_index].role != "user":
+        raise HTTPException(status_code=404, detail="User message not found")
+
+    # Stop a possible run for this exact prompt before mutating its context.
+    from app.services.job_store import job_store
+    job_store.cancel_for_message(str(session_id), str(message_id))
+
+    message = messages[message_index]
+    message.content = content
+    for stale_message in messages[message_index + 1:]:
+        await db.delete(stale_message)
+
+    session.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    return await get_session(session_id, db, current_user)

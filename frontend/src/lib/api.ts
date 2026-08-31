@@ -522,6 +522,9 @@ async function _streamJobEvents(
 ): Promise<void> {
   let fromIndex = 0;
   let done = false;
+  let terminalError: string | null = null;
+  let reconnectAttempts = 0;
+  const maxReconnectAttempts = 6;
 
   // Explicit type annotation prevents TypeScript from narrowing to `never`
   // when the variable is assigned inside a nested function closure.
@@ -570,7 +573,13 @@ async function _streamJobEvents(
           try {
             const event = JSON.parse(jsonStr) as Record<string, unknown>;
             if (typeof event._idx === 'number') fromIndex = (event._idx as number) + 1;
-            if (event.type === 'done') done = true;
+            if (event.type === 'done' || event.type === 'cancelled') done = true;
+            if (event.type === 'error') {
+              const message = typeof event.message === 'string' ? event.message : 'Die Antwort konnte nicht erstellt werden.';
+              const detail = typeof event.detail === 'string' ? event.detail : '';
+              terminalError = detail ? `${message}\n${detail}` : message;
+              done = true;
+            }
             onEvent?.(event);
           } catch { /* skip malformed */ }
         }
@@ -596,8 +605,15 @@ async function _streamJobEvents(
     while (!done) {
       try {
         await connect();
-      } catch {
-        if (done) break;
+        reconnectAttempts += 1;
+        if (!done && reconnectAttempts >= maxReconnectAttempts) {
+          throw new Error('Die Verbindung zum Agenten wurde wiederholt unterbrochen.');
+        }
+      } catch (error) {
+        reconnectAttempts += 1;
+        if (reconnectAttempts >= maxReconnectAttempts) {
+          throw error instanceof Error ? error : new Error('Die Verbindung zum Agenten wurde unterbrochen.');
+        }
       }
       if (done) break;
       // If the page is hidden, wait for it to become visible before retrying
@@ -621,6 +637,8 @@ async function _streamJobEvents(
     }
     controllerRef.current?.abort();
   }
+
+  if (terminalError) throw new Error(terminalError);
 }
 
 export const sendTeacherChatStream = async (
@@ -799,7 +817,14 @@ export type AgentStreamEvent =
   | { type: 'tool_result'; content: string }
   | { type: 'proposal'; proposal: AgentProposal }
   | { type: 'sources'; sources: { title: string; url: string }[] }
+  | { type: 'cancelled' }
+  | { type: 'error'; message: string; detail?: string }
   | { type: 'done'; proposals: AgentProposal[]; steps: AgentStep[]; apply_result?: unknown; image_urls?: string[] };
+
+export interface AgentStreamOptions {
+  existingMessageId?: string;
+  onJobStarted?: (jobId: string, messageId: string) => void;
+}
 
 export const runAgentStream = async (
   sessionId: string,
@@ -807,10 +832,12 @@ export const runAgentStream = async (
   autoAccept: boolean = false,
   files?: File[],
   onEvent?: (event: AgentStreamEvent) => void,
-): Promise<void> => {
+  options?: AgentStreamOptions,
+): Promise<{ jobId: string; messageId: string }> => {
   const formData = new FormData();
   formData.append('content', content);
   formData.append('auto_accept', String(autoAccept));
+  if (options?.existingMessageId) formData.append('existing_message_id', options.existingMessageId);
   if (files && files.length > 0) {
     for (const file of files) {
       formData.append('files', file);
@@ -818,18 +845,27 @@ export const runAgentStream = async (
   }
 
   const token = typeof window !== 'undefined' ? localStorage.getItem('brain_token') : null;
-
-  // Step 1: POST to start the background job — returns immediately with a job_id
   const startResponse = await fetch(`${API_URL}/api/agent/sessions/${sessionId}/messages/stream`, {
     method: 'POST',
     headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: formData,
   });
   if (!startResponse.ok) throw new Error(`Agent stream failed: ${startResponse.status}`);
-  const { job_id } = await startResponse.json();
+  const { job_id, message_id } = await startResponse.json() as { job_id: string; message_id: string };
+  options?.onJobStarted?.(job_id, message_id);
 
-  // Step 2: Stream events from the job — reconnects automatically on visibility change
   await _streamJobEvents(job_id, token, onEvent as (e: Record<string, unknown>) => void);
+  return { jobId: job_id, messageId: message_id };
+};
+
+export const cancelAgentJob = async (jobId: string) => {
+  const { data } = await api.post<{ status: string }>(`/agent/jobs/${jobId}/cancel`);
+  return data;
+};
+
+export const updateChatMessage = async (sessionId: string, messageId: string, content: string) => {
+  const { data } = await api.patch<ChatSessionDetail>(`/chat/sessions/${sessionId}/messages/${messageId}`, { content });
+  return data;
 };
 
 export const applyAgentProposals = async (proposals: unknown[]) => {

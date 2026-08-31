@@ -36,15 +36,15 @@ async def stream_job_events(
     job = job_store.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found or expired")
+    if job.owner_id is not None and job.owner_id != str(current_user.id):
+        raise HTTPException(status_code=404, detail="Job not found or expired")
 
     async def event_stream():
-        async for event in job.iter_from(start_index=from_index):
+        async for idx, event in job.iter_from(start_index=from_index):
             if event.get("type") == "keepalive":
                 # SSE comment — keeps connection alive through idle proxies
                 yield ": keepalive\n\n"
                 continue
-            # Inject the buffer index so the client can reconnect from here
-            idx = len(job.events) - 1  # index of last pushed event
             payload = json.dumps({**event, "_idx": idx}, ensure_ascii=False)
             yield f"data: {payload}\n\n"
 

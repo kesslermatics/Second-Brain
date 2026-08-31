@@ -10,7 +10,7 @@ import {
 } from 'react-icons/fi';
 import ReactMarkdown from 'react-markdown';
 import { markdownComponents, remarkPlugins, rehypePlugins } from '@/lib/markdownComponents';
-import { runAgentStream, applyAgentProposals, markProposalsApplied, createChatSession, getChatSession, getNote } from '@/lib/api';
+import { runAgentStream, cancelAgentJob, updateChatMessage, applyAgentProposals, markProposalsApplied, createChatSession, getChatSession, getNote } from '@/lib/api';
 import type { AgentStreamEvent } from '@/lib/api';
 import { useStore } from '@/lib/store';
 import type { AgentStep, AgentProposal, ChatMessage, ChatSessionDetail, Note } from '@/lib/types';
@@ -67,6 +67,12 @@ export default function AgentView() {
     const [rejectedProposals, setRejectedProposals] = useState(new Set<string>());
     const [expandedSteps, setExpandedSteps] = useState(new Set<string>());
     const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+    const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+    const [editingContent, setEditingContent] = useState('');
+    const [restartableMessage, setRestartableMessage] = useState<{ id: string; content: string } | null>(null);
+    const [runNotice, setRunNotice] = useState<string | null>(null);
+    const activeJobIdRef = useRef<string | null>(null);
+    const stopRequestedRef = useRef(false);
 
     // Left panel: note viewer
     const [diffData, setDiffData] = useState<DiffViewData | null>(null);
@@ -101,37 +107,7 @@ export default function AgentView() {
             }
             setAppliedProposals(restored);
 
-            // Auto-retry: if the last message is from the user (agent never responded),
-            // re-send it silently so the user doesn't have to repeat themselves.
-            const last = parsed[parsed.length - 1];
-            if (last?.role === 'user' && !loading) {
-                const retryContent = last.content;
-                const sessionId = activeAgentSession.id;
-                // Small delay to let state settle before triggering
-                setTimeout(async () => {
-                    setLoading(true);
-                    setStreamingThought('');
-                    setStreamingSteps([]);
-                    const msgId = `stream-${Date.now()}`;
-                    let fullContent = '';
-                    let fullThought = '';
-                    const allSteps: AgentStep[] = [];
-                    const allProposals: AgentProposal[] = [];
-                    try {
-                        await runAgentStream(sessionId, retryContent, false, undefined, (event: AgentStreamEvent) => {
-                            if (event.type === 'thinking') { fullThought += event.content; setStreamingThought(fullThought); }
-                            else if (event.type === 'chunk') { fullContent += event.content; }
-                            else if (event.type === 'tool_call') { allSteps.push({ type: 'tool_call', content: event.content }); setStreamingSteps([...allSteps]); }
-                            else if (event.type === 'tool_result') { allSteps.push({ type: 'tool_result', content: event.content }); setStreamingSteps([...allSteps]); }
-                            else if (event.type === 'proposal') { allProposals.push(event.proposal); }
-                        });
-                        setStreamingThought(''); setStreamingSteps([]);
-                        setParsedMessages((p) => [...p, { id: msgId, role: 'assistant', content: fullContent, thought: fullThought || undefined, steps: allSteps.length > 0 ? allSteps : undefined, proposals: allProposals.length > 0 ? allProposals : undefined, created_at: new Date().toISOString() }]);
-                        loadFolderTree(); loadAgentSessions();
-                    } catch { setStreamingThought(''); setStreamingSteps([]); }
-                    finally { setLoading(false); }
-                }, 300);
-            }
+
         } else {
             setParsedMessages([]);
             setAppliedProposals(new Set());
@@ -175,102 +151,140 @@ export default function AgentView() {
         if (files.length > 0) setPendingFiles((p) => [...p, ...files]);
     };
 
-    // ── Send message ─────────────────────────────────────────────
+    // ── Send, stop, restart, and edit ─────────────────────────────
+
+    const runAgentMessage = async (
+        session: ChatSessionDetail,
+        content: string,
+        files?: File[],
+        existingMessageId?: string,
+    ) => {
+        setLoading(true);
+        stopRequestedRef.current = false;
+        setRunNotice(null);
+        setStreamingThought('');
+        setStreamingSteps([]);
+        let fullContent = '';
+        let fullThought = '';
+        const allSteps: AgentStep[] = [];
+        const allProposals: AgentProposal[] = [];
+        let cancelled = false;
+
+        try {
+            await runAgentStream(
+                session.id,
+                content,
+                autoAccept,
+                files,
+                (event: AgentStreamEvent) => {
+                    switch (event.type) {
+                        case 'thinking': fullThought += event.content; setStreamingThought(fullThought); break;
+                        case 'chunk': fullContent += event.content; break;
+                        case 'tool_call': allSteps.push({ type: 'tool_call', content: event.content }); setStreamingSteps([...allSteps]); break;
+                        case 'tool_result': allSteps.push({ type: 'tool_result', content: event.content }); setStreamingSteps([...allSteps]); break;
+                        case 'proposal': allProposals.push(event.proposal); break;
+                        case 'cancelled': cancelled = true; setRunNotice('Antwort wurde abgebrochen. Du kannst sie neu starten oder die Nachricht bearbeiten.'); break;
+                        case 'error': setRunNotice(event.detail ? `${event.message}\n${event.detail}` : event.message); break;
+                    }
+                },
+                {
+                    existingMessageId,
+                    onJobStarted: (jobId, messageId) => {
+                        activeJobIdRef.current = jobId;
+                        setRestartableMessage({ id: messageId, content });
+                        if (stopRequestedRef.current) void cancelAgentJob(jobId);
+                    },
+                },
+            );
+
+            const refreshed = await getChatSession(session.id);
+            setActiveAgentSession(refreshed);
+            setParsedMessages(refreshed.messages.map(parseAgentMessage));
+            await loadAgentSessions();
+            await loadFolderTree();
+            if (!cancelled) setRestartableMessage(null);
+        } catch (error) {
+            console.error(error);
+            setRunNotice(error instanceof Error ? error.message : 'Fehler bei der Verarbeitung.');
+            try {
+                const refreshed = await getChatSession(session.id);
+                setActiveAgentSession(refreshed);
+                setParsedMessages(refreshed.messages.map(parseAgentMessage));
+                await loadAgentSessions();
+            } catch (refreshError) { console.error(refreshError); }
+        } finally {
+            activeJobIdRef.current = null;
+            setStreamingThought('');
+            setStreamingSteps([]);
+            setLoading(false);
+        }
+    };
 
     const handleSend = async () => {
         const inputVal = textareaRef.current?.value?.trim() || '';
         if ((!inputVal && pendingFiles.length === 0) || loading) return;
         let session = activeAgentSession;
-        if (!session) { try { const ns = await createChatSession('agent', inputVal.slice(0, 50)); session = await getChatSession(ns.id); setActiveAgentSession(session); await loadAgentSessions(); } catch (e) { console.error(e); return; } }
+        if (!session) {
+            try {
+                const created = await createChatSession('agent', inputVal.slice(0, 50));
+                session = await getChatSession(created.id);
+                setActiveAgentSession(session);
+                await loadAgentSessions();
+            } catch (error) { console.error(error); return; }
+        }
 
-        const currentInput = inputVal;
+        if (!session) return;
+
         const currentFiles = [...pendingFiles];
         setPendingFiles([]);
         if (textareaRef.current) { textareaRef.current.value = ''; textareaRef.current.style.height = 'auto'; }
-        setLoading(true);
-
-        // Build attachments preview for the user message
-        const attachments = currentFiles.map(f => ({
-            name: f.name,
-            type: f.type.startsWith('image/') ? 'image' : 'document',
-            url: f.type.startsWith('image/') ? URL.createObjectURL(f) : undefined,
+        const attachments = currentFiles.map((file) => ({
+            name: file.name,
+            type: file.type.startsWith('image/') ? 'image' : 'document',
+            url: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
         }));
+        setParsedMessages((messages) => [...messages, {
+            id: `temp-${Date.now()}`, role: 'user', content: inputVal,
+            attachments: attachments.length ? attachments : undefined, created_at: new Date().toISOString(),
+        }]);
+        await runAgentMessage(session, inputVal, currentFiles.length ? currentFiles : undefined);
+    };
 
-        setParsedMessages((p) => [...p, { id: `temp-${Date.now()}`, role: 'user', content: currentInput, attachments: attachments.length > 0 ? attachments : undefined, created_at: new Date().toISOString() }]);
-        setStreamingThought('');
-        setStreamingSteps([]);
+    const handleStop = async () => {
+        stopRequestedRef.current = true;
+        const jobId = activeJobIdRef.current;
+        if (!jobId) {
+            setRunNotice('Abbruch wird ausgeführt, sobald der Agentenlauf gestartet ist.');
+            return;
+        }
+        try { await cancelAgentJob(jobId); }
+        catch (error) { setRunNotice(error instanceof Error ? error.message : 'Abbruch fehlgeschlagen.'); }
+    };
 
+    const handleRestart = async () => {
+        if (!activeAgentSession || !restartableMessage || loading) return;
+        await runAgentMessage(activeAgentSession, restartableMessage.content, undefined, restartableMessage.id);
+    };
+
+    const beginEdit = (message: ParsedAgentMessage) => {
+        setEditingMessageId(message.id);
+        setEditingContent(message.content);
+    };
+
+    const saveEdit = async () => {
+        if (!activeAgentSession || !editingMessageId || !editingContent.trim()) return;
         try {
-            const msgId = `stream-${Date.now()}`;
-            let fullContent = '';
-            let fullThought = '';
-            const allSteps: AgentStep[] = [];
-            const allProposals: AgentProposal[] = [];
-            let allSources: { title: string; url: string }[] = [];
-
-            await runAgentStream(
-                session.id,
-                currentInput,
-                autoAccept,
-                currentFiles.length > 0 ? currentFiles : undefined,
-                (event: AgentStreamEvent) => {
-                    switch (event.type) {
-                        case 'thinking':
-                            fullThought += event.content;
-                            setStreamingThought(fullThought);
-                            break;
-                        case 'chunk':
-                            // Accumulate only — we do NOT render the answer live.
-                            // Streamed text is unformatted; the final message is
-                            // rendered formatted once the response is complete.
-                            fullContent += event.content;
-                            break;
-                        case 'tool_call':
-                            allSteps.push({ type: 'tool_call', content: event.content });
-                            setStreamingSteps([...allSteps]);
-                            break;
-                        case 'tool_result':
-                            allSteps.push({ type: 'tool_result', content: event.content });
-                            setStreamingSteps([...allSteps]);
-                            break;
-                        case 'proposal':
-                            allProposals.push(event.proposal);
-                            break;
-                        case 'sources':
-                            allSources = [...allSources, ...event.sources];
-                            break;
-                        case 'done':
-                            break;
-                    }
-                },
-            );
-
-            setStreamingThought('');
-            setStreamingSteps([]);
-
-            // Add the final message to the list
-            setParsedMessages((p) => [...p, {
-                id: msgId,
-                role: 'assistant',
-                content: fullContent,
-                thought: fullThought || undefined,
-                steps: allSteps.length > 0 ? allSteps : undefined,
-                proposals: allProposals.length > 0 ? allProposals : undefined,
-                sources: allSources.length > 0 ? allSources : undefined,
-                created_at: new Date().toISOString(),
-            }]);
-
-            if (autoAccept && allProposals.length > 0) {
-                const keys = allProposals.map((_, i) => `${msgId}-${i}`);
-                setAppliedProposals((p) => { const n = new Set(p); keys.forEach(k => n.add(k)); return n; });
-            }
-            loadFolderTree(); await loadAgentSessions();
-        } catch (e) {
-            console.error(e);
-            setStreamingThought('');
-            setStreamingSteps([]);
-            setParsedMessages((p) => [...p, { id: `err-${Date.now()}`, role: 'assistant', content: 'Fehler bei der Verarbeitung.', created_at: new Date().toISOString() }]);
-        } finally { setLoading(false); }
+            const updated = await updateChatMessage(activeAgentSession.id, editingMessageId, editingContent);
+            setActiveAgentSession(updated);
+            setParsedMessages(updated.messages.map(parseAgentMessage));
+            setRestartableMessage({ id: editingMessageId, content: editingContent.trim() });
+            setEditingMessageId(null);
+            setEditingContent('');
+            setRunNotice('Nachricht aktualisiert. Die spätere Historie wurde entfernt; starte die Antwort bei Bedarf neu.');
+            await loadAgentSessions();
+        } catch (error) {
+            setRunNotice(error instanceof Error ? error.message : 'Nachricht konnte nicht geändert werden.');
+        }
     };
 
     // ── Proposal actions (memoized to prevent re-renders) ──────
@@ -417,10 +431,31 @@ export default function AgentView() {
                                         expandedSteps={expandedSteps} setExpandedSteps={setExpandedSteps}
                                         appliedProposals={appliedProposals} rejectedProposals={rejectedProposals}
                                         onAcceptProposal={handleAcceptProposal} onRejectProposal={handleRejectProposal}
-                                        onAcceptAll={handleAcceptAll} onOpenDiff={openDiffInLeft} onOpenNote={openNoteInLeft} />
+                                        onAcceptAll={handleAcceptAll} onOpenDiff={openDiffInLeft} onOpenNote={openNoteInLeft}
+                                        onEdit={beginEdit} />
                                 </div>
                             );
                         })}
+                        {runNotice && (
+                            <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                                <span className="whitespace-pre-line">{runNotice}</span>
+                                <div className="flex gap-1.5 flex-shrink-0">
+                                    {restartableMessage && !loading && <button onClick={handleRestart} className="rounded-md bg-rose-600 px-2 py-1 font-medium text-white hover:bg-rose-500">Neu starten</button>}
+                                    <button onClick={() => setRunNotice(null)} className="p-1 text-amber-200 hover:text-white" title="Hinweis schließen"><FiX className="w-3.5 h-3.5" /></button>
+                                </div>
+                            </div>
+                        )}
+                        {editingMessageId && (
+                            <div className="rounded-xl border border-rose-500/40 bg-dark-800 p-3 space-y-2">
+                                <p className="text-xs font-medium text-dark-200">Nachricht bearbeiten – spätere Antworten werden aus dem Verlauf entfernt.</p>
+                                <textarea value={editingContent} onChange={(event) => setEditingContent(event.target.value)} rows={3}
+                                    className="w-full resize-y rounded-lg border border-dark-700 bg-dark-900 px-2 py-1.5 text-sm text-white focus:border-rose-500 focus:outline-none" />
+                                <div className="flex justify-end gap-2">
+                                    <button onClick={() => { setEditingMessageId(null); setEditingContent(''); }} className="rounded-lg px-2 py-1 text-xs text-dark-300 hover:text-white">Abbrechen</button>
+                                    <button onClick={saveEdit} disabled={!editingContent.trim()} className="rounded-lg bg-rose-600 px-2 py-1 text-xs font-medium text-white hover:bg-rose-500 disabled:opacity-50">Speichern</button>
+                                </div>
+                            </div>
+                        )}
                         {loading && (streamingThought || streamingSteps.length > 0) && (
                             <div className="flex gap-2">
                                 <div className="w-7 h-7 rounded-lg bg-rose-600/20 flex items-center justify-center flex-shrink-0 mt-0.5">
@@ -487,10 +522,11 @@ export default function AgentView() {
                                 className="flex-1 px-3 py-2 bg-dark-800 border border-dark-700 rounded-xl text-white text-sm placeholder-dark-600 focus:outline-none focus:border-rose-500 resize-none min-h-[40px] max-h-[140px]" rows={1} />
                             <input ref={fileInputRef} type="file" accept="image/*,.pdf,.doc,.docx,.txt,.md,.csv,.xlsx" multiple className="hidden" onChange={(e) => { const f = Array.from(e.target.files || []); if (f.length) setPendingFiles((p) => [...p, ...f]); e.target.value = ''; }} />
                             <button onClick={() => fileInputRef.current?.click()} className="p-2 rounded-xl bg-dark-800 border border-dark-700 text-dark-400 hover:text-white" title="Datei anhängen (Bilder, PDFs, Dokumente)"><FiImage className="w-4 h-4" /></button>
-                            <button onClick={handleSend} disabled={loading}
-                                className={`p-2 rounded-xl ${!loading ? 'bg-rose-600 hover:bg-rose-500 text-white' : 'bg-dark-800 text-dark-600 cursor-not-allowed'}`}>
-                                <FiSend className="w-4 h-4" />
-                            </button>
+                            {loading ? (
+                                <button onClick={handleStop} className="flex items-center gap-1.5 rounded-xl bg-red-600 px-3 py-2 text-xs font-medium text-white hover:bg-red-500" title="Antwort abbrechen"><FiX className="w-4 h-4" /> Stop</button>
+                            ) : (
+                                <button onClick={handleSend} className="p-2 rounded-xl bg-rose-600 text-white hover:bg-rose-500" title="Senden"><FiSend className="w-4 h-4" /></button>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -567,9 +603,10 @@ interface MessageBubbleProps {
     onAcceptAll: (msgId: string, proposals: AgentProposal[]) => void;
     onOpenDiff: (p: AgentProposal, msgId: string, idx: number) => void;
     onOpenNote: (noteId: string) => void;
+    onEdit: (message: ParsedAgentMessage) => void;
 }
 
-const MessageBubble = memo(function MessageBubble({ msg, expandedSteps, setExpandedSteps, appliedProposals, rejectedProposals, onAcceptProposal, onRejectProposal, onAcceptAll, onOpenDiff, onOpenNote }: MessageBubbleProps) {
+const MessageBubble = memo(function MessageBubble({ msg, expandedSteps, setExpandedSteps, appliedProposals, rejectedProposals, onAcceptProposal, onRejectProposal, onAcceptAll, onOpenDiff, onOpenNote, onEdit }: MessageBubbleProps) {
     if (msg.role === 'user') {
         return (
             <div className="flex justify-end">
@@ -588,6 +625,9 @@ const MessageBubble = memo(function MessageBubble({ msg, expandedSteps, setExpan
                             ))}
                         </div>
                     )}
+                    <div className="flex justify-end">
+                        <button onClick={() => onEdit(msg)} className="flex items-center gap-1 px-1 text-[11px] text-dark-500 hover:text-rose-300" title="Nachricht bearbeiten und spätere Historie ersetzen"><FiEdit2 className="w-3 h-3" /> Bearbeiten</button>
+                    </div>
                     <div className="bg-rose-900/30 border border-rose-800/30 rounded-2xl px-3 py-2">
                         <p className="text-sm text-white whitespace-pre-wrap">{msg.content}</p>
                     </div>
