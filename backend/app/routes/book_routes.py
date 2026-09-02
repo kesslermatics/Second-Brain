@@ -105,6 +105,7 @@ async def ingest_pdf_book_document(
                 await asyncio.gather(active_job.task, return_exceptions=True)
 
         existing.original_filename = pdf.filename or existing.original_filename
+        existing.stored_path = store_document_pdf(str(current_user.id), str(existing.id), pdf_bytes)
         existing.title = title.strip()
         existing.authors = authors_list
         existing.status = "queued"

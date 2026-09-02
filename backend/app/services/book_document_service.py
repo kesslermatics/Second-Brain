@@ -21,7 +21,7 @@ from app.services.ai_service import FLASH_MODEL, PRO_MODEL, generate_json, gener
 from app.services.book_service import get_pdf_toc
 
 logger = logging.getLogger(__name__)
-BOOK_DOCUMENT_DIR = Path(os.environ.get("BOOK_DOCUMENT_DIR", "book_documents"))
+BOOK_DOCUMENT_DIR = Path(os.environ.get("BOOK_DOCUMENT_DIR", "book_documents")).resolve()
 CHUNK_CHARS = 4_000
 DIRECT_CHAPTER_CHARS = 42_000
 
