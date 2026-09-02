@@ -64,7 +64,6 @@ body {
 /* Lesson prose — a deliberately narrow, calm reading column inside the chat.
    The content stays continuous, but long explanations gain visual breathing room. */
 .lesson-prose {
-  max-inline-size: 68ch;
   text-wrap: pretty;
 }
 .lesson-prose p,

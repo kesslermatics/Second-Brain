@@ -1447,14 +1447,13 @@ export default function BookPanel() {
                                 className={`chat-message flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                             >
                                 <div
-                                    style={msg.role === 'assistant' ? { width: 'calc(100% - 2rem)', maxWidth: '680px' } : undefined}
-                                    className={`${msg.role === 'user'
-                                        ? 'max-w-[85%] sm:max-w-[78%] bg-amber-600 text-white rounded-br-md'
-                                        : 'max-w-[92%] sm:max-w-[72ch] bg-dark-900 border border-dark-700 text-dark-100 rounded-bl-md'} px-4 py-3 rounded-2xl text-sm`}
+                                    className={`max-w-[85%] sm:max-w-[78%] px-4 py-3 rounded-2xl text-sm ${msg.role === 'user'
+                                        ? 'bg-amber-600 text-white rounded-br-md'
+                                        : 'bg-dark-900 border border-dark-700 text-dark-100 rounded-bl-md'}`}
                                 >
                                     {msg.role === 'assistant' ? (
                                         <>
-                                            <div className="markdown-content lesson-prose w-full max-w-[68ch]">
+                                            <div className="markdown-content lesson-prose">
                                                 <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
                                                     {sourcePages ? cleanPdfInlineMarkers(msg.content) : msg.content}
                                                 </ReactMarkdown>
