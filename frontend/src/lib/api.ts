@@ -415,7 +415,7 @@ export const startBookPdfIngestion = async (pdf: File, title: string, authors: s
   form.append('pdf', pdf);
   form.append('title', title);
   form.append('authors', JSON.stringify(authors));
-  const { data } = await api.post<{ document_id: string; job_id: string | null; reused: boolean; status: string }>(
+  const { data } = await api.post<{ document_id: string; job_id: string | null; reused: boolean; restarted?: boolean; status: string }>(
     '/books/documents/ingest', form, { headers: { 'Content-Type': 'multipart/form-data' } },
   );
   return data;

@@ -20,12 +20,20 @@ from app.services.book_document_service import document_hash, ingest_book_docume
 router = APIRouter(prefix="/books", tags=["books"])
 
 
+def _pdf_ingestion_resource(document_id: uuid.UUID) -> str:
+    return f"book-document:{document_id}"
+
+
 def _start_pdf_ingestion_job(document_id: uuid.UUID, user_id: uuid.UUID) -> str:
     """Start a durable ingestion job for an already stored, owned PDF."""
     from app.services.job_store import job_store
 
     job_id = str(uuid.uuid4())
-    job_store.create_job(job_id, owner_id=str(user_id))
+    job_store.create_job(
+        job_id,
+        owner_id=str(user_id),
+        resource_key=_pdf_ingestion_resource(document_id),
+    )
 
     async def _ingest_events():
         try:
@@ -73,22 +81,47 @@ async def ingest_pdf_book_document(
 
     digest = document_hash(pdf_bytes)
     existing_result = await db.execute(
-        select(BookDocument).where(
+        select(BookDocument)
+        .where(
             BookDocument.user_id == current_user.id,
             BookDocument.content_hash == digest,
         )
+        .with_for_update()
     )
     existing = existing_result.scalars().first()
     if existing and existing.status == "ready":
         return {"document_id": str(existing.id), "job_id": None, "reused": True, "status": "ready"}
-    if existing and existing.status in {"queued", "processing"}:
-        raise HTTPException(
-            status_code=409,
-            detail="Diese PDF wird bereits vorbereitet. Bitte warte, bis der laufende Import abgeschlossen ist.",
-        )
     if existing:
-        # Preserve one private stored source per PDF. The frontend offers an explicit retry.
-        return {"document_id": str(existing.id), "job_id": None, "reused": True, "status": "failed"}
+        # A new upload of the same source is an explicit request to discard a
+        # stuck/failed attempt. Cancel the known in-memory job first; after an
+        # application restart there is no job to cancel, so reset the orphaned
+        # queued/processing record directly.
+        from app.services.job_store import job_store
+
+        active_job = job_store.find_active_by_resource(_pdf_ingestion_resource(existing.id))
+        if active_job:
+            job_store.cancel(active_job.job_id)
+            if active_job.task:
+                await asyncio.gather(active_job.task, return_exceptions=True)
+
+        existing.original_filename = pdf.filename or existing.original_filename
+        existing.title = title.strip()
+        existing.authors = authors_list
+        existing.status = "queued"
+        existing.error = None
+        existing.page_count = None
+        existing.extracted_page_count = None
+        existing.toc_source = None
+        await db.commit()
+
+        job_id = _start_pdf_ingestion_job(existing.id, current_user.id)
+        return {
+            "document_id": str(existing.id),
+            "job_id": job_id,
+            "reused": True,
+            "restarted": True,
+            "status": "queued",
+        }
 
     document_id = uuid.uuid4()
     stored_path = store_document_pdf(str(current_user.id), str(document_id), pdf_bytes)

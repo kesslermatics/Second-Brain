@@ -47,11 +47,13 @@ class _Job:
         owner_id: str | None = None,
         session_id: str | None = None,
         message_id: str | None = None,
+        resource_key: str | None = None,
     ) -> None:
         self.job_id = job_id
         self.owner_id = owner_id
         self.session_id = session_id
         self.message_id = message_id
+        self.resource_key = resource_key
         self.events: list[dict] = []          # buffered events (in order)
         self.done = False                     # True once the generator is exhausted
         self.error: str | None = None
@@ -109,8 +111,15 @@ class JobStore:
         owner_id: str | None = None,
         session_id: str | None = None,
         message_id: str | None = None,
+        resource_key: str | None = None,
     ) -> _Job:
-        job = _Job(job_id, owner_id=owner_id, session_id=session_id, message_id=message_id)
+        job = _Job(
+            job_id,
+            owner_id=owner_id,
+            session_id=session_id,
+            message_id=message_id,
+            resource_key=resource_key,
+        )
         self._jobs[job_id] = job
         return job
 
@@ -121,6 +130,13 @@ class JobStore:
 
     def get_job(self, job_id: str) -> _Job | None:
         return self._jobs.get(job_id)
+
+    def find_active_by_resource(self, resource_key: str) -> _Job | None:
+        """Return the one active job currently working on a named resource."""
+        return next(
+            (job for job in self._jobs.values() if job.resource_key == resource_key and not job.done),
+            None,
+        )
 
     def cancel(self, job_id: str) -> bool:
         """Stop a running job and publish a terminal event for all SSE clients."""
