@@ -579,7 +579,8 @@ export default function BookPanel() {
                         label: level === 'harder' ? 'Tieferes Niveau' : 'Einfacheres Niveau',
                     });
                 }
-            });
+            }
+        });
     };
 
     const afterTurn = async (
