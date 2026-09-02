@@ -1007,7 +1007,7 @@ async def unit_chat_stream(
                     folder = await _ensure_folder_path_local(f"Bücher/{course.title}", user_id_str, bg_db)
                     note = Note(
                         title=f"Kapitel {source_chapter.chapter_number}: {source_chapter.title}",
-                        content=f"# Kapitel {source_chapter.chapter_number}: {source_chapter.title}\n\n{explanation}\n\n---\n*PDF-Quelle: {source_pages}*",
+                        content=f"# Kapitel {source_chapter.chapter_number}: {source_chapter.title}\n\n{explanation}",
                         note_type="text",
                         folder_id=folder.id,
                         user_id=uuid.UUID(user_id_str),
@@ -1019,13 +1019,11 @@ async def unit_chat_stream(
 
                 if not source_chapter.explanation:
                     yield {"type": "status", "content": "Kapitelinhalt aus der PDF wird zusammengeführt…"}
-                    explanation = await prepare_pdf_chapter(source_chapter, course.title, course.book_authors or [])
-                    saved_notes = await save_chapter_note(explanation)
-                    collected_final = {"saved_notes": saved_notes}
-                else:
-                    explanation = source_chapter.explanation
-                    saved_notes = await save_chapter_note(explanation)
-                    collected_final = {"saved_notes": saved_notes}
+                # Always use the preparation helper: it also cleans citations from
+                # explanations that were cached before the citation-free format.
+                explanation = await prepare_pdf_chapter(source_chapter, course.title, course.book_authors or [])
+                saved_notes = await save_chapter_note(explanation)
+                collected_final = {"saved_notes": saved_notes}
 
                 # Persist the chapter cache/note before reporting it or yielding LLM output,
                 # so other tabs observe the completed preparation instead of regenerating it.

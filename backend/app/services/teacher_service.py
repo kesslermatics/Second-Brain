@@ -1331,6 +1331,8 @@ Bevorzuge bestehende Tags wenn sie passen.
 
 {FORMATTING_RULES}
 
+Verwende keine Seitenmarker, Quellenverweise oder Klammercodes wie [S. 42] in den Notizinhalten.
+
 Antworte NUR mit dem JSON, kein anderer Text:
 {{
     "notes": [

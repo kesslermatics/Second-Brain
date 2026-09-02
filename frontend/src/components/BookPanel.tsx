@@ -65,6 +65,12 @@ function writeUrlState(courseId: string | null, unitId: string | null) {
     window.history.replaceState(window.history.state, '', url);
 }
 
+function cleanPdfInlineMarkers(content: string): string {
+    return content
+        .replace(/\s*\[S\.\s*\d+(?:\s*[–-]\s*\d+)?\]/g, '')
+        .replace(/ {2,}/g, ' ');
+}
+
 function messageExtras(msg: CourseMessage): { checkpoints: string[]; sourcePages: string | null } {
     const md = (msg.metadata || {}) as Record<string, unknown>;
     const checkpoints = Array.isArray(md.checkpoints) ? (md.checkpoints as string[]) : [];
@@ -1516,7 +1522,7 @@ export default function BookPanel() {
                                         <>
                                             <div className="markdown-content lesson-prose">
                                                 <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
-                                                    {msg.content}
+                                                    {sourcePages ? cleanPdfInlineMarkers(msg.content) : msg.content}
                                                 </ReactMarkdown>
                                             </div>
                                             {sourcePages && <div className="mt-3 inline-flex rounded-md border border-amber-500/20 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-200">PDF-Quelle · {sourcePages}</div>}
