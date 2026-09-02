@@ -372,12 +372,15 @@ export interface BookDocument {
 }
 
 export interface BookIngestionEvent {
-  type: 'status' | 'pages_progress' | 'pages_extracted' | 'toc_found' | 'chapter_mapped' | 'done' | 'error' | 'cancelled';
+  type: 'status' | 'pages_progress' | 'pages_extracted' | 'retrying' | 'toc_found' | 'chapter_mapped' | 'done' | 'error' | 'cancelled';
   step?: string;
   label?: string;
   message?: string;
   detail?: string;
   progress?: number;
+  attempt?: number;
+  max_attempts?: number;
+  delay_seconds?: number;
   total_pages?: number;
   extracted_pages?: number;
   chapters?: number;

@@ -155,7 +155,16 @@ async def ingest_book_document(document_id: str) -> AsyncGenerator[dict, None]:
         ))
         last_reported = 0
         while not extraction_task.done():
-            current, total = await progress_queue.get()
+            progress_wait = asyncio.create_task(progress_queue.get())
+            done, _pending = await asyncio.wait(
+                {extraction_task, progress_wait},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if progress_wait not in done:
+                progress_wait.cancel()
+                await asyncio.gather(progress_wait, return_exceptions=True)
+                break
+            current, total = progress_wait.result()
             if current == total or current - last_reported >= max(1, total // 25):
                 last_reported = current
                 yield {
@@ -176,8 +185,38 @@ async def ingest_book_document(document_id: str) -> AsyncGenerator[dict, None]:
         }
 
         yield {"type": "status", "step": "toc", "label": "Inhaltsverzeichnis wird geprüft", "progress": 48}
-        toc = await get_pdf_toc(pdf_bytes, document.title, document.authors or [])
-        if toc.get("source") == "web_search_fallback" or not toc.get("chapters"):
+        toc_retry_queue: asyncio.Queue[tuple[int, int, float]] = asyncio.Queue()
+        toc_task = asyncio.create_task(get_pdf_toc(
+            pdf_bytes,
+            document.title,
+            document.authors or [],
+            on_retry=lambda attempt, maximum, delay: toc_retry_queue.put_nowait((attempt, maximum, delay)),
+        ))
+        while not toc_task.done():
+            retry_wait = asyncio.create_task(toc_retry_queue.get())
+            done, _pending = await asyncio.wait(
+                {toc_task, retry_wait},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if retry_wait not in done:
+                retry_wait.cancel()
+                await asyncio.gather(retry_wait, return_exceptions=True)
+                break
+            attempt, maximum, delay_seconds = retry_wait.result()
+            yield {
+                "type": "retrying",
+                "step": "toc",
+                "attempt": attempt,
+                "max_attempts": maximum,
+                "delay_seconds": delay_seconds,
+                "progress": 48,
+                "label": (
+                    "KI-Dienst vorübergehend nicht verfügbar – "
+                    f"erneuter Versuch {attempt} von {maximum} in {delay_seconds:g} Sekunden"
+                ),
+            }
+        toc = await toc_task
+        if not toc.get("chapters"):
             raise ValueError("Das Inhaltsverzeichnis konnte nicht zuverlässig aus der PDF ermittelt werden.")
         chapters = toc["chapters"]
         document.toc_source = toc.get("source")

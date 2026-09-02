@@ -426,6 +426,13 @@ export const getBookDocument = async (documentId: string) => {
   return data;
 };
 
+export const retryBookPdfIngestion = async (documentId: string) => {
+  const { data } = await api.post<{ document_id: string; job_id: string; reused: boolean; status: string }>(
+    `/books/documents/${documentId}/retry`,
+  );
+  return data;
+};
+
 export const streamBookPdfIngestion = async (jobId: string, onEvent?: (event: BookIngestionEvent) => void) => {
   const token = typeof window !== 'undefined' ? localStorage.getItem('brain_token') : null;
   await _streamJobEvents(jobId, token, (event) => onEvent?.(event as unknown as BookIngestionEvent));

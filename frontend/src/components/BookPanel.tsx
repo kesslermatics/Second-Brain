@@ -18,7 +18,7 @@ import {
     generateUnitQuiz, generateUnitRecap,
     getBookSummaries, generateChapterSummary,
     getCoverCandidates, updateCourseCover,
-    startBookPdfIngestion, streamBookPdfIngestion, getBookDocument,
+    startBookPdfIngestion, retryBookPdfIngestion, streamBookPdfIngestion, getBookDocument,
     type TeacherSavedNote,
 } from '@/lib/api';
 import type {
@@ -122,6 +122,7 @@ export default function BookPanel() {
     const [pdfMode, setPdfMode] = useState(false);
     const [sourceDocument, setSourceDocument] = useState<BookDocument | null>(null);
     const [ingestionEvent, setIngestionEvent] = useState<BookIngestionEvent | null>(null);
+    const [failedPdfDocumentId, setFailedPdfDocumentId] = useState<string | null>(null);
     const [mappedChapters, setMappedChapters] = useState(0);
     const pdfInputRef = useRef<HTMLInputElement>(null);
 
@@ -289,6 +290,7 @@ export default function BookPanel() {
             setPdfMode(true);
             setSourceDocument(null);
             setIngestionEvent(null);
+            setFailedPdfDocumentId(null);
             setMappedChapters(0);
             // Pre-fill the search field with the filename (sans extension) if empty
             if (!searchQuery.trim()) {
@@ -305,6 +307,7 @@ export default function BookPanel() {
         setPdfMode(false);
         setSourceDocument(null);
         setIngestionEvent(null);
+        setFailedPdfDocumentId(null);
         setMappedChapters(0);
     };
 
@@ -348,52 +351,105 @@ export default function BookPanel() {
         }
     };
 
+    const showPreparedPdfDocument = (document: BookDocument, bookInfo: BookSearchResult) => {
+        const chapters = document.chapters.map((chapter) => ({
+            chapter_number: chapter.chapter_number,
+            title: chapter.title,
+            level: chapter.level,
+        }));
+        if (chapters.length === 0) {
+            throw new Error('Konnte kein Inhaltsverzeichnis aus der PDF übernehmen.');
+        }
+        const defaults: Record<string, boolean> = {};
+        chapters.forEach((chapter) => {
+            const sourceChapter = document.chapters.find((item) => item.chapter_number === chapter.chapter_number);
+            defaults[chapter.chapter_number] = Boolean(sourceChapter?.start_page && sourceChapter.end_page);
+        });
+        setSourceDocument(document);
+        setEnabledChapters(defaults);
+        setFailedPdfDocumentId(null);
+        setView({ kind: 'confirm-toc', bookInfo, chapters });
+    };
+
+    const finishPdfIngestion = async (documentId: string, jobId: string | null, bookInfo: BookSearchResult) => {
+        if (jobId) {
+            await streamBookPdfIngestion(jobId, (event) => {
+                setIngestionEvent(event);
+                if (event.type === 'chapter_mapped') setMappedChapters(event.current || 0);
+            });
+        }
+        const document = await getBookDocument(documentId);
+        if (document.status !== 'ready') {
+            throw new Error(document.error || 'PDF konnte nicht vorbereitet werden.');
+        }
+        showPreparedPdfDocument(document, bookInfo);
+    };
+
+    const showPdfIngestionFailure = (documentId: string | null, message: string) => {
+        if (!documentId) {
+            setError(message);
+            return;
+        }
+        setFailedPdfDocumentId(documentId);
+        setIngestionEvent({
+            type: 'error',
+            label: 'PDF konnte nicht vorbereitet werden',
+            message,
+            progress: 48,
+        });
+    };
+
     const handleConfirmBook = async (bookInfo: BookSearchResult) => {
         setError(null);
-        try {
-            let enrichedBookInfo = bookInfo;
-            let chapters: BookChapter[];
-            let sourceChapters: BookDocument['chapters'] | null = null;
-            if (pdfMode && pdfFile) {
+        if (pdfMode && pdfFile) {
+            let documentId: string | null = null;
+            try {
                 setView({ kind: 'ingesting-pdf', bookInfo });
                 setIngestionEvent({ type: 'status', label: 'PDF wird sicher gespeichert…', progress: 4 });
                 setMappedChapters(0);
+                setFailedPdfDocumentId(null);
                 const started = await startBookPdfIngestion(pdfFile, bookInfo.title!, bookInfo.authors || []);
-                if (started.job_id) {
-                    await streamBookPdfIngestion(started.job_id, (event) => {
-                        setIngestionEvent(event);
-                        if (event.type === 'chapter_mapped') setMappedChapters(event.current || 0);
-                    });
-                }
-                const document = await getBookDocument(started.document_id);
-                if (document.status !== 'ready') throw new Error(document.error || 'PDF konnte nicht vorbereitet werden.');
-                setSourceDocument(document);
-                sourceChapters = document.chapters;
-                chapters = document.chapters.map((chapter) => ({
-                    chapter_number: chapter.chapter_number,
-                    title: chapter.title,
-                    level: chapter.level,
-                }));
-            } else {
-                setView({ kind: 'loading-toc', bookInfo });
-                const toc = await getBookToc(bookInfo.title!, bookInfo.authors || []);
-                chapters = toc.chapters;
+                documentId = started.document_id;
+                await finishPdfIngestion(documentId, started.job_id, bookInfo);
+            } catch (caught) {
+                const message = caught instanceof Error ? caught.message : 'Fehler beim Vorbereiten der PDF.';
+                showPdfIngestionFailure(documentId, message);
+                if (!documentId) setView({ kind: 'confirm-book', bookInfo });
             }
-            if (chapters.length === 0) {
+            return;
+        }
+
+        try {
+            setView({ kind: 'loading-toc', bookInfo });
+            const toc = await getBookToc(bookInfo.title!, bookInfo.authors || []);
+            if (toc.chapters.length === 0) {
                 setError('Konnte kein Inhaltsverzeichnis finden.');
-                setView({ kind: 'confirm-book', bookInfo: enrichedBookInfo });
+                setView({ kind: 'confirm-book', bookInfo });
                 return;
             }
             const defaults: Record<string, boolean> = {};
-            chapters.forEach((ch) => {
-                const sourceChapter = sourceChapters?.find((item) => item.chapter_number === ch.chapter_number);
-                defaults[ch.chapter_number] = !sourceChapters || Boolean(sourceChapter?.start_page && sourceChapter.end_page);
-            });
+            toc.chapters.forEach((chapter) => { defaults[chapter.chapter_number] = true; });
             setEnabledChapters(defaults);
-            setView({ kind: 'confirm-toc', bookInfo: enrichedBookInfo, chapters });
+            setView({ kind: 'confirm-toc', bookInfo, chapters: toc.chapters });
         } catch (caught) {
-            setError(caught instanceof Error ? caught.message : 'Fehler beim Vorbereiten der PDF.');
+            setError(caught instanceof Error ? caught.message : 'Fehler beim Laden des Inhaltsverzeichnisses.');
             setView({ kind: 'confirm-book', bookInfo });
+        }
+    };
+
+    const handleRetryPdfIngestion = async () => {
+        if (view.kind !== 'ingesting-pdf' || !failedPdfDocumentId) return;
+        const documentId = failedPdfDocumentId;
+        setError(null);
+        setFailedPdfDocumentId(null);
+        setIngestionEvent({ type: 'status', step: 'toc', label: 'PDF wird erneut vorbereitet…', progress: 48 });
+        setMappedChapters(0);
+        try {
+            const started = await retryBookPdfIngestion(documentId);
+            await finishPdfIngestion(started.document_id, started.job_id, view.bookInfo);
+        } catch (caught) {
+            const message = caught instanceof Error ? caught.message : 'Fehler beim erneuten Vorbereiten der PDF.';
+            showPdfIngestionFailure(documentId, message);
         }
     };
 
@@ -1180,6 +1236,9 @@ export default function BookPanel() {
         if (view.kind !== 'ingesting-pdf') return null;
         const progress = Math.max(0, Math.min(100, ingestionEvent?.progress || 4));
         const label = ingestionEvent?.label || 'PDF wird vorbereitet…';
+        const failureMessage = ingestionEvent?.type === 'error'
+            ? ingestionEvent.message || ingestionEvent.detail || 'Die PDF konnte nicht vorbereitet werden.'
+            : null;
         const extractedTotal = ingestionEvent?.total_pages || (ingestionEvent?.type === 'pages_progress' ? ingestionEvent.total : undefined);
         const extractedCurrent = ingestionEvent?.extracted_pages || (ingestionEvent?.type === 'pages_progress' ? ingestionEvent.current : undefined);
         const steps = [
@@ -1208,6 +1267,20 @@ export default function BookPanel() {
                             </div>
                         ))}
                     </div>
+                    {failureMessage && (
+                        <div className="mt-5 rounded-xl border border-red-500/30 bg-red-500/10 p-4">
+                            <p className="text-sm text-red-200">{failureMessage}</p>
+                            {failedPdfDocumentId && (
+                                <button
+                                    onClick={handleRetryPdfIngestion}
+                                    className="mt-3 inline-flex items-center gap-2 rounded-lg bg-amber-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-amber-500"
+                                >
+                                    <FiRefreshCw className="h-4 w-4" />
+                                    Erneut versuchen
+                                </button>
+                            )}
+                        </div>
+                    )}
                     <p className="mt-5 text-xs leading-relaxed text-dark-500">Die PDF wird nur einmal extrahiert. Danach werden Kapitel und Antworten dauerhaft aus dieser Ausgabe erzeugt.</p>
                 </div>
             </div>

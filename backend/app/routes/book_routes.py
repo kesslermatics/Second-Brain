@@ -20,6 +20,32 @@ from app.services.book_document_service import document_hash, ingest_book_docume
 router = APIRouter(prefix="/books", tags=["books"])
 
 
+def _start_pdf_ingestion_job(document_id: uuid.UUID, user_id: uuid.UUID) -> str:
+    """Start a durable ingestion job for an already stored, owned PDF."""
+    from app.services.job_store import job_store
+
+    job_id = str(uuid.uuid4())
+    job_store.create_job(job_id, owner_id=str(user_id))
+
+    async def _ingest_events():
+        try:
+            async for event in ingest_book_document(str(document_id)):
+                yield event
+        except Exception as exc:
+            from app.database import async_session
+            async with async_session() as background_db:
+                failed = await background_db.get(BookDocument, document_id)
+                if failed:
+                    failed.status = "failed"
+                    failed.error = str(exc)[:500]
+                    await background_db.commit()
+            raise
+
+    task = asyncio.create_task(job_store.run_job(job_id, _ingest_events()))
+    job_store.set_task(job_id, task)
+    return job_id
+
+
 @router.post("/documents/ingest")
 async def ingest_pdf_book_document(
     pdf: UploadFile = File(...),
@@ -60,6 +86,9 @@ async def ingest_pdf_book_document(
             status_code=409,
             detail="Diese PDF wird bereits vorbereitet. Bitte warte, bis der laufende Import abgeschlossen ist.",
         )
+    if existing:
+        # Preserve one private stored source per PDF. The frontend offers an explicit retry.
+        return {"document_id": str(existing.id), "job_id": None, "reused": True, "status": "failed"}
 
     document_id = uuid.uuid4()
     stored_path = store_document_pdf(str(current_user.id), str(document_id), pdf_bytes)
@@ -76,27 +105,40 @@ async def ingest_pdf_book_document(
     db.add(document)
     await db.commit()
 
-    from app.services.job_store import job_store
-    job_id = str(uuid.uuid4())
-    job_store.create_job(job_id, owner_id=str(current_user.id))
-
-    async def _ingest_events():
-        try:
-            async for event in ingest_book_document(str(document_id)):
-                yield event
-        except Exception as exc:
-            from app.database import async_session
-            async with async_session() as background_db:
-                failed = await background_db.get(BookDocument, document_id)
-                if failed:
-                    failed.status = "failed"
-                    failed.error = str(exc)[:500]
-                    await background_db.commit()
-            raise
-
-    task = asyncio.create_task(job_store.run_job(job_id, _ingest_events()))
-    job_store.set_task(job_id, task)
+    job_id = _start_pdf_ingestion_job(document_id, current_user.id)
     return {"document_id": str(document_id), "job_id": job_id, "reused": False, "status": "queued"}
+
+
+@router.post("/documents/{document_id}/retry")
+async def retry_pdf_book_document_ingestion(
+    document_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Retry a failed PDF import without re-uploading or duplicating its source."""
+    try:
+        parsed_document_id = uuid.UUID(document_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    result = await db.execute(
+        select(BookDocument)
+        .where(BookDocument.id == parsed_document_id, BookDocument.user_id == current_user.id)
+        .with_for_update()
+    )
+    document = result.scalars().first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if document.status in {"queued", "processing"}:
+        raise HTTPException(status_code=409, detail="Diese PDF wird bereits vorbereitet.")
+    if document.status != "failed":
+        raise HTTPException(status_code=409, detail="Nur fehlgeschlagene PDF-Importe können erneut versucht werden.")
+
+    document.status = "queued"
+    document.error = None
+    await db.commit()
+    job_id = _start_pdf_ingestion_job(document.id, current_user.id)
+    return {"document_id": str(document.id), "job_id": job_id, "reused": True, "status": "queued"}
 
 
 @router.get("/documents/{document_id}")
@@ -358,11 +400,7 @@ async def book_pdf_toc(
     authors: str = Form("[]"),
     current_user: User = Depends(get_current_user),
 ):
-    """Extract the table of contents directly from an uploaded PDF.
-
-    Falls back to AI web-search extraction when the PDF has no bookmarks
-    and the first pages don't contain a readable TOC.
-    """
+    """Extract the table of contents directly from an uploaded PDF only."""
     if not pdf.content_type or "pdf" not in pdf.content_type.lower():
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
 

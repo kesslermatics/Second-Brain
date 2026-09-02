@@ -10,6 +10,9 @@ import asyncio
 import json
 import io
 import logging
+import random
+import re
+from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -81,47 +84,99 @@ def extract_pdf_toc_metadata(pdf_bytes: bytes) -> list[dict] | None:
 
 # ── PDF-aware TOC extraction ──────────────────────────────────────────
 
-async def get_pdf_toc(pdf_bytes: bytes, book_title: str, authors: list[str]) -> dict:
-    """Extract the TOC from the actual PDF, falling back to AI text analysis.
+PDF_TOC_MAX_ATTEMPTS = 3
+PDF_TOC_ATTEMPT_TIMEOUT_SECONDS = 60
 
-    Priority:
-      1. PDF bookmark/outline metadata (instant, no AI cost)
-      2. AI analysis of the first ~15 000 chars of extracted text
+
+class PdfTocProviderUnavailableError(RuntimeError):
+    """The structured TOC provider stayed temporarily unavailable after retries."""
+
+
+def _provider_status_code(exc: Exception) -> int | None:
+    """Best-effort status extraction across Google SDK and HTTP transport errors."""
+    for candidate in (
+        getattr(exc, "status_code", None),
+        getattr(exc, "code", None),
+        getattr(getattr(exc, "response", None), "status_code", None),
+    ):
+        if isinstance(candidate, int):
+            return candidate
+        if isinstance(candidate, str):
+            match = re.search(r"\b([1-5]\d{2})\b", candidate)
+            if match:
+                return int(match.group(1))
+    match = re.search(r"\b([1-5]\d{2})\b", str(exc))
+    return int(match.group(1)) if match else None
+
+
+def _retry_after_seconds(exc: Exception) -> float | None:
+    """Honor an HTTP Retry-After value when the provider supplies one."""
+    headers = getattr(getattr(exc, "response", None), "headers", None) or getattr(exc, "headers", None)
+    if not headers:
+        return None
+    try:
+        value = float(headers.get("retry-after"))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return min(max(value, 0.1), 60.0)
+
+
+def _is_transient_provider_error(exc: Exception) -> bool:
+    if isinstance(exc, asyncio.TimeoutError):
+        return True
+    status = _provider_status_code(exc)
+    if status == 429 or status is not None and 500 <= status <= 599:
+        return True
+    detail = str(exc).upper()
+    return any(marker in detail for marker in (
+        "RESOURCE_EXHAUSTED", "UNAVAILABLE", "DEADLINE_EXCEEDED",
+        "CONNECTION", "CONNECT", "READ TIMEOUT", "TIMED OUT",
+    ))
+
+
+def _unavailable_provider_message(exc: Exception) -> str:
+    status = _provider_status_code(exc)
+    suffix = f" ({status})" if status else " (Zeitüberschreitung)" if isinstance(exc, asyncio.TimeoutError) else ""
+    return f"Der KI-Dienst ist vorübergehend nicht verfügbar{suffix}. Bitte erneut versuchen."
+
+
+async def get_pdf_toc(
+    pdf_bytes: bytes,
+    book_title: str,
+    authors: list[str],
+    on_retry: Callable[[int, int, float], None] | None = None,
+) -> dict:
+    """Extract a TOC solely from the PDF, retrying transient provider failures.
+
+    PDF outline metadata needs no model call. The text-based path makes at most
+    three bounded attempts and never substitutes web-derived book information.
     """
-    # 1. Native PDF outline
     toc_from_meta = extract_pdf_toc_metadata(pdf_bytes)
     if toc_from_meta:
-        # Filter out front/back matter noise — English and German variants
         skip_keywords = {
-            # German
             "vorwort", "geleitwort", "danksagung", "widmung",
             "inhaltsverzeichnis", "abbildungsverzeichnis", "tabellenverzeichnis",
             "abkürzungsverzeichnis", "glossar", "stichwortverzeichnis", "register",
             "literaturverzeichnis", "quellenverzeichnis", "bibliografie", "bibliography",
             "anhang", "nachwort", "über den autor", "titelseite", "impressum",
-            # English
             "preface", "foreword", "acknowledgement", "acknowledgment", "dedication",
             "contents", "table of contents", "list of figures", "list of tables",
-            "list of abbreviations", "glossary", "index",
-            "references", "bibliography", "appendix", "afterword",
-            "about the author", "title page", "copyright", "half title",
+            "list of abbreviations", "glossary", "index", "references", "appendix",
+            "afterword", "about the author", "title page", "copyright", "half title",
             "title card", "cover", "front matter", "back matter", "colophon",
         }
         filtered = [
-            ch for ch in toc_from_meta
-            if not any(kw in ch["title"].lower() for kw in skip_keywords)
+            chapter for chapter in toc_from_meta
+            if not any(keyword in chapter["title"].lower() for keyword in skip_keywords)
         ]
         if filtered:
             return {"chapters": filtered, "total_chapters": len(filtered), "source": "pdf_metadata"}
 
-    # 2. AI analysis of the raw text
     full_text = extract_pdf_text(pdf_bytes)
     if not full_text:
-        # PDF has no extractable text (scanned image) — fall back to web search
-        return await get_book_toc(book_title, authors)
+        return {"chapters": [], "total_chapters": 0, "source": "pdf_no_extractable_text"}
 
-    # Feed the first chunk of the book to the AI so it can spot the TOC section
-    sample = full_text[:15000]
+    sample = full_text[:15_000]
     authors_str = ", ".join(authors) if authors else "Unbekannt"
     prompt = f"""Das folgende ist der Anfang des Buches „{book_title}" von {authors_str}.
 Extrahiere das vollständige Inhaltsverzeichnis direkt aus diesem Text.
@@ -154,16 +209,43 @@ Lasse folgende Einträge KOMPLETT WEG (sie haben keinen inhaltlichen Mehrwert):
 - Anhang, Appendix, Nachwort, Afterword, Colophon
 - Über den Autor, About the Author, Front Matter, Back Matter"""
 
-    result = await generate_json(prompt, BOOK_TOC_SCHEMA, model=PRO_MODEL, temperature=0.1)
-    if result and isinstance(result, dict) and result.get("chapters"):
-        result["source"] = "pdf_text_ai"
-        result.setdefault("total_chapters", len(result["chapters"]))
-        return result
-
-    # Ultimate fallback: web search (like the non-PDF path)
-    fallback = await get_book_toc(book_title, authors)
-    fallback["source"] = "web_search_fallback"
-    return fallback
+    for attempt in range(1, PDF_TOC_MAX_ATTEMPTS + 1):
+        try:
+            result = await asyncio.wait_for(
+                generate_json(
+                    prompt,
+                    BOOK_TOC_SCHEMA,
+                    model=PRO_MODEL,
+                    temperature=0.1,
+                    raise_on_error=True,
+                ),
+                timeout=PDF_TOC_ATTEMPT_TIMEOUT_SECONDS,
+            )
+            if isinstance(result, dict):
+                result["source"] = "pdf_text_ai"
+                result.setdefault("total_chapters", len(result.get("chapters") or []))
+                return result
+            return {"chapters": [], "total_chapters": 0, "source": "pdf_text_ai"}
+        except Exception as exc:
+            if not _is_transient_provider_error(exc):
+                logger.warning("PDF TOC provider request failed without retry: %s", exc)
+                raise ValueError(
+                    "Die Inhaltsverzeichnis-Erkennung durch den KI-Dienst ist fehlgeschlagen. "
+                    "Bitte später erneut versuchen."
+                ) from exc
+            if attempt == PDF_TOC_MAX_ATTEMPTS:
+                logger.warning("PDF TOC provider unavailable after %s attempts: %s", attempt, exc)
+                raise PdfTocProviderUnavailableError(_unavailable_provider_message(exc)) from exc
+            retry_after_seconds = _retry_after_seconds(exc)
+            delay_seconds = retry_after_seconds if retry_after_seconds is not None else round(
+                (1.5 * (2 ** (attempt - 1))) + random.uniform(0, 0.5),
+                1,
+            )
+            next_attempt = attempt + 1
+            logger.info("Retrying PDF TOC provider in %ss (attempt %s/%s)", delay_seconds, next_attempt, PDF_TOC_MAX_ATTEMPTS)
+            if on_retry:
+                on_retry(next_attempt, PDF_TOC_MAX_ATTEMPTS, delay_seconds)
+            await asyncio.sleep(delay_seconds)
 
 
 # ── PDF-aware chapter note ────────────────────────────────────────────

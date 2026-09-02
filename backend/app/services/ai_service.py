@@ -69,11 +69,13 @@ async def generate_json(
     model: str = None,
     system_instruction: str = None,
     temperature: float = None,
+    raise_on_error: bool = False,
 ) -> dict | list | None:
     """Generate content constrained to a JSON schema using native structured output.
 
     `schema` is a JSON-schema dict (google.genai accepts this directly for
-    response_schema). Returns the parsed object/list, or None on failure.
+    response_schema). Returns the parsed object/list, or None on failure unless
+    ``raise_on_error`` is true, in which case provider errors are propagated.
     This eliminates the whole class of "LLM returned broken JSON" errors.
     """
     client = get_client()
@@ -102,6 +104,8 @@ async def generate_json(
         if text:
             return json.loads(text)
     except Exception as e:
+        if raise_on_error:
+            raise
         import logging
         logging.getLogger(__name__).warning(f"generate_json failed: {e}")
     return None
