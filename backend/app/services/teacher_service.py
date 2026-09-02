@@ -1687,13 +1687,6 @@ async def generate_thinking_phrases(
             "Ich aktualisiere deine Notiz …",
             "Ich verknüpfe das mit dem Bisherigen …",
         ],
-        "draw_diagram": [
-            "Ich skizziere das für dich …",
-            "Ich zeichne das Bild dazu …",
-            "Ich visualisiere die Struktur …",
-            "Ich erstelle ein Diagramm …",
-            "Ich mache es anschaulicher …",
-        ],
         "ask_checkpoint": [
             "Ich formuliere eine kurze Zwischenfrage …",
             "Ich hake kurz nach …",

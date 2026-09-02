@@ -19,14 +19,13 @@ import {
 } from '@/lib/api';
 import type {
     CourseListItem, CourseDetail, CourseUnit, CourseMessage,
-    AdvancedFocusSuggestion, QuizQuestion, LessonRecap, LessonDiagram,
+    AdvancedFocusSuggestion, QuizQuestion, LessonRecap,
 } from '@/lib/types';
 import {
     LessonObjectivesCard, LearningPathButton, LearningPathOverlay,
     LessonCompleteCelebration, isControlMessage,
     ThinkingStatus, NoteToastHost, ActivityBubbleHost, type ActivityBubble, InlineQuiz, type SavedNoteToast,
 } from './TeachingComponents';
-import MermaidDiagram from './MermaidDiagram';
 import { CategoryBadge, CategoryFilter, StatusBadge } from './CategoryUI';
 import { CATEGORY_ORDER, categoryStyle } from '@/lib/categories';
 
@@ -62,12 +61,11 @@ function writeUrlState(courseId: string | null, unitId: string | null) {
     window.history.replaceState(window.history.state, '', url);
 }
 
-// Pull diagrams / checkpoints out of a message's metadata (set by the stream).
-function messageExtras(msg: CourseMessage): { diagrams: LessonDiagram[]; checkpoints: string[] } {
+// Pull checkpoints out of a message's metadata (set by the stream).
+function messageExtras(msg: CourseMessage): { checkpoints: string[] } {
     const md = (msg.metadata || {}) as Record<string, unknown>;
-    const diagrams = Array.isArray(md.diagrams) ? (md.diagrams as LessonDiagram[]) : [];
     const checkpoints = Array.isArray(md.checkpoints) ? (md.checkpoints as string[]) : [];
-    return { diagrams, checkpoints };
+    return { checkpoints };
 }
 
 export default function TeacherPanel() {
@@ -497,8 +495,6 @@ export default function TeacherPanel() {
                         label: level === 'harder' ? 'Tieferes Niveau' : 'Einfacheres Niveau',
                     });
                 }
-            } else if (event.type === 'diagram') {
-                pushBubble({ kind: 'diagram', label: event.caption || 'Diagramm' });
             }
         });
     };
@@ -1215,7 +1211,7 @@ export default function TeacherPanel() {
                             // Notes are silent now; keep old markers subtle for existing courses.
                             return null;
                         }
-                        const { diagrams, checkpoints } = msg.role === 'assistant' ? messageExtras(msg) : { diagrams: [], checkpoints: [] };
+                        const { checkpoints } = msg.role === 'assistant' ? messageExtras(msg) : { checkpoints: [] };
                         return (
                             <div
                                 key={msg.id}
@@ -1234,9 +1230,6 @@ export default function TeacherPanel() {
                                                     {msg.content}
                                                 </ReactMarkdown>
                                             </div>
-                                            {diagrams.map((d, i) => (
-                                                <MermaidDiagram key={i} code={d.code} caption={d.caption} />
-                                            ))}
                                             {checkpoints.map((q, i) => (
                                                 <div key={i} className="mt-3 flex items-start gap-2 px-3 py-2 rounded-xl bg-teal-600/10 border border-teal-500/20">
                                                     <FiMessageCircle className="w-3.5 h-3.5 text-teal-300 mt-0.5 flex-shrink-0" />
@@ -1330,7 +1323,7 @@ export default function TeacherPanel() {
                     </div>
                 </div>
 
-                {/* Activity bubbles — confirmed actions (notes, understanding, difficulty, diagrams) */}
+                {/* Activity bubbles — confirmed actions (notes, understanding, difficulty) */}
                 <ActivityBubbleHost bubbles={bubbles} onDismiss={dismissBubble} />
             </div>
         );

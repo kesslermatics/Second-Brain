@@ -18,33 +18,27 @@ import {
     generateUnitQuiz, generateUnitRecap,
     getBookSummaries, generateChapterSummary,
     getCoverCandidates, updateCourseCover,
-    getBookTocFromPdf, generateChapterNoteFromPdf,
+    startBookPdfIngestion, streamBookPdfIngestion, getBookDocument,
     type TeacherSavedNote,
 } from '@/lib/api';
 import type {
     BookSearchResult, BookChapter,
     CourseListItem, CourseDetail, CourseUnit, CourseMessage,
-    BookSummaryChapter, QuizQuestion, LessonRecap, LessonDiagram,
+    BookSummaryChapter, QuizQuestion, LessonRecap, BookDocument, BookIngestionEvent,
 } from '@/lib/types';
 import {
     LessonObjectivesCard, LearningPathButton, LearningPathOverlay,
     LessonCompleteCelebration, isControlMessage,
     ThinkingStatus, NoteToastHost, ActivityBubbleHost, type ActivityBubble, InlineQuiz, type SavedNoteToast,
 } from './TeachingComponents';
-import MermaidDiagram from './MermaidDiagram';
 import { CategoryBadge, CategoryFilter } from './CategoryUI';
 import { CATEGORY_ORDER } from '@/lib/categories';
-
-// ── Session-scoped PDF store ──────────────────────────────────────────
-// Maps courseId → the File the user uploaded when creating that book.
-// Lives only in memory (not persisted), which is intentional: PDFs should not
-// be stored on the server without explicit user consent.
-const sessionPdfStore = new Map<string, File>();
 
 type View =
     | { kind: 'books' }
     | { kind: 'confirm-book'; bookInfo: BookSearchResult }
     | { kind: 'loading-toc'; bookInfo: BookSearchResult }
+    | { kind: 'ingesting-pdf'; bookInfo: BookSearchResult }
     | { kind: 'confirm-toc'; bookInfo: BookSearchResult; chapters: BookChapter[] }
     | { kind: 'lesson-chat'; course: CourseDetail; unit: CourseUnit }
     | { kind: 'lesson-complete'; course: CourseDetail; unit: CourseUnit }
@@ -71,11 +65,11 @@ function writeUrlState(courseId: string | null, unitId: string | null) {
     window.history.replaceState(window.history.state, '', url);
 }
 
-function messageExtras(msg: CourseMessage): { diagrams: LessonDiagram[]; checkpoints: string[] } {
+function messageExtras(msg: CourseMessage): { checkpoints: string[]; sourcePages: string | null } {
     const md = (msg.metadata || {}) as Record<string, unknown>;
-    const diagrams = Array.isArray(md.diagrams) ? (md.diagrams as LessonDiagram[]) : [];
     const checkpoints = Array.isArray(md.checkpoints) ? (md.checkpoints as string[]) : [];
-    return { diagrams, checkpoints };
+    const sourcePages = typeof md.pdf_source_pages === 'string' ? md.pdf_source_pages : null;
+    return { checkpoints, sourcePages };
 }
 
 // ── Book cover with a graceful fallback ──────────────────────────────
@@ -126,6 +120,9 @@ export default function BookPanel() {
     // PDF mode — when a PDF is attached the whole pipeline uses the real book text
     const [pdfFile, setPdfFile] = useState<File | null>(null);
     const [pdfMode, setPdfMode] = useState(false);
+    const [sourceDocument, setSourceDocument] = useState<BookDocument | null>(null);
+    const [ingestionEvent, setIngestionEvent] = useState<BookIngestionEvent | null>(null);
+    const [mappedChapters, setMappedChapters] = useState(0);
     const pdfInputRef = useRef<HTMLInputElement>(null);
 
     // TOC confirmation
@@ -290,6 +287,9 @@ export default function BookPanel() {
         if (file) {
             setPdfFile(file);
             setPdfMode(true);
+            setSourceDocument(null);
+            setIngestionEvent(null);
+            setMappedChapters(0);
             // Pre-fill the search field with the filename (sans extension) if empty
             if (!searchQuery.trim()) {
                 const name = file.name.replace(/\.pdf$/i, '').replace(/[-_]/g, ' ');
@@ -303,6 +303,9 @@ export default function BookPanel() {
     const handleRemovePdf = () => {
         setPdfFile(null);
         setPdfMode(false);
+        setSourceDocument(null);
+        setIngestionEvent(null);
+        setMappedChapters(0);
     };
 
     // ── Search book ──────────────────────────────────────────────────
@@ -314,42 +317,82 @@ export default function BookPanel() {
             const result = await searchBook(searchQuery.trim());
             if (result.found) {
                 setView({ kind: 'confirm-book', bookInfo: result });
+            } else if (pdfMode && pdfFile) {
+                // A local PDF is itself sufficient evidence; online catalog lookup is optional.
+                setView({
+                    kind: 'confirm-book', bookInfo: {
+                        found: true,
+                        title: searchQuery.trim() || pdfFile.name.replace(/\.pdf$/i, ''),
+                        authors: [],
+                        description: '',
+                    }
+                });
             } else {
                 setError(result.suggestion || 'Kein passendes Buch gefunden.');
             }
         } catch {
-            setError('Fehler bei der Buchsuche.');
+            if (pdfMode && pdfFile) {
+                setView({
+                    kind: 'confirm-book', bookInfo: {
+                        found: true,
+                        title: searchQuery.trim() || pdfFile.name.replace(/\.pdf$/i, ''),
+                        authors: [],
+                        description: '',
+                    }
+                });
+            } else {
+                setError('Fehler bei der Buchsuche.');
+            }
         } finally {
             setSearching(false);
         }
     };
 
     const handleConfirmBook = async (bookInfo: BookSearchResult) => {
-        setView({ kind: 'loading-toc', bookInfo });
         setError(null);
         try {
             let enrichedBookInfo = bookInfo;
-            let toc;
+            let chapters: BookChapter[];
+            let sourceChapters: BookDocument['chapters'] | null = null;
             if (pdfMode && pdfFile) {
-                toc = await getBookTocFromPdf(pdfFile, bookInfo.title!, bookInfo.authors || []);
-                // Back-fill cover if searchBook didn't find one
-                if (!enrichedBookInfo.cover_url && toc.cover_url) {
-                    enrichedBookInfo = { ...enrichedBookInfo, cover_url: toc.cover_url };
+                setView({ kind: 'ingesting-pdf', bookInfo });
+                setIngestionEvent({ type: 'status', label: 'PDF wird sicher gespeichert…', progress: 4 });
+                setMappedChapters(0);
+                const started = await startBookPdfIngestion(pdfFile, bookInfo.title!, bookInfo.authors || []);
+                if (started.job_id) {
+                    await streamBookPdfIngestion(started.job_id, (event) => {
+                        setIngestionEvent(event);
+                        if (event.type === 'chapter_mapped') setMappedChapters(event.current || 0);
+                    });
                 }
+                const document = await getBookDocument(started.document_id);
+                if (document.status !== 'ready') throw new Error(document.error || 'PDF konnte nicht vorbereitet werden.');
+                setSourceDocument(document);
+                sourceChapters = document.chapters;
+                chapters = document.chapters.map((chapter) => ({
+                    chapter_number: chapter.chapter_number,
+                    title: chapter.title,
+                    level: chapter.level,
+                }));
             } else {
-                toc = await getBookToc(bookInfo.title!, bookInfo.authors || []);
+                setView({ kind: 'loading-toc', bookInfo });
+                const toc = await getBookToc(bookInfo.title!, bookInfo.authors || []);
+                chapters = toc.chapters;
             }
-            if (toc.chapters.length === 0) {
+            if (chapters.length === 0) {
                 setError('Konnte kein Inhaltsverzeichnis finden.');
                 setView({ kind: 'confirm-book', bookInfo: enrichedBookInfo });
                 return;
             }
             const defaults: Record<string, boolean> = {};
-            toc.chapters.forEach((ch) => { defaults[ch.chapter_number] = true; });
+            chapters.forEach((ch) => {
+                const sourceChapter = sourceChapters?.find((item) => item.chapter_number === ch.chapter_number);
+                defaults[ch.chapter_number] = !sourceChapters || Boolean(sourceChapter?.start_page && sourceChapter.end_page);
+            });
             setEnabledChapters(defaults);
-            setView({ kind: 'confirm-toc', bookInfo: enrichedBookInfo, chapters: toc.chapters });
-        } catch {
-            setError('Fehler beim Laden des Inhaltsverzeichnisses.');
+            setView({ kind: 'confirm-toc', bookInfo: enrichedBookInfo, chapters });
+        } catch (caught) {
+            setError(caught instanceof Error ? caught.message : 'Fehler beim Vorbereiten der PDF.');
             setView({ kind: 'confirm-book', bookInfo });
         }
     };
@@ -361,7 +404,7 @@ export default function BookPanel() {
                 chapter_number: ch.chapter_number,
                 title: ch.title,
                 level: ch.level,
-                enabled: enabledChapters[ch.chapter_number] !== false,
+                enabled: isChapterAvailable(ch) && enabledChapters[ch.chapter_number] !== false,
             }));
             const course = await createBookCourse(
                 {
@@ -372,24 +415,14 @@ export default function BookPanel() {
                     isbn: bookInfo.isbn,
                     publisher: bookInfo.publisher,
                     cover_url: bookInfo.cover_url,
-                    // Store whether this course was created with a PDF so the UI can
-                    // remember to use the PDF-based endpoints later (note generation).
-                    // We encode it in the description field as a lightweight flag since
-                    // there is no dedicated DB column for it. The flag is only read back
-                    // when the user uses the "Notiz generieren" feature.
+                    document_id: pdfMode ? sourceDocument?.id : undefined,
                 },
                 selectedChapters,
             );
-            // Store the PDF in session memory so note generation can use it
-            // (survives navigation within the panel but not a page reload — which
-            //  is fine: the user would need to re-upload anyway after reload).
-            if (pdfMode && pdfFile) {
-                sessionPdfStore.set(course.id, pdfFile);
-            }
             const firstUnit = course.units.find((u) => u.enabled && u.status === 'pending');
             if (firstUnit) await openUnitChat(course, firstUnit);
-        } catch {
-            setError('Fehler beim Erstellen des Buchkurses.');
+        } catch (caught) {
+            setError(caught instanceof Error ? caught.message : 'Fehler beim Erstellen des Buchkurses.');
         }
     };
 
@@ -478,6 +511,8 @@ export default function BookPanel() {
     };
 
     const prefetchNextUnit = (course: CourseDetail, currentUnit: CourseUnit) => {
+        // PDF chapters are prepared lazily on first open so unused chapters incur no LLM cost.
+        if (course.source_document_id) return;
         const sorted = [...course.units].sort((a, b) => a.order_index - b.order_index);
         const curIdx = sorted.findIndex(u => u.id === currentUnit.id);
         const nextUnit = sorted.slice(curIdx + 1).find(
@@ -544,10 +579,7 @@ export default function BookPanel() {
                         label: level === 'harder' ? 'Tieferes Niveau' : 'Einfacheres Niveau',
                     });
                 }
-            } else if (event.type === 'diagram') {
-                pushBubble({ kind: 'diagram', label: event.caption || 'Diagramm' });
-            }
-        });
+            });
     };
 
     const afterTurn = async (
@@ -587,8 +619,8 @@ export default function BookPanel() {
             ]);
             setSection({ current: response.current_section, total: response.total_sections });
             await afterTurn(view.course.id, view.unit.id, response);
-        } catch {
-            setError('Fehler beim Senden der Nachricht.');
+        } catch (caught) {
+            setError(caught instanceof Error ? caught.message : 'Fehler beim Senden der Nachricht.');
             setMessages((prev) => prev.filter((m) => m.id !== tempId));
         } finally {
             clearStatus();
@@ -776,15 +808,21 @@ export default function BookPanel() {
     };
 
     // ── Chapter checkbox helpers ─────────────────────────────────────
-    const toggleChapter = (chapterNumber: string) => {
+    const isChapterAvailable = (chapter: BookChapter) => {
+        if (!pdfMode || !sourceDocument) return true;
+        const sourceChapter = sourceDocument.chapters.find((item) => item.chapter_number === chapter.chapter_number);
+        return Boolean(sourceChapter?.start_page && sourceChapter.end_page);
+    };
+    const toggleChapter = (chapter: BookChapter) => {
+        if (!isChapterAvailable(chapter)) return;
         setEnabledChapters((prev) => ({
             ...prev,
-            [chapterNumber]: prev[chapterNumber] === false ? true : false,
+            [chapter.chapter_number]: prev[chapter.chapter_number] === false ? true : false,
         }));
     };
     const selectAllChapters = (chapters: BookChapter[]) => {
         const next: Record<string, boolean> = {};
-        chapters.forEach((ch) => { next[ch.chapter_number] = true; });
+        chapters.forEach((ch) => { next[ch.chapter_number] = isChapterAvailable(ch); });
         setEnabledChapters(next);
     };
     const deselectAllChapters = (chapters: BookChapter[]) => {
@@ -793,7 +831,7 @@ export default function BookPanel() {
         setEnabledChapters(next);
     };
     const enabledCount = (chapters: BookChapter[]) =>
-        chapters.filter((ch) => enabledChapters[ch.chapter_number] !== false).length;
+        chapters.filter((ch) => isChapterAvailable(ch) && enabledChapters[ch.chapter_number] !== false).length;
 
     const getUnitProgress = (course: CourseDetail, currentUnit: CourseUnit) => {
         const enabled = course.units.filter((u) => u.enabled);
@@ -1137,6 +1175,44 @@ export default function BookPanel() {
         );
     };
 
+    const renderPdfIngestion = () => {
+        if (view.kind !== 'ingesting-pdf') return null;
+        const progress = Math.max(0, Math.min(100, ingestionEvent?.progress || 4));
+        const label = ingestionEvent?.label || 'PDF wird vorbereitet…';
+        const extractedTotal = ingestionEvent?.total_pages || (ingestionEvent?.type === 'pages_progress' ? ingestionEvent.total : undefined);
+        const extractedCurrent = ingestionEvent?.extracted_pages || (ingestionEvent?.type === 'pages_progress' ? ingestionEvent.current : undefined);
+        const steps = [
+            { label: 'PDF gespeichert', complete: progress >= 12 },
+            { label: extractedTotal ? `${extractedCurrent || 0} von ${extractedTotal} Seiten extrahiert` : 'Text aus Seiten extrahieren', complete: progress >= 38 },
+            { label: ingestionEvent?.chapters ? `${ingestionEvent.chapters} Kapitel erkannt` : 'Inhaltsverzeichnis erkennen', complete: progress >= 58 },
+            { label: ingestionEvent?.total ? `Kapitel zuordnen: ${mappedChapters}/${ingestionEvent.total}` : 'Kapitel und Seitenbereiche zuordnen', complete: progress >= 95 },
+        ];
+        return (
+            <div className="h-full flex items-center justify-center p-4">
+                <div className="w-full max-w-lg rounded-2xl border border-dark-700 bg-dark-800 p-6 shadow-xl">
+                    <div className="flex items-start gap-3 mb-5">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/15"><FiFileText className="h-5 w-5 text-amber-400" /></div>
+                        <div>
+                            <h3 className="text-lg font-semibold text-white">Buch wird vorbereitet</h3>
+                            <p className="text-sm text-dark-400 truncate max-w-[360px]">{view.bookInfo.title}</p>
+                        </div>
+                    </div>
+                    <div className="mb-2 flex justify-between text-xs"><span className="text-amber-300">{label}</span><span className="text-dark-400">{progress}%</span></div>
+                    <div className="h-2 overflow-hidden rounded-full bg-dark-900"><div className="h-full rounded-full bg-amber-500 transition-all duration-500" style={{ width: `${progress}%` }} /></div>
+                    <div className="mt-5 space-y-3">
+                        {steps.map((step) => (
+                            <div key={step.label} className={`flex items-center gap-2 text-sm ${step.complete ? 'text-dark-300' : 'text-dark-500'}`}>
+                                {step.complete ? <FiCheck className="h-4 w-4 text-green-400" /> : <div className="h-3.5 w-3.5 rounded-full border border-dark-600" />}
+                                <span>{step.label}</span>
+                            </div>
+                        ))}
+                    </div>
+                    <p className="mt-5 text-xs leading-relaxed text-dark-500">Die PDF wird nur einmal extrahiert. Danach werden Kapitel und Antworten dauerhaft aus dieser Ausgabe erzeugt.</p>
+                </div>
+            </div>
+        );
+    };
+
     // ── Render: Confirm TOC ──────────────────────────────────────────
     const renderConfirmToc = () => {
         if (view.kind !== 'confirm-toc') return null;
@@ -1175,12 +1251,18 @@ export default function BookPanel() {
 
                         <div className="max-h-[500px] overflow-y-auto space-y-0.5 mb-6 pr-2">
                             {chapters.map((ch, i) => {
-                                const enabled = enabledChapters[ch.chapter_number] !== false;
+                                const sourceChapter = sourceDocument?.chapters.find((item) => item.chapter_number === ch.chapter_number);
+                                const available = isChapterAvailable(ch);
+                                const enabled = available && enabledChapters[ch.chapter_number] !== false;
+                                const pages = sourceChapter?.start_page
+                                    ? (sourceChapter.start_page === sourceChapter.end_page ? `S. ${sourceChapter.start_page}` : `S. ${sourceChapter.start_page}–${sourceChapter.end_page}`)
+                                    : null;
                                 return (
                                     <button
                                         key={i}
-                                        onClick={() => toggleChapter(ch.chapter_number)}
-                                        className={`w-full flex items-center gap-2 py-2 text-sm rounded-lg px-2 transition-colors hover:bg-dark-700/50 ${!enabled ? 'opacity-40' : ''}`}
+                                        onClick={() => toggleChapter(ch)}
+                                        disabled={!available}
+                                        className={`w-full flex items-center gap-2 py-2 text-sm rounded-lg px-2 transition-colors ${available ? 'hover:bg-dark-700/50' : 'cursor-not-allowed'} ${!enabled ? 'opacity-40' : ''}`}
                                         style={{ paddingLeft: `${(ch.level - 1) * 20 + 8}px` }}
                                     >
                                         {enabled ? (
@@ -1194,6 +1276,8 @@ export default function BookPanel() {
                                         <span className={`text-left ${ch.level === 1 ? 'text-white font-semibold' : ch.level === 2 ? 'text-dark-300' : 'text-dark-500'}`}>
                                             {ch.title}
                                         </span>
+                                        {pages && <span className="ml-auto text-[11px] text-amber-400/70 whitespace-nowrap">{pages}</span>}
+                                        {!available && <span className="ml-auto text-[11px] text-red-300/70 whitespace-nowrap">nicht zuordenbar</span>}
                                     </button>
                                 );
                             })}
@@ -1258,6 +1342,7 @@ export default function BookPanel() {
                                         Kapitel {progress.current}/{progress.total}
                                     </span>
                                     <span className="text-dark-500 font-mono text-[10px]">{unit.unit_number}</span>
+                                    {course.source_document_id && <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-medium text-amber-300">PDF-Quelle</span>}
                                     <h3 className="text-sm font-semibold text-white truncate">{unit.title}</h3>
                                 </div>
                                 {hasSections ? (
@@ -1317,7 +1402,7 @@ export default function BookPanel() {
                     {visibleMessages.map((msg, idx, arr) => {
                         const isLastAssistant = msg.role === 'assistant' && idx === arr.length - 1;
                         if (msg.role === 'note_generated') return null;
-                        const { diagrams, checkpoints } = msg.role === 'assistant' ? messageExtras(msg) : { diagrams: [], checkpoints: [] };
+                        const { checkpoints, sourcePages } = msg.role === 'assistant' ? messageExtras(msg) : { checkpoints: [], sourcePages: null };
                         return (
                             <div
                                 key={msg.id}
@@ -1336,9 +1421,7 @@ export default function BookPanel() {
                                                     {msg.content}
                                                 </ReactMarkdown>
                                             </div>
-                                            {diagrams.map((d, i) => (
-                                                <MermaidDiagram key={i} code={d.code} caption={d.caption} />
-                                            ))}
+                                            {sourcePages && <div className="mt-3 inline-flex rounded-md border border-amber-500/20 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-200">PDF-Quelle · {sourcePages}</div>}
                                             {checkpoints.map((q, i) => (
                                                 <div key={i} className="mt-3 flex items-start gap-2 px-3 py-2 rounded-xl bg-amber-600/10 border border-amber-500/20">
                                                     <FiMessageCircle className="w-3.5 h-3.5 text-amber-300 mt-0.5 flex-shrink-0" />
@@ -1425,7 +1508,7 @@ export default function BookPanel() {
                     </div>
                 </div>
 
-                {/* Activity bubbles — confirmed actions (notes, understanding, difficulty, diagrams) */}
+                {/* Activity bubbles — confirmed actions (notes, understanding, difficulty) */}
                 <ActivityBubbleHost bubbles={bubbles} onDismiss={dismissBubble} />
             </div>
         );
@@ -1646,6 +1729,7 @@ export default function BookPanel() {
                 {view.kind === 'books' && renderBooksList()}
                 {view.kind === 'confirm-book' && renderConfirmBook()}
                 {view.kind === 'loading-toc' && renderLoadingToc()}
+                {view.kind === 'ingesting-pdf' && renderPdfIngestion()}
                 {view.kind === 'confirm-toc' && renderConfirmToc()}
                 {view.kind === 'lesson-chat' && renderLessonChat()}
                 {view.kind === 'lesson-complete' && (

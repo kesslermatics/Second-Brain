@@ -404,7 +404,6 @@ export type ActivityBubbleKind =
     | 'understanding_struggling'
     | 'difficulty_up'
     | 'difficulty_down'
-    | 'diagram'
     | 'knowledge_found'
     | 'quiz_ready';
 
@@ -443,8 +442,6 @@ function _bubbleConfig(kind: ActivityBubbleKind): {
             return { icon: <FiArrowRight className="w-3.5 h-3.5 rotate-[-45deg]" />, label: 'Tempo erhöht', iconBg: 'bg-blue-600/20', iconColor: 'text-blue-400' };
         case 'difficulty_down':
             return { icon: <FiArrowRight className="w-3.5 h-3.5 rotate-[45deg]" />, label: 'Tempo verlangsamt', iconBg: 'bg-purple-600/20', iconColor: 'text-purple-400' };
-        case 'diagram':
-            return { icon: <LuListChecks className="w-3.5 h-3.5" />, label: 'Diagramm erstellt', iconBg: 'bg-amber-600/20', iconColor: 'text-amber-400' };
         case 'knowledge_found':
             return { icon: <FiSearch className="w-3.5 h-3.5" />, label: 'Vorwissen gefunden', iconBg: 'bg-indigo-600/20', iconColor: 'text-indigo-400' };
         case 'quiz_ready':

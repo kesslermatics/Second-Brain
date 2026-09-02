@@ -292,6 +292,7 @@ export interface LessonSection {
 
 export interface CourseUnit {
   id: string;
+  source_chapter_id?: string | null;
   unit_number: string;
   title: string;
   description: string;
@@ -314,6 +315,7 @@ export interface CourseDetail {
   status: 'draft' | 'active' | 'completed';
   kind: 'teacher' | 'book';
   parent_course_id: string | null;
+  source_document_id?: string | null;
   book_authors?: string[];
   book_year?: string;
   book_isbn?: string;
@@ -347,6 +349,47 @@ export interface AdvancedFocusSuggestion {
   topic: string;
 }
 
+export interface BookDocumentChapter {
+  id: string;
+  chapter_number: string;
+  title: string;
+  level: number;
+  start_page: number | null;
+  end_page: number | null;
+  ready: boolean;
+}
+
+export interface BookDocument {
+  id: string;
+  title: string;
+  authors: string[];
+  status: 'queued' | 'processing' | 'ready' | 'failed';
+  error: string | null;
+  page_count: number | null;
+  extracted_page_count: number | null;
+  toc_source: string | null;
+  chapters: BookDocumentChapter[];
+}
+
+export interface BookIngestionEvent {
+  type: 'status' | 'pages_progress' | 'pages_extracted' | 'toc_found' | 'chapter_mapped' | 'done' | 'error' | 'cancelled';
+  step?: string;
+  label?: string;
+  message?: string;
+  detail?: string;
+  progress?: number;
+  total_pages?: number;
+  extracted_pages?: number;
+  chapters?: number;
+  source?: string;
+  current?: number;
+  total?: number;
+  chapter?: string;
+  start_page?: number | null;
+  end_page?: number | null;
+  document_id?: string;
+}
+
 export interface BookSummaryChapter {
   id: string;
   unit_number: string;
@@ -377,11 +420,6 @@ export interface LessonRecap {
   next_preview: string;
 }
 
-export interface LessonDiagram {
-  code: string;
-  caption?: string;
-}
-
 export interface SavedNoteInfo {
   note_id: string;
   title: string;
@@ -397,7 +435,6 @@ export interface TeacherChatResponse {
   is_last_section: boolean;
   quiz_suggested?: boolean;
   saved_notes?: SavedNoteInfo[];
-  diagrams?: LessonDiagram[];
   checkpoints?: string[];
 }
 

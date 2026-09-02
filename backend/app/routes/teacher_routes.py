@@ -12,7 +12,7 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 from app.database import get_db, async_session
 from app.auth import get_current_user
-from app.models import User, Tag, Course, CourseUnit, CourseMessage, Note, Folder
+from app.models import User, Tag, Course, CourseUnit, CourseMessage, Note, Folder, BookDocument, BookDocumentChapter
 from app.services.teacher_service import (
     generate_curriculum,
     chat_with_teacher,
@@ -33,6 +33,7 @@ from app.services.teacher_service import (
     edit_curriculum,
 )
 from app.services.book_service import generate_chapter_summary
+from app.services.book_document_service import chapter_pages_label, prepare_pdf_chapter, stream_pdf_chapter_answer
 from app.services.teacher_agent import run_teacher_agent
 
 router = APIRouter(prefix="/teacher", tags=["teacher"])
@@ -165,6 +166,7 @@ async def get_course(
         "status": course.status,
         "kind": course.kind or "teacher",
         "parent_course_id": str(course.parent_course_id) if course.parent_course_id else None,
+        "source_document_id": str(course.source_document_id) if course.source_document_id else None,
         "book_authors": course.book_authors,
         "book_year": course.book_year,
         "book_isbn": course.book_isbn,
@@ -174,6 +176,7 @@ async def get_course(
         "units": [
             {
                 "id": str(u.id),
+                "source_chapter_id": str(u.source_chapter_id) if u.source_chapter_id else None,
                 "unit_number": u.unit_number,
                 "title": u.title,
                 "description": u.description,
@@ -411,6 +414,7 @@ async def create_book_course(
     cover_url = data.get("cover_url")
     category = data.get("category")
     chapters = data.get("chapters", [])
+    source_document_id = data.get("document_id")
 
     if not title or not chapters:
         raise HTTPException(status_code=400, detail="Title and chapters required")
@@ -419,6 +423,38 @@ async def create_book_course(
     enabled_chapters = [ch for ch in chapters if ch.get("enabled", True)]
     if not enabled_chapters:
         raise HTTPException(status_code=400, detail="At least one chapter must be enabled")
+
+    # A PDF course is permanently tied to its private, already-ingested source.
+    source_document = None
+    source_chapters_by_number: dict[str, BookDocumentChapter] = {}
+    if source_document_id:
+        try:
+            document_result = await db.execute(
+                select(BookDocument)
+                .options(selectinload(BookDocument.chapters))
+                .where(BookDocument.id == source_document_id, BookDocument.user_id == current_user.id)
+            )
+            source_document = document_result.scalars().first()
+        except (ValueError, TypeError):
+            source_document = None
+        if not source_document or source_document.status != "ready":
+            raise HTTPException(status_code=400, detail="PDF source is not ready")
+        source_chapters_by_number = {chapter.chapter_number: chapter for chapter in source_document.chapters}
+        unavailable_chapters = [
+            ch.get("title", ch.get("chapter_number", "Unbekanntes Kapitel"))
+            for ch in enabled_chapters
+            if not (
+                (source_chapter := source_chapters_by_number.get(str(ch.get("chapter_number", ""))))
+                and source_chapter.start_page
+                and source_chapter.end_page
+            )
+        ]
+        if unavailable_chapters:
+            raise HTTPException(
+                status_code=400,
+                detail="Diese Kapitel konnten nicht zuverlässig in der PDF zugeordnet werden: "
+                + ", ".join(str(title) for title in unavailable_chapters[:3]),
+            )
 
     # Create course
     course = Course(
@@ -433,6 +469,7 @@ async def create_book_course(
         book_publisher=publisher or None,
         book_cover_url=cover_url or None,
         category=category or None,
+        source_document_id=source_document.id if source_document else None,
         user_id=current_user.id,
     )
     db.add(course)
@@ -443,6 +480,7 @@ async def create_book_course(
     for idx, ch in enumerate(enabled_chapters):
         unit = CourseUnit(
             course_id=course.id,
+            source_chapter_id=(source_chapters_by_number.get(str(ch.get("chapter_number", ""))).id if source_document else None),
             unit_number=ch.get("chapter_number", str(idx + 1)),
             title=ch.get("title", f"Kapitel {idx + 1}"),
             description="",
@@ -699,6 +737,14 @@ async def unit_chat(
     if not unit:
         raise HTTPException(status_code=404, detail="Unit not found")
 
+    # PDF-backed chapters have to go through the streaming, source-grounded path.
+    # The metadata-only endpoint must never silently answer from non-PDF context.
+    if course.source_document_id and unit.source_chapter_id:
+        raise HTTPException(
+            status_code=409,
+            detail="PDF-basierte Kapitel werden ausschließlich über den Streaming-Chat beantwortet.",
+        )
+
     # Get existing chat history for this unit
     msg_result = await db.execute(
         select(CourseMessage)
@@ -862,8 +908,11 @@ async def unit_chat_stream(
     previous_summary = _build_previous_units_summary(list(course.units), unit.order_index)
     next_title = _get_next_unit_title(list(course.units), unit.order_index)
 
-    # Sections — lazily generate and persist before background task starts
-    if not unit.sections:
+    # PDF-backed books are one coherent chapter explanation, not forced micro-sections.
+    is_pdf_book = bool(course.source_document_id and unit.source_chapter_id)
+
+    # Sections remain available for normal courses and legacy metadata-only book courses.
+    if not is_pdf_book and not unit.sections:
         try:
             is_book = (course.kind or "teacher") == "book"
             unit.sections = await generate_lesson_sections(
@@ -878,12 +927,12 @@ async def unit_chat_stream(
         except Exception:
             unit.sections = None
 
-    if user_message == "[ABSCHNITT_WEITER]" and unit.sections:
+    if not is_pdf_book and user_message == "[ABSCHNITT_WEITER]" and unit.sections:
         if (unit.current_section or 0) < len(unit.sections) - 1:
             unit.current_section = (unit.current_section or 0) + 1
 
-    sections_list = unit.sections or None
-    current_section_idx = unit.current_section or 0
+    sections_list = None if is_pdf_book else (unit.sections or None)
+    current_section_idx = 0 if is_pdf_book else (unit.current_section or 0)
 
     # Save user message and flush DB state before the background task
     user_msg = CourseMessage(course_id=course.id, unit_id=unit.id, role="user", content=user_message)
@@ -935,63 +984,124 @@ async def unit_chat_stream(
         full_response_parts: list[str] = []
         collected_final: dict = {}
 
+        source_pages: str | None = None
         async with async_session() as bg_db:
-            async for event in run_teacher_agent(
-                user_id=user_id_str,
-                db=bg_db,
-                subject_block=subject_block,
-                sections=sections_list,
-                current_section=current_section_idx,
-                chat_history=chat_history,
-                user_message=user_message,
-                default_folder=default_folder,
-            ):
-                etype = event.get("type")
-                if etype == "thinking":
-                    yield {"type": "thinking", "content": event["content"]}
-                elif etype == "status":
-                    yield {"type": "status", "content": event["content"]}
-                elif etype == "status_phrases":
-                    yield {"type": "status_phrases", "phrases": event["phrases"]}
-                elif etype == "chunk":
-                    full_response_parts.append(event["content"])
-                    yield {"type": "chunk", "content": event["content"]}
-                elif etype == "quiz_suggested":
-                    yield {"type": "quiz_suggested"}
-                elif etype == "knowledge_searched":
-                    yield {"type": "knowledge_searched", "count": event.get("count", 0), "top_title": event.get("top_title", ""), "top_score_pct": event.get("top_score_pct", 0), "query": event.get("query", "")}
-                elif etype == "quiz_ready":
-                    yield {"type": "quiz_ready"}
-                elif etype == "note_saved":
-                    yield {"type": "note_saved", "note": event["note"]}
-                elif etype == "note_read":
-                    yield {"type": "note_read", "note_id": event.get("note_id", ""), "title": event.get("title", "")}
-                elif etype == "difficulty":
-                    yield {"type": "difficulty", "level": event.get("level")}
-                elif etype == "understanding":
-                    yield {"type": "understanding", "concept": event.get("concept"), "status": event.get("status")}
-                elif etype == "checkpoint":
-                    yield {"type": "checkpoint", "question": event.get("question", "")}
-                elif etype == "diagram":
-                    yield {"type": "diagram", "code": event.get("code", ""), "caption": event.get("caption", "")}
-                elif etype == "done":
-                    collected_final = event
+            if is_pdf_book:
+                chapter_result = await bg_db.execute(
+                    select(BookDocumentChapter)
+                    .options(selectinload(BookDocumentChapter.chunks))
+                    .where(
+                        BookDocumentChapter.id == unit.source_chapter_id,
+                        BookDocumentChapter.document_id == course.source_document_id,
+                    )
+                    .with_for_update()
+                )
+                source_chapter = chapter_result.scalars().first()
+                if not source_chapter:
+                    raise ValueError("Die PDF-Quelle für dieses Kapitel wurde nicht gefunden.")
+                source_pages = chapter_pages_label(source_chapter)
+
+                async def save_chapter_note(explanation: str) -> list[dict]:
+                    if source_chapter.note_id:
+                        return []
+                    folder = await _ensure_folder_path_local(f"Bücher/{course.title}", user_id_str, bg_db)
+                    note = Note(
+                        title=f"Kapitel {source_chapter.chapter_number}: {source_chapter.title}",
+                        content=f"# Kapitel {source_chapter.chapter_number}: {source_chapter.title}\n\n{explanation}\n\n---\n*PDF-Quelle: {source_pages}*",
+                        note_type="text",
+                        folder_id=folder.id,
+                        user_id=uuid.UUID(user_id_str),
+                    )
+                    bg_db.add(note)
+                    await bg_db.flush()
+                    source_chapter.note_id = note.id
+                    return [{"note_id": str(note.id), "title": note.title, "folder": folder.path, "action": "created"}]
+
+                if not source_chapter.explanation:
+                    yield {"type": "status", "content": "Kapitelinhalt aus der PDF wird zusammengeführt…"}
+                    explanation = await prepare_pdf_chapter(source_chapter, course.title, course.book_authors or [])
+                    saved_notes = await save_chapter_note(explanation)
+                    collected_final = {"saved_notes": saved_notes}
+                else:
+                    explanation = source_chapter.explanation
+                    saved_notes = await save_chapter_note(explanation)
+                    collected_final = {"saved_notes": saved_notes}
+
+                # Persist the chapter cache/note before reporting it or yielding LLM output,
+                # so other tabs observe the completed preparation instead of regenerating it.
+                await bg_db.commit()
+                for note in saved_notes:
+                    yield {"type": "note_saved", "note": note}
+
+                if user_message == "[START]":
+                    yield {"type": "status", "content": f"Kapitel basiert auf {source_pages}"}
+                    full_response_parts.append(explanation)
+                    yield {"type": "chunk", "content": explanation}
+                else:
+                    yield {"type": "status", "content": "Passende Stellen in der PDF werden nachgeschlagen…"}
+                    async for event in stream_pdf_chapter_answer(
+                        source_chapter, course.title, course.book_authors or [], user_message, chat_history,
+                    ):
+                        if event.get("type") == "chunk":
+                            full_response_parts.append(event["content"])
+                            yield {"type": "chunk", "content": event["content"]}
+                        elif event.get("type") == "thinking":
+                            yield {"type": "thinking", "content": event["content"]}
+            else:
+                async for event in run_teacher_agent(
+                    user_id=user_id_str,
+                    db=bg_db,
+                    subject_block=subject_block,
+                    sections=sections_list,
+                    current_section=current_section_idx,
+                    chat_history=chat_history,
+                    user_message=user_message,
+                    default_folder=default_folder,
+                ):
+                    etype = event.get("type")
+                    if etype == "thinking":
+                        yield {"type": "thinking", "content": event["content"]}
+                    elif etype == "status":
+                        yield {"type": "status", "content": event["content"]}
+                    elif etype == "status_phrases":
+                        yield {"type": "status_phrases", "phrases": event["phrases"]}
+                    elif etype == "chunk":
+                        full_response_parts.append(event["content"])
+                        yield {"type": "chunk", "content": event["content"]}
+                    elif etype == "quiz_suggested":
+                        yield {"type": "quiz_suggested"}
+                    elif etype == "knowledge_searched":
+                        yield {"type": "knowledge_searched", "count": event.get("count", 0), "top_title": event.get("top_title", ""), "top_score_pct": event.get("top_score_pct", 0), "query": event.get("query", "")}
+                    elif etype == "quiz_ready":
+                        yield {"type": "quiz_ready"}
+                    elif etype == "note_saved":
+                        yield {"type": "note_saved", "note": event["note"]}
+                    elif etype == "note_read":
+                        yield {"type": "note_read", "note_id": event.get("note_id", ""), "title": event.get("title", "")}
+                    elif etype == "difficulty":
+                        yield {"type": "difficulty", "level": event.get("level")}
+                    elif etype == "understanding":
+                        yield {"type": "understanding", "concept": event.get("concept"), "status": event.get("status")}
+                    elif etype == "checkpoint":
+                        yield {"type": "checkpoint", "question": event.get("question", "")}
+                    elif etype == "done":
+                        collected_final = event
 
             # Persist the assistant message
             full_text = "".join(full_response_parts).strip()
             quiz_suggested = bool(collected_final.get("quiz_suggested"))
             saved_notes = collected_final.get("saved_notes", [])
             understanding = collected_final.get("understanding", [])
-            diagrams = collected_final.get("diagrams", [])
             checkpoints = collected_final.get("checkpoints", [])
 
             msg_metadata: dict = {}
-            if diagrams:
-                msg_metadata["diagrams"] = diagrams
             if checkpoints:
                 msg_metadata["checkpoints"] = checkpoints
             if understanding:
                 msg_metadata["understanding"] = understanding
+            if source_pages:
+                msg_metadata["pdf_source_pages"] = source_pages
+                msg_metadata["source_type"] = "pdf"
 
             assistant_msg = CourseMessage(
                 course_id=uuid.UUID(course_id_str),
@@ -1029,15 +1139,16 @@ async def unit_chat_stream(
             "is_last_section": is_last,
             "quiz_suggested": quiz_suggested,
             "saved_notes": saved_notes,
-            "diagrams": diagrams,
             "checkpoints": checkpoints,
             "understanding": understanding,
+            "source_pages": source_pages,
         }
 
     # Register job and fire the background task
     job_id = str(uuid.uuid4())
-    job_store.create_job(job_id)
-    asyncio.create_task(job_store.run_job(job_id, _generate_events()))
+    job_store.create_job(job_id, owner_id=str(current_user.id))
+    task = asyncio.create_task(job_store.run_job(job_id, _generate_events()))
+    job_store.set_task(job_id, task)
 
     return {"job_id": job_id}
 

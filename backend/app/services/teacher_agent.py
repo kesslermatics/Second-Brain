@@ -12,7 +12,6 @@ autonomously, mid-conversation — when to:
   - SILENTLY extend an existing note instead of duplicating it (update_note)
   - create a folder to organise notes (create_folder)
   - throw in a light inline check-in question (ask_checkpoint)
-  - draw a small diagram when the topic is clearly structural (draw_diagram)
   - advance to the next section (advance_section)
 
 Notes are now persisted immediately and in the background — there is no review
@@ -28,7 +27,6 @@ Streaming SSE events (consumed by the frontend):
   {"type": "difficulty", "level": ...}      difficulty change
   {"type": "understanding", ...}            concept mastery signal
   {"type": "checkpoint", "question": ...}   inline check-in question
-  {"type": "diagram", "code": ...}          a mermaid diagram to render
   {"type": "advance_section"}               model advanced the section
   {"type": "done", ...}                     final event
 """
@@ -187,33 +185,13 @@ def _teacher_tools() -> list:
         },
     )
 
-    draw_diagram = types.FunctionDeclaration(
-        name="draw_diagram",
-        description=(
-            "Zeichne ein kleines Diagramm, WENN das Thema klar strukturell ist (Abläufe, Hierarchien, "
-            "Zeitachsen, Beziehungen). Nutze dies NUR, wenn ein Diagramm den Inhalt wirklich klarer macht — "
-            "nicht bei abstrakten/unstrukturierten Themen. Verwende gültige, EINFACHE Mermaid-Syntax "
-            "(flowchart TD / sequenceDiagram). Halte es klein und übersichtlich. "
-            "WICHTIG: Keine 'style'-Befehle und keine inline-Farben (fill, stroke, color) — "
-            "das Styling übernimmt die App automatisch."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "code": {"type": "string", "description": "Gültiger Mermaid-Code (z.B. 'flowchart TD; A-->B')"},
-                "caption": {"type": "string", "description": "Kurze Bildunterschrift"},
-            },
-            "required": ["code"],
-        },
-    )
-
     # NOTE: no autonomous `advance_section` tool. Section progression is driven
     # exclusively by the student's "Weiter" button ([ABSCHNITT_WEITER]) so the
     # displayed progress and the explained section can never desync.
 
     return [types.Tool(function_declarations=[
         search_my_notes, propose_quiz, set_difficulty, mark_understanding,
-        save_note, update_note, read_note, ask_checkpoint, draw_diagram,
+        save_note, update_note, read_note, ask_checkpoint,
     ])]
 
 
@@ -233,7 +211,6 @@ NOTIZ-REGELN (sehr wichtig für konsistente Ablage):
 - Alle Notizen landen automatisch im richtigen Kurs-/Buch-Ordner — du gibst KEINEN `folder`-Parameter an, das wird serverseitig gesetzt
 - Erstelle KEINE Unterordner via `create_folder` — die Notizen liegen alle flach im Kurs-Ordner
 - Du wirfst SEHR SELTEN und nur wenn es sich wirklich natürlich ergibt eine beiläufige Zwischenfrage ein (`ask_checkpoint`). Maximal einmal pro Lektion, nicht nach jedem Abschnitt — und NIEMALS als letzter Satz einer Erklärung mit "Ein kurzer Checkpoint für dich:" oder ähnlichem. Wenn überhaupt, dann fließt die Frage organisch in den Text ein, als würde ein echter Lehrer kurz nachfragen.
-- Bei klar strukturierten Themen (Abläufe, Hierarchien, Zeitachsen) kannst du ein kleines Diagramm zeichnen (`draw_diagram`) — aber nur, wenn es wirklich hilft.
 
 ABSCHNITTSWEISES LEHREN: Behandle immer nur den aktuell markierten Abschnitt — substantiell, mit Beispiel (in der Regel 2-4 Absätze), fokussiert auf dieses eine Teilkonzept. Wirf nicht die ganze Lektion auf einmal raus. Den Wechsel zum nächsten Abschnitt löst ausschließlich der Student per Weiter-Button aus — du selbst wechselst NICHT eigenständig den Abschnitt.
 
@@ -246,7 +223,7 @@ SPEZIAL-NACHRICHTEN:
 WICHTIG:
 - Du kannst mehrere Tools nacheinander nutzen, bevor du antwortest. Der Text, den du schreibst, ist deine eigentliche Erklärung an den Studenten.
 - Erwähne die Tools NICHT im Fließtext (schreibe nicht "ich speichere jetzt eine Notiz") — das passiert still im Hintergrund und wird dem Studenten separat angezeigt.
-- Schreibe KEINEN Mermaid-Code direkt in den Antworttext. Wenn ein Diagramm hilft, nutze ausschließlich das `draw_diagram`-Tool — sonst wird es als roher Code angezeigt statt gerendert.
+- Schreibe keine Diagramme oder Mermaid-Code in den Antworttext.
 - Bei mathematischen Themen: LaTeX ($...$ inline, $$...$$ als Block). Bei nicht-mathematischen Themen keine Formeln.
 
 {FORMATTING_RULES}
@@ -324,7 +301,6 @@ async def run_teacher_agent(
         "difficulty": None,
         "understanding": [],
         "checkpoints": [],
-        "diagrams": [],
     }
 
     # Track the latest thinking text so we can turn it into a status line before
@@ -501,12 +477,6 @@ async def run_teacher_agent(
                 if q:
                     collected["checkpoints"].append(q)
                     yield {"type": "checkpoint", "question": q}
-            elif name == "draw_diagram":
-                code = args.get("code", "")
-                if code:
-                    d = {"code": code, "caption": args.get("caption", "")}
-                    collected["diagrams"].append(d)
-                    yield {"type": "diagram", **d}
 
             response_parts.append(types.Part.from_function_response(name=name, response=result))
 
@@ -571,8 +541,6 @@ async def _execute_teacher_tool(
             return {"status": "created", "folder": folder.path if folder else args.get("path", "")}
         elif name == "ask_checkpoint":
             return {"status": "asked", "message": "Die Zwischenfrage wird dem Studenten angezeigt."}
-        elif name == "draw_diagram":
-            return {"status": "drawn", "message": "Das Diagramm wird dem Studenten angezeigt."}
         elif name == "advance_section":
             return {"status": "advanced"}
         return {"error": f"Unbekanntes Tool: {name}"}

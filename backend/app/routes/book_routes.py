@@ -1,19 +1,145 @@
 """Book processing routes — search, TOC, chapter note generation."""
 
 import json
+import asyncio
+import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from app.database import get_db
 from app.auth import get_current_user
-from app.models import User, Folder, Tag, Note
+from app.models import User, Folder, Tag, Note, BookDocument
 from app.services.book_service import (
     search_book, get_book_toc, generate_chapter_note, generate_topic_note,
     ai_edit_book_content, get_pdf_toc, generate_chapter_note_from_pdf, extract_pdf_text,
     fetch_book_cover,
 )
+from app.services.book_document_service import document_hash, ingest_book_document, store_document_pdf
 
 router = APIRouter(prefix="/books", tags=["books"])
+
+
+@router.post("/documents/ingest")
+async def ingest_pdf_book_document(
+    pdf: UploadFile = File(...),
+    title: str = Form(...),
+    authors: str = Form("[]"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Persist and asynchronously prepare a PDF as a grounded book source."""
+    if not pdf.content_type or "pdf" not in pdf.content_type.lower():
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    if not title.strip():
+        raise HTTPException(status_code=400, detail="Book title required")
+    pdf_bytes = await pdf.read()
+    if not pdf_bytes:
+        raise HTTPException(status_code=400, detail="The uploaded PDF is empty")
+    if len(pdf_bytes) > 50 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="PDF too large (max 50 MB)")
+    try:
+        authors_list = json.loads(authors)
+        if not isinstance(authors_list, list):
+            authors_list = []
+    except Exception:
+        authors_list = []
+
+    digest = document_hash(pdf_bytes)
+    existing_result = await db.execute(
+        select(BookDocument).where(
+            BookDocument.user_id == current_user.id,
+            BookDocument.content_hash == digest,
+        )
+    )
+    existing = existing_result.scalars().first()
+    if existing and existing.status == "ready":
+        return {"document_id": str(existing.id), "job_id": None, "reused": True, "status": "ready"}
+    if existing and existing.status in {"queued", "processing"}:
+        raise HTTPException(
+            status_code=409,
+            detail="Diese PDF wird bereits vorbereitet. Bitte warte, bis der laufende Import abgeschlossen ist.",
+        )
+
+    document_id = uuid.uuid4()
+    stored_path = store_document_pdf(str(current_user.id), str(document_id), pdf_bytes)
+    document = BookDocument(
+        id=document_id,
+        user_id=current_user.id,
+        original_filename=pdf.filename or "book.pdf",
+        stored_path=stored_path,
+        content_hash=digest,
+        title=title.strip(),
+        authors=authors_list,
+        status="queued",
+    )
+    db.add(document)
+    await db.commit()
+
+    from app.services.job_store import job_store
+    job_id = str(uuid.uuid4())
+    job_store.create_job(job_id, owner_id=str(current_user.id))
+
+    async def _ingest_events():
+        try:
+            async for event in ingest_book_document(str(document_id)):
+                yield event
+        except Exception as exc:
+            from app.database import async_session
+            async with async_session() as background_db:
+                failed = await background_db.get(BookDocument, document_id)
+                if failed:
+                    failed.status = "failed"
+                    failed.error = str(exc)[:500]
+                    await background_db.commit()
+            raise
+
+    task = asyncio.create_task(job_store.run_job(job_id, _ingest_events()))
+    job_store.set_task(job_id, task)
+    return {"document_id": str(document_id), "job_id": job_id, "reused": False, "status": "queued"}
+
+
+@router.get("/documents/{document_id}")
+async def get_pdf_book_document(
+    document_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        parsed_document_id = uuid.UUID(document_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    result = await db.execute(
+        select(BookDocument)
+        .options(selectinload(BookDocument.chapters))
+        .where(BookDocument.id == parsed_document_id, BookDocument.user_id == current_user.id)
+    )
+    document = result.scalars().first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return {
+        "id": str(document.id),
+        "title": document.title,
+        "authors": document.authors or [],
+        "status": document.status,
+        "error": document.error,
+        "page_count": document.page_count,
+        "extracted_page_count": document.extracted_page_count,
+        "toc_source": document.toc_source,
+        "chapters": [
+            {
+                "id": str(chapter.id),
+                "chapter_number": chapter.chapter_number,
+                "title": chapter.title,
+                "level": chapter.level,
+                "start_page": chapter.start_page,
+                "end_page": chapter.end_page,
+                "ready": bool(chapter.explanation),
+            }
+            for chapter in document.chapters
+        ],
+    }
 
 
 @router.post("/search")

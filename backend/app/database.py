@@ -173,3 +173,17 @@ async def init_db():
                 )
         except Exception:
             pass
+        # Persisted PDF sources for grounded book courses
+        try:
+            for table, col, dtype in [
+                ("courses", "source_document_id", "UUID REFERENCES book_documents(id) ON DELETE SET NULL"),
+                ("course_units", "source_chapter_id", "UUID REFERENCES book_document_chapters(id) ON DELETE SET NULL"),
+            ]:
+                await conn.execute(
+                    __import__('sqlalchemy').text(
+                        f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {dtype}"
+                    )
+                )
+        except Exception:
+            # Fresh databases receive the columns via Base.metadata.create_all.
+            pass

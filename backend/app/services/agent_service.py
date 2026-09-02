@@ -137,7 +137,7 @@ def _get_agent_tools() -> list:
         name="search_notes",
         description=(
             "Semantische und Volltextsuche über alle Notizen und Bilder des Benutzers. "
-            "Gibt standardmäßig bis zu 10 Treffer zurück. WICHTIG: Formuliere EINE breite, "
+            "Gibt standardmäßig bis zu 5 Treffer zurück. WICHTIG: Formuliere EINE breite, "
             "kombinierte Suchanfrage statt mehrerer eng verwandter Einzelsuchen (z.B. 'Sponsoring "
             "Kündigung Vertrag' statt drei separater Suchen für jeden Begriff). Wiederhole eine "
             "Suche NICHT mit nur leicht abgewandelten Begriffen, wenn die erste schon Treffer lieferte."
@@ -151,7 +151,7 @@ def _get_agent_tools() -> list:
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Maximale Anzahl Treffer (Standard 10, max 30).",
+                    "description": "Maximale Anzahl Treffer (Standard 5, max 10).",
                 },
             },
             "required": ["query"],
@@ -481,10 +481,10 @@ async def _execute_tool(name: str, args: dict, user_id: str, db: AsyncSession) -
     try:
         if name == "search_notes":
             try:
-                limit = int(args.get("limit") or 10)
+                limit = int(args.get("limit") or 5)
             except (ValueError, TypeError):
-                limit = 10
-            limit = max(1, min(limit, 30))
+                limit = 5
+            limit = max(1, min(limit, 10))
             results = await hybrid_search(
                 query=args.get("query", ""),
                 user_id=user_id,

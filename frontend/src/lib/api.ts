@@ -8,6 +8,7 @@ import type {
   BookSearchResult, BookTocResult, BookChapter, BookChapterNoteResult,
   CourseListItem, CourseDetail, CourseMessage as CourseMsg, CourseNoteResult, AdvancedFocusSuggestion,
   BookSummariesResponse, QuizQuestion, LessonRecap, TeacherChatResponse,
+  BookDocument, BookIngestionEvent,
   AgentRunResult, AgentStep, AgentProposal,
 } from './types';
 
@@ -409,6 +410,27 @@ export const getBookTocFromPdf = async (pdf: File, title: string, authors: strin
   return data;
 };
 
+export const startBookPdfIngestion = async (pdf: File, title: string, authors: string[]) => {
+  const form = new FormData();
+  form.append('pdf', pdf);
+  form.append('title', title);
+  form.append('authors', JSON.stringify(authors));
+  const { data } = await api.post<{ document_id: string; job_id: string | null; reused: boolean; status: string }>(
+    '/books/documents/ingest', form, { headers: { 'Content-Type': 'multipart/form-data' } },
+  );
+  return data;
+};
+
+export const getBookDocument = async (documentId: string) => {
+  const { data } = await api.get<BookDocument>(`/books/documents/${documentId}`);
+  return data;
+};
+
+export const streamBookPdfIngestion = async (jobId: string, onEvent?: (event: BookIngestionEvent) => void) => {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('brain_token') : null;
+  await _streamJobEvents(jobId, token, (event) => onEvent?.(event as unknown as BookIngestionEvent));
+};
+
 export const generateChapterNoteFromPdf = async (
   pdf: File,
   bookTitle: string,
@@ -501,11 +523,6 @@ export interface TeacherSavedNote {
   action: 'created' | 'updated';
 }
 
-export interface TeacherDiagram {
-  code: string;
-  caption?: string;
-}
-
 export interface TeacherUnderstanding {
   concept: string;
   status: string;
@@ -524,7 +541,6 @@ export type TeacherStreamEvent =
   | { type: 'difficulty'; level: string }
   | { type: 'understanding'; concept: string; status: string }
   | { type: 'checkpoint'; question: string }
-  | { type: 'diagram'; code: string; caption?: string }
   | {
       type: 'done';
       message_id: string;
@@ -534,9 +550,9 @@ export type TeacherStreamEvent =
       is_last_section: boolean;
       quiz_suggested?: boolean;
       saved_notes?: TeacherSavedNote[];
-      diagrams?: TeacherDiagram[];
       checkpoints?: string[];
       understanding?: TeacherUnderstanding[];
+      source_pages?: string | null;
     };
 
 /**
@@ -688,7 +704,11 @@ export const sendTeacherChatStream = async (
     },
     body: JSON.stringify({ message }),
   });
-  if (!startResponse.ok) throw new Error(`Teacher stream failed: ${startResponse.status}`);
+  if (!startResponse.ok) {
+    const errorBody = await startResponse.json().catch(() => null) as { detail?: unknown } | null;
+    const detail = typeof errorBody?.detail === 'string' ? errorBody.detail : null;
+    throw new Error(detail || `Teacher stream failed: ${startResponse.status}`);
+  }
   const { job_id } = await startResponse.json();
 
   // Step 2: Stream events from the job
@@ -709,8 +729,11 @@ export const sendTeacherChatStream = async (
       id: done?.message_id || `stream-${Date.now()}`,
       role: 'assistant',
       content: fullContent,
-      metadata: (done && (done.diagrams?.length || done.checkpoints?.length))
-        ? { diagrams: done.diagrams || [], checkpoints: done.checkpoints || [] }
+      metadata: (done && (done.checkpoints?.length || done.source_pages))
+        ? {
+            ...(done.checkpoints?.length ? { checkpoints: done.checkpoints } : {}),
+            ...(done.source_pages ? { pdf_source_pages: done.source_pages, source_type: 'pdf' } : {}),
+          }
         : null,
       created_at: new Date().toISOString(),
     },
@@ -720,7 +743,6 @@ export const sendTeacherChatStream = async (
     is_last_section: done?.is_last_section ?? false,
     quiz_suggested: done?.quiz_suggested ?? false,
     saved_notes: done?.saved_notes ?? [],
-    diagrams: done?.diagrams ?? [],
     checkpoints: done?.checkpoints ?? [],
   };
 };
@@ -779,7 +801,7 @@ export const getBookCourses = async () => {
 };
 
 export const createBookCourse = async (
-  bookInfo: { title: string; authors: string[]; description?: string; year?: number; isbn?: string; publisher?: string; cover_url?: string; category?: string },
+  bookInfo: { title: string; authors: string[]; description?: string; year?: number; isbn?: string; publisher?: string; cover_url?: string; category?: string; document_id?: string },
   chapters: { chapter_number: string; title: string; level: number; enabled: boolean }[],
 ) => {
   const { data } = await api.post<CourseDetail>('/teacher/create-book-course', {
@@ -791,6 +813,7 @@ export const createBookCourse = async (
     publisher: bookInfo.publisher,
     cover_url: bookInfo.cover_url,
     category: bookInfo.category,
+    document_id: bookInfo.document_id,
     chapters,
   });
   return data;
