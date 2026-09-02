@@ -123,7 +123,9 @@ export default function BookPanel() {
     const [sourceDocument, setSourceDocument] = useState<BookDocument | null>(null);
     const [ingestionEvent, setIngestionEvent] = useState<BookIngestionEvent | null>(null);
     const [failedPdfDocumentId, setFailedPdfDocumentId] = useState<string | null>(null);
+    const [startingPdfIngestion, setStartingPdfIngestion] = useState(false);
     const [mappedChapters, setMappedChapters] = useState(0);
+    const pdfIngestionStartRef = useRef(false);
     const pdfInputRef = useRef<HTMLInputElement>(null);
 
     // TOC confirmation
@@ -399,9 +401,25 @@ export default function BookPanel() {
         });
     };
 
+    const requestErrorMessage = (caught: unknown, fallback: string) => {
+        if (caught && typeof caught === 'object' && 'response' in caught) {
+            const response = (caught as { response?: { data?: unknown } }).response;
+            const data = response?.data;
+            if (data && typeof data === 'object' && 'detail' in data && typeof data.detail === 'string') {
+                return data.detail;
+            }
+        }
+        return caught instanceof Error ? caught.message : fallback;
+    };
+
     const handleConfirmBook = async (bookInfo: BookSearchResult) => {
         setError(null);
         if (pdfMode && pdfFile) {
+            // A ref closes the short gap before React renders the disabled button,
+            // so a double click cannot send the same PDF import twice.
+            if (pdfIngestionStartRef.current) return;
+            pdfIngestionStartRef.current = true;
+            setStartingPdfIngestion(true);
             let documentId: string | null = null;
             try {
                 setView({ kind: 'ingesting-pdf', bookInfo });
@@ -412,9 +430,12 @@ export default function BookPanel() {
                 documentId = started.document_id;
                 await finishPdfIngestion(documentId, started.job_id, bookInfo);
             } catch (caught) {
-                const message = caught instanceof Error ? caught.message : 'Fehler beim Vorbereiten der PDF.';
+                const message = requestErrorMessage(caught, 'Fehler beim Vorbereiten der PDF.');
                 showPdfIngestionFailure(documentId, message);
                 if (!documentId) setView({ kind: 'confirm-book', bookInfo });
+            } finally {
+                pdfIngestionStartRef.current = false;
+                setStartingPdfIngestion(false);
             }
             return;
         }
@@ -448,7 +469,7 @@ export default function BookPanel() {
             const started = await retryBookPdfIngestion(documentId);
             await finishPdfIngestion(started.document_id, started.job_id, view.bookInfo);
         } catch (caught) {
-            const message = caught instanceof Error ? caught.message : 'Fehler beim erneuten Vorbereiten der PDF.';
+            const message = requestErrorMessage(caught, 'Fehler beim erneuten Vorbereiten der PDF.');
             showPdfIngestionFailure(documentId, message);
         }
     };
@@ -1186,10 +1207,13 @@ export default function BookPanel() {
                         <div className="flex gap-2">
                             <button
                                 onClick={() => handleConfirmBook(bookInfo)}
-                                className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium rounded-xl transition-colors"
+                                disabled={startingPdfIngestion}
+                                className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium rounded-xl transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                             >
                                 <FiCheck className="w-4 h-4" />
-                                {pdfMode ? 'Richtig — Inhaltsverzeichnis aus PDF laden' : 'Richtig — Inhaltsverzeichnis laden'}
+                                {startingPdfIngestion
+                                    ? 'PDF-Import läuft…'
+                                    : pdfMode ? 'Richtig — Inhaltsverzeichnis aus PDF laden' : 'Richtig — Inhaltsverzeichnis laden'}
                             </button>
                             <button
                                 onClick={() => { setView({ kind: 'books' }); setError(null); }}
