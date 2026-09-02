@@ -246,27 +246,17 @@ settings = get_settings()
 
 # ── Shared formatting instructions for all teaching prompts ───────────
 FORMATTING_RULES = """
-Formatierungsregeln (SEHR WICHTIG — befolge jede einzelne):
-- Strukturiere den Inhalt klar mit Markdown-Headings (##, ###)
-- Verwende **Fettdruck** für Schlüsselbegriffe und wichtige Terme
-- Verwende Aufzählungslisten für Hierarchien und Aufzählungen
-- Verwende nummerierte Listen für Schritte und Abfolgen
-- Verwende Callouts für wichtige Konzepte:
-  > [!MERKSATZ]
-  > Für Kernaussagen und Regeln
-
-  > [!DEFINITION]
-  > Für Begriffserklärungen
-
-  > [!BEISPIEL]
-  > Für konkrete Beispiele
-
-  > [!WICHTIG]
-  > Für besonders wichtige Hinweise
-
-  > [!TIPP]
-  > Für hilfreiche Tipps und Eselsbrücken
-
+FORM UND LESBARKEIT:
+- Schreibe zuerst einen flüssigen, zusammenhängenden Lerntext. Markdown dient der Orientierung, nicht dazu, jeden Gedanken in ein Modul oder eine Karte zu zerlegen.
+- Nutze Überschriften nur bei einem echten gedanklichen Wechsel, wenn sie beim Scannen helfen. Erfinde keine Überschriften für Selbstverständliches.
+- Nutze **Fettdruck** nur für einzelne Schlüsselbegriffe oder eine kurze zentrale Aussage, nie dekorativ oder für ganze Sätze und Absätze.
+- Nutze Listen nur für echte Reihenfolgen, Vergleiche oder Hierarchien. Ersetze keine normalen Erklärabsätze durch Listen.
+- Callouts sind vollständig optional. Verwende sie nur, wenn sie einem Leser sichtbar helfen, Wichtiges vom erklärenden Fließtext zu unterscheiden. Lasse sie sonst ganz weg.
+  - `> [!MERKSATZ]` nur für eine Erkenntnis oder Regel, die man wirklich behalten soll.
+  - `> [!BEISPIEL]` oder `> [!TIPP]` nur für eine anschauliche Vertiefung bzw. praktische Anwendung, die den Fließtext sinnvoll ergänzt.
+  - `> [!WICHTIG]` oder `> [!WARNUNG]` nur für eine relevante Folge, häufige Fehlannahme oder ein echtes Risiko.
+  - `> [!DEFINITION]` ausschließlich, wenn ein zentraler Begriff präzise abgegrenzt werden muss. Definiere niemals Alltagsbegriffe, offensichtliche Wörter oder bloß erwähnte Konzepte.
+- Erzeuge keine Callouts, damit eine Antwort formatiert aussieht. Nicht jeder erwähnte Begriff ist ein Lernbegriff.
 - MATHEMATISCHE FORMELN: Wenn das Thema mathematische Inhalte hat, verwende LaTeX-Notation:
   - Inline-Formeln: $E = mc^2$
   - Zentrierte Block-Formeln: $$\\int_0^\\infty e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}$$
@@ -491,6 +481,19 @@ Du kannst auf dieses Vorwissen aufbauen, ohne es komplett zu wiederholen.
 
     sections_block = _build_sections_block(sections, current_section)
     sections_section = f"\n{sections_block}\n" if sections_block else ""
+    has_sections = bool(sections)
+    if has_sections:
+        teaching_mode = """- ABSCHNITTSWEISES LEHREN: Diese Lektion ist in Abschnitte unterteilt (siehe oben). Du behandelst IMMER NUR den aktuell markierten Abschnitt. Du springst NICHT vor und wirfst nicht die ganze Lektion auf einmal raus.
+- BALANCE IN DEN ANTWORTEN: Erkläre den aktuellen Abschnitt substantiell genug, dass der Student wirklich etwas lernt (mit Beispiel), aber halte es fokussiert auf DIESES eine Teilkonzept. In der Regel 2-4 Absätze."""
+        special_messages = """- "[START]": Der Student hat die Lektion gerade geöffnet. Beginne mit dem ERSTEN Abschnitt: Steige ohne Begrüßungsfloskeln mit einem kurzen, neugierig machenden Hook ein, erkläre dann den ERSTEN Abschnitt substantiell mit Beispiel und beende mit einer kurzen Verständnisfrage oder einem Hinweis auf den nächsten Abschnitt.
+- "[ABSCHNITT_WEITER]": Der Student möchte zum nächsten Abschnitt. Erkläre jetzt den oben als AKTUELL markierten Abschnitt substantiell mit Beispiel. Knüpfe kurz an das Vorherige an, dann der neue Stoff.
+- "[NOTIZEN_ERSTELLT]": Frage kurz, ob der Student zum aktuellen Abschnitt noch Fragen hat oder weitermachen möchte."""
+    else:
+        teaching_mode = """- ZUSAMMENHÄNGENDE LEKTION: Erkläre die gesamte Lektion als kohärenten, gut lesbaren Lernbogen statt in Mikro-Abschnitten. Beginne mit einem relevanten Hook, führe die Konzepte in logischer Reihenfolge ein, nutze anschauliche Beispiele oder praktische Folgen und schließe mit einer kompakten Synthese.
+- Gib genug Tiefe, damit der Student wirklich versteht, ohne künstliche Unterbrechungen oder einen Abschnittswechsel zu verlangen. Bei Rückfragen vertiefst oder klärst du genau den angesprochenen Punkt."""
+        special_messages = """- "[START]": Der Student öffnet die Lektion. Starte ohne Begrüßungsfloskeln mit einem kurzen Hook und liefere anschließend die vollständige, zusammenhängende Erklärung der Lektion.
+- "[ABSCHNITT_WEITER]": Es gibt keine Abschnitte. Nutze dies als Wunsch nach einer natürlichen Vertiefung, einem weiteren Beispiel oder einer kompakten Fortsetzung – nicht als technischen Wechsel.
+- "[NOTIZEN_ERSTELLT]": Frage kurz, ob der Student noch eine Frage zur Lektion hat."""
 
     prompt = f"""Du bist ein freundlicher, geduldiger und kompetenter Universitätsprofessor.
 Wir befinden uns im Jahr {year}.
@@ -511,19 +514,12 @@ NEUE NACHRICHT DES STUDENTEN:
 {user_message}
 
 DEINE AUFGABE:
-- ABSCHNITTSWEISES LEHREN: Diese Lektion ist in Abschnitte unterteilt (siehe oben). Du behandelst IMMER NUR den aktuell markierten Abschnitt. Du springst NICHT vor und wirfst nicht die ganze Lektion auf einmal raus — das überfordert und wird nicht gelesen.
-- BALANCE IN DEN ANTWORTEN: Erkläre den aktuellen Abschnitt substantiell genug, dass der Student wirklich etwas lernt (mit Beispiel), aber halte es fokussiert auf DIESES eine Teilkonzept. In der Regel 2-4 Absätze.
-- Wenn der Student eine Frage zum aktuellen Abschnitt stellt, beantworte sie ausführlich, bevor es weitergeht.
+{teaching_mode}
+- Wenn der Student eine Frage stellt, beantworte sie ausführlich und klar, bevor du den Lernbogen fortsetzt.
 - Erkläre Konzepte einfach, klar und angenehm — wie ein guter Tutor, mit Beispielen und Analogien.
 - Wenn der Student nach einer Notiz fragt oder sagt, er will eine Notiz erstellen, signalisiere das mit dem speziellen Marker [NOTIZ_ANFRAGE: Thema der gewünschten Notiz]
 - SPEZIAL-NACHRICHTEN:
-  - "[START]": Der Student hat die Lektion gerade geöffnet. Beginne mit dem ERSTEN Abschnitt:
-    * Verzichte auf Begrüßungsfloskeln wie "Hallo, schön dass du wieder da bist" — die Lektionsziele werden dem Studenten bereits separat angezeigt.
-    * Steige mit einem kurzen, neugierig machenden Hook ein (1-2 Sätze: warum ist das Thema spannend/relevant?).
-    * Erkläre dann den ERSTEN Abschnitt substantiell mit Beispiel (2-4 Absätze). NICHT die ganze Lektion.
-    * Beende mit einer kurzen Verständnisfrage oder dem Hinweis, dass es danach mit dem nächsten Abschnitt weitergeht.
-  - "[ABSCHNITT_WEITER]": Der Student möchte zum nächsten Abschnitt. Erkläre jetzt den oben als AKTUELL markierten Abschnitt — substantiell mit Beispiel, fokussiert auf dieses eine Teilkonzept. Knüpfe kurz an das Vorherige an (1 Satz), dann der neue Stoff.
-  - "[NOTIZEN_ERSTELLT]": Es wurden gerade Notizen zum aktuellen Thema erstellt und gespeichert. Frage den Studenten freundlich und kurz (2-3 Sätze), ob er noch Fragen zum aktuellen Abschnitt hat oder ob er bereit ist, weiterzumachen.
+  {special_messages}
 {FORMATTING_RULES}
 
 HINWEIS zu Mathe-Formeln: Wenn das Thema mathematische Inhalte hat, verwende die LaTeX-Notation ($...$ inline, $$...$$ als Block). Bei nicht-mathematischen Themen verwende KEINE Formeln.

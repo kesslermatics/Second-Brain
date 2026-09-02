@@ -14,8 +14,8 @@ import {
     searchBook, getBookToc,
     getBookCourses, getTeacherCourse, deleteTeacherCourse,
     createBookCourse, updateCourseStatus, updateCourseUnit,
-    getUnitMessages, sendTeacherChat, sendTeacherChatStream,
-    generateUnitQuiz, generateUnitRecap,
+    getUnitMessages, sendTeacherChatStream,
+    generateUnitQuiz,
     getBookSummaries, generateChapterSummary,
     getCoverCandidates, updateCourseCover,
     startBookPdfIngestion, retryBookPdfIngestion, streamBookPdfIngestion, getBookDocument,
@@ -24,11 +24,11 @@ import {
 import type {
     BookSearchResult, BookChapter,
     CourseListItem, CourseDetail, CourseUnit, CourseMessage,
-    BookSummaryChapter, QuizQuestion, LessonRecap, BookDocument, BookIngestionEvent,
+    BookSummaryChapter, QuizQuestion, BookDocument, BookIngestionEvent,
 } from '@/lib/types';
 import {
     LessonObjectivesCard, LearningPathButton, LearningPathOverlay,
-    LessonCompleteCelebration, isControlMessage,
+    UnitTransition, isControlMessage,
     ThinkingStatus, NoteToastHost, ActivityBubbleHost, type ActivityBubble, InlineQuiz, type SavedNoteToast,
 } from './TeachingComponents';
 import { CategoryBadge, CategoryFilter } from './CategoryUI';
@@ -41,7 +41,6 @@ type View =
     | { kind: 'ingesting-pdf'; bookInfo: BookSearchResult }
     | { kind: 'confirm-toc'; bookInfo: BookSearchResult; chapters: BookChapter[] }
     | { kind: 'lesson-chat'; course: CourseDetail; unit: CourseUnit }
-    | { kind: 'lesson-complete'; course: CourseDetail; unit: CourseUnit }
     | { kind: 'book-completed'; course: CourseDetail }
     | { kind: 'book-summaries'; courseId: string; title: string; authors: string[] };
 
@@ -158,17 +157,12 @@ export default function BookPanel() {
     const [bubbles, setBubbles] = useState<ActivityBubble[]>([]);
     const [inlineQuiz, setInlineQuiz] = useState<QuizQuestion[] | null>(null);
 
-    // Recap / learning path
-    const [recap, setRecap] = useState<LessonRecap | null>(null);
-    const [loadingRecap, setLoadingRecap] = useState(false);
+    // Learning path and a short local transition to the next chapter.
     const [showPath, setShowPath] = useState(false);
+    const [nextUnitTransition, setNextUnitTransition] = useState<string | null>(null);
 
     // Section walk-through state for the current chapter
     const [section, setSection] = useState<{ current: number; total: number }>({ current: 0, total: 0 });
-
-    // Prefetched caches
-    const prefetchedMessagesRef = useRef<Map<string, CourseMessage[]>>(new Map());
-    const prefetchedSectionRef = useRef<Map<string, { current: number; total: number }>>(new Map());
 
     // Summaries
     const [summaryChapters, setSummaryChapters] = useState<BookSummaryChapter[]>([]);
@@ -531,21 +525,6 @@ export default function BookPanel() {
         setView({ kind: 'lesson-chat', course, unit });
         resetLessonEphemeral();
 
-        const cached = prefetchedMessagesRef.current.get(unit.id);
-        prefetchedMessagesRef.current.delete(unit.id);
-
-        if (cached && cached.length > 0) {
-            setMessages(cached);
-            const cachedSection = prefetchedSectionRef.current.get(unit.id);
-            prefetchedSectionRef.current.delete(unit.id);
-            setSection(cachedSection || {
-                current: unit.current_section || 0,
-                total: unit.sections?.length || 0,
-            });
-            prefetchNextUnit(course, unit);
-            return;
-        }
-
         setMessages([]);
         setSection({ current: unit.current_section || 0, total: unit.sections?.length || 0 });
         try {
@@ -585,40 +564,11 @@ export default function BookPanel() {
                     setSendingChat(false);
                 }
             }
-            prefetchNextUnit(course, unit);
         } catch {
             setError('Fehler beim Laden des Chats.');
         } finally {
             setSendingChat(false);
         }
-    };
-
-    const prefetchNextUnit = (course: CourseDetail, currentUnit: CourseUnit) => {
-        // PDF chapters are prepared lazily on first open so unused chapters incur no LLM cost.
-        if (course.source_document_id) return;
-        const sorted = [...course.units].sort((a, b) => a.order_index - b.order_index);
-        const curIdx = sorted.findIndex(u => u.id === currentUnit.id);
-        const nextUnit = sorted.slice(curIdx + 1).find(
-            u => u.enabled && (u.status === 'pending' || u.status === 'active')
-        );
-        if (!nextUnit) return;
-        if (prefetchedMessagesRef.current.has(nextUnit.id)) return;
-        getUnitMessages(course.id, nextUnit.id).then(msgs => {
-            if (msgs.length > 0) {
-                prefetchedMessagesRef.current.set(nextUnit.id, msgs);
-            } else {
-                sendTeacherChat(course.id, nextUnit.id, '[START]').then(response => {
-                    prefetchedMessagesRef.current.set(nextUnit.id, [
-                        { id: 'start', role: 'user', content: '[START]', metadata: null, created_at: null },
-                        response.message,
-                    ]);
-                    prefetchedSectionRef.current.set(nextUnit.id, {
-                        current: response.current_section,
-                        total: response.total_sections,
-                    });
-                }).catch(() => { });
-            }
-        }).catch(() => { });
     };
 
     // ── Shared stream handler ────────────────────────────────────────
@@ -741,31 +691,9 @@ export default function BookPanel() {
         }
     };
 
-    const isLastEnabledUnit = (course: CourseDetail, currentUnit: CourseUnit) => {
-        const sorted = [...course.units].sort((a, b) => a.order_index - b.order_index);
-        const curIdx = sorted.findIndex(u => u.id === currentUnit.id);
-        return !sorted.slice(curIdx + 1).some(
-            u => u.enabled && (u.status === 'pending' || u.status === 'active')
-        );
-    };
-
     const handleCompleteUnit = async () => {
         if (view.kind !== 'lesson-chat') return;
         setError(null);
-        const currentCourse = view.course;
-        const currentUnit = view.unit;
-        updateCourseUnit(currentCourse.id, currentUnit.id, { status: 'completed' }).catch(() => { });
-        setRecap(null);
-        setLoadingRecap(true);
-        setView({ kind: 'lesson-complete', course: currentCourse, unit: currentUnit });
-        generateUnitRecap(currentCourse.id, currentUnit.id)
-            .then((r) => setRecap(r))
-            .catch(() => setRecap(null))
-            .finally(() => setLoadingRecap(false));
-    };
-
-    const handleAdvanceAfterCelebration = async () => {
-        if (view.kind !== 'lesson-complete') return;
         const currentCourse = view.course;
         const currentUnit = view.unit;
         const sorted = [...currentCourse.units].sort((a, b) => a.order_index - b.order_index);
@@ -773,16 +701,21 @@ export default function BookPanel() {
         const nextUnit = sorted.slice(curIdx + 1).find(
             u => u.enabled && (u.status === 'pending' || u.status === 'active')
         );
-        if (nextUnit) {
-            await openUnitChat(currentCourse, nextUnit);
-        } else {
-            try {
-                await updateCourseStatus(currentCourse.id, 'completed');
-                const final = await getTeacherCourse(currentCourse.id);
-                setView({ kind: 'book-completed', course: final });
-            } catch {
-                setError('Fehler beim Abschließen des Buches.');
+
+        try {
+            // Keep completion persistence: it triggers the useful chapter summary and notes.
+            await updateCourseUnit(currentCourse.id, currentUnit.id, { status: 'completed' });
+            if (nextUnit) {
+                setNextUnitTransition(nextUnit.title);
+                await openUnitChat(currentCourse, nextUnit);
+                return;
             }
+
+            await updateCourseStatus(currentCourse.id, 'completed');
+            const final = await getTeacherCourse(currentCourse.id);
+            setView({ kind: 'book-completed', course: final });
+        } catch {
+            setError('Fehler beim Abschließen des Buches.');
         }
     };
 
@@ -1514,13 +1447,14 @@ export default function BookPanel() {
                                 className={`chat-message flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                             >
                                 <div
-                                    className={`max-w-[85%] sm:max-w-[78%] px-4 py-3 rounded-2xl text-sm ${msg.role === 'user'
-                                        ? 'bg-amber-600 text-white rounded-br-md'
-                                        : 'bg-dark-900 border border-dark-700 text-dark-100 rounded-bl-md'}`}
+                                    style={msg.role === 'assistant' ? { width: 'calc(100% - 2rem)', maxWidth: '680px' } : undefined}
+                                    className={`${msg.role === 'user'
+                                        ? 'max-w-[85%] sm:max-w-[78%] bg-amber-600 text-white rounded-br-md'
+                                        : 'max-w-[92%] sm:max-w-[72ch] bg-dark-900 border border-dark-700 text-dark-100 rounded-bl-md'} px-4 py-3 rounded-2xl text-sm`}
                                 >
                                     {msg.role === 'assistant' ? (
                                         <>
-                                            <div className="markdown-content lesson-prose">
+                                            <div className="markdown-content lesson-prose w-full max-w-[68ch]">
                                                 <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
                                                     {sourcePages ? cleanPdfInlineMarkers(msg.content) : msg.content}
                                                 </ReactMarkdown>
@@ -1811,7 +1745,7 @@ export default function BookPanel() {
 
     // ── Main render ──────────────────────────────────────────────────
     return (
-        <div className="h-full flex flex-col">
+        <div className="relative h-full flex flex-col">
             <div className="flex items-center gap-2 px-3 sm:px-4 py-3 border-b border-dark-800 bg-dark-900/50">
                 <FiBook className="w-4 h-4 text-amber-400 flex-shrink-0" />
                 <h2 className="text-sm font-semibold text-white flex-shrink-0">Bücher</h2>
@@ -1836,20 +1770,15 @@ export default function BookPanel() {
                 {view.kind === 'ingesting-pdf' && renderPdfIngestion()}
                 {view.kind === 'confirm-toc' && renderConfirmToc()}
                 {view.kind === 'lesson-chat' && renderLessonChat()}
-                {view.kind === 'lesson-complete' && (
-                    <LessonCompleteCelebration
-                        unitTitle={view.unit.title}
-                        recap={recap}
-                        accent="amber"
-                        isLastUnit={isLastEnabledUnit(view.course, view.unit)}
-                        nextLabel="Nächstes Kapitel"
-                        onContinue={handleAdvanceAfterCelebration}
-                        loadingRecap={loadingRecap}
-                    />
-                )}
                 {view.kind === 'book-completed' && renderBookCompleted()}
                 {view.kind === 'book-summaries' && renderBookSummaries()}
             </div>
+
+            <UnitTransition
+                nextTitle={nextUnitTransition}
+                accent="amber"
+                onFinish={() => setNextUnitTransition(null)}
+            />
 
             {/* Change-cover modal */}
             {coverEditFor && (

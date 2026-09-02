@@ -5,10 +5,10 @@ import type React from 'react';
 import {
     FiCheck, FiX, FiChevronRight, FiTarget, FiMap, FiArrowRight, FiSearch,
 } from 'react-icons/fi';
-import { LuListChecks, LuPartyPopper, LuBrain } from 'react-icons/lu';
+import { LuListChecks, LuBrain } from 'react-icons/lu';
 import ReactMarkdown from 'react-markdown';
 import { markdownComponents, remarkPlugins, rehypePlugins } from '@/lib/markdownComponents';
-import type { CourseUnit, QuizQuestion, LessonRecap } from '@/lib/types';
+import type { CourseUnit, QuizQuestion } from '@/lib/types';
 
 // ── Accent color theming ─────────────────────────────────────────────
 // Teacher panel uses teal, Book panel uses amber. We pass an accent key
@@ -237,126 +237,39 @@ export function LearningPathOverlay({
     );
 }
 
-// ── Lesson-complete celebration ──────────────────────────────────────
-export function LessonCompleteCelebration({
-    unitTitle,
-    recap,
+// ── Unit transition ──────────────────────────────────────────────────
+// A small, local acknowledgement that keeps navigation flowing. It neither
+// blocks input nor starts any additional model work.
+export function UnitTransition({
+    nextTitle,
     accent,
-    isLastUnit,
-    nextLabel,
-    onContinue,
-    loadingRecap,
+    onFinish,
 }: {
-    unitTitle: string;
-    recap: LessonRecap | null;
+    nextTitle: string | null;
     accent: Accent;
-    isLastUnit: boolean;
-    nextLabel: string;
-    onContinue: () => void;
-    loadingRecap: boolean;
+    onFinish: () => void;
 }) {
     const a = ACCENTS[accent];
 
-    return (
-        <div className="h-full flex flex-col items-center justify-center p-4 relative overflow-hidden">
-            <Confetti accent={accent} />
-            <div className="text-center max-w-md relative z-10">
-                <div className={`inline-flex items-center justify-center w-20 h-20 rounded-3xl ${a.bgSoft} mb-4 animate-[popIn_0.4s_ease-out]`}>
-                    <LuPartyPopper className={`w-10 h-10 ${a.text}`} />
-                </div>
-                <h3 className="text-xl font-bold text-white mb-1">Geschafft!</h3>
-                <p className="text-sm text-dark-400 mb-5">
-                    Du hast <span className={`${a.text} font-medium`}>{unitTitle}</span> abgeschlossen
-                </p>
-
-                {/* Recap */}
-                <div className="bg-dark-800/70 border border-dark-700 rounded-2xl p-4 mb-3 text-left">
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-dark-500 mb-2">
-                        Das hast du gelernt
-                    </p>
-                    {loadingRecap ? (
-                        <div className="space-y-2 py-1">
-                            <div className="h-3 bg-dark-700 rounded animate-pulse w-full" />
-                            <div className="h-3 bg-dark-700 rounded animate-pulse w-4/5" />
-                            <div className="h-3 bg-dark-700 rounded animate-pulse w-3/5" />
-                        </div>
-                    ) : recap && recap.summary_points.length > 0 ? (
-                        <ul className="space-y-2">
-                            {recap.summary_points.map((p, i) => (
-                                <li key={i} className="flex items-start gap-2 text-sm text-dark-200">
-                                    <FiCheck className={`w-3.5 h-3.5 mt-0.5 flex-shrink-0 ${a.text}`} />
-                                    <span>{p}</span>
-                                </li>
-                            ))}
-                        </ul>
-                    ) : (
-                        <p className="text-sm text-dark-400">Gut gemacht — weiter so!</p>
-                    )}
-                </div>
-
-                {/* Next preview */}
-                {!isLastUnit && !loadingRecap && recap?.next_preview && (
-                    <div className={`rounded-2xl border border-dark-700 bg-gradient-to-br ${a.gradient} to-dark-800/40 p-4 mb-4 text-left`}>
-                        <div className="flex items-center gap-2 mb-1.5">
-                            <FiArrowRight className={`w-3.5 h-3.5 ${a.text}`} />
-                            <span className={`text-[10px] font-semibold uppercase tracking-wider ${a.text}`}>Als Nächstes</span>
-                        </div>
-                        <p className="text-sm text-dark-200 leading-relaxed">{recap.next_preview}</p>
-                    </div>
-                )}
-
-                <button
-                    onClick={onContinue}
-                    className={`w-full flex items-center justify-center gap-2 px-4 py-3 ${a.bg} ${a.bgHover} text-white text-sm font-semibold rounded-xl transition-colors`}
-                >
-                    {isLastUnit ? 'Abschließen' : nextLabel}
-                    <FiChevronRight className="w-4 h-4" />
-                </button>
-            </div>
-        </div>
-    );
-}
-
-// ── Confetti (dependency-free) ───────────────────────────────────────
-function Confetti({ accent }: { accent: Accent }) {
-    const pieces = useMemo(() => {
-        const colors = accent === 'teal'
-            ? ['#2dd4bf', '#14b8a6', '#5eead4', '#0d9488', '#99f6e4']
-            : ['#fbbf24', '#f59e0b', '#fcd34d', '#d97706', '#fde68a'];
-        return Array.from({ length: 70 }, (_, i) => ({
-            id: i,
-            left: Math.random() * 100,
-            delay: Math.random() * 0.6,
-            duration: 2.2 + Math.random() * 1.6,
-            color: colors[i % colors.length],
-            size: 6 + Math.random() * 6,
-            rotate: Math.random() * 360,
-        }));
-    }, [accent]);
-
-    const [show, setShow] = useState(true);
     useEffect(() => {
-        const t = setTimeout(() => setShow(false), 4200);
-        return () => clearTimeout(t);
-    }, []);
-    if (!show) return null;
+        if (!nextTitle) return;
+        const timer = window.setTimeout(onFinish, 700);
+        return () => window.clearTimeout(timer);
+    }, [nextTitle, onFinish]);
+
+    if (!nextTitle) return null;
 
     return (
-        <div className="pointer-events-none absolute inset-0 overflow-hidden">
-            {pieces.map((p) => (
-                <span
-                    key={p.id}
-                    className="absolute top-[-20px] rounded-sm"
-                    style={{
-                        left: `${p.left}%`,
-                        width: `${p.size}px`,
-                        height: `${p.size * 0.6}px`,
-                        backgroundColor: p.color,
-                        transform: `rotate(${p.rotate}deg)`,
-                        animation: `confettiFall ${p.duration}s linear ${p.delay}s forwards`,
-                    }}
-                />
-            ))}
+        <div className="pointer-events-none absolute inset-x-0 top-4 z-30 flex justify-center px-4 animate-[fadeIn_0.15s_ease-out]">
+            <div className={`flex items-center gap-3 rounded-2xl border border-dark-700 bg-dark-900/95 px-4 py-3 shadow-2xl shadow-black/40 backdrop-blur ${a.text}`}>
+                <span className={`flex h-8 w-8 items-center justify-center rounded-xl ${a.bgSoft} animate-[popIn_0.35s_ease-out]`}>
+                    <FiCheck className="h-4 w-4" />
+                </span>
+                <p className="text-sm text-dark-200">
+                    Weiter zu <span className={`font-semibold ${a.text}`}>{nextTitle}</span>
+                </p>
+                <FiChevronRight className="h-4 w-4 animate-pulse" />
+            </div>
         </div>
     );
 }

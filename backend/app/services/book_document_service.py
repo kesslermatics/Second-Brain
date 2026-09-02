@@ -338,7 +338,9 @@ REGELN:
 - Starte mit der Intuition und dem Problem, dann erkläre Argumente, Zusammenhänge, Beispiele und praktische Konsequenzen. Vermeide den distanzierten Stil „Newport erklärt/der Autor beschreibt“ als Grundmuster.
 - Verdichte den Inhalt deutlich gegenüber dem Original, ohne wesentliche Konzepte auszulassen.
 - Zielumfang: etwa 900–1.600 Wörter; nutze höchstens 2.000 Wörter, auch bei langen Kapiteln.
-- Formatiere als flüssige Markdown-Erklärung mit wenigen hilfreichen Überschriften; nutze Listen nur, wenn sie das Verständnis wirklich verbessern.
+- Formatiere als flüssige Markdown-Erklärung mit wenigen hilfreichen Überschriften; nutze Listen nur, wenn sie das Verständnis wirklich verbessern. Markdown soll den Lesefluss stützen, nicht jeden Gedanken in ein Modul zerlegen.
+- Hebe nur einzelne Schlüsselbegriffe oder kurze Kernideen mit **Fettdruck** hervor, niemals ganze Sätze oder Absätze als Dekoration.
+- Callouts sind optional und dürfen nur bei echtem didaktischem Mehrwert verwendet werden: `> [!MERKSATZ]` für eine bleibende Kernregel, `> [!BEISPIEL]` oder `> [!TIPP]` für eine hilfreiche Vertiefung, `> [!WICHTIG]` für eine relevante Folge. Nutze `> [!DEFINITION]` ausschließlich für einen zentralen, nicht selbsterklärenden Begriff, der präzise abgegrenzt werden muss. Verwende keine Callouts nur für optische Abwechslung.
 - Schreibe keine Seitenverweise, Quellenmarker, Klammercodes oder Zitate wie [S. 42] in den Text. Die PDF-Quelle wird außerhalb des Textes angezeigt.
 - Wenn die Quelle etwas nicht eindeutig hergibt, sage das offen statt zu raten.
 
@@ -398,7 +400,7 @@ RELEVANTE PDF-PASSAGEN:
 
 FRAGE: {question}
 
-Antworte auf Deutsch und in direkter, natürlicher Du-Ansprache. Nutze ausschließlich die Erklärung und PDF-Passagen. Führe verständlich durch das Warum und Wie; schreibe keine Seitenverweise, Quellenmarker oder Klammercodes wie [S. 42]. Die PDF-Quelle wird außerhalb des Textes angezeigt. Sage offen, wenn die Quelle die Frage nicht beantwortet."""
+Antworte auf Deutsch und in direkter, natürlicher Du-Ansprache. Nutze ausschließlich die Erklärung und PDF-Passagen. Führe verständlich durch das Warum und Wie; schreibe keine Seitenverweise, Quellenmarker oder Klammercodes wie [S. 42]. Die PDF-Quelle wird außerhalb des Textes angezeigt. Formatiere als ruhige, gut lesbare Markdown-Antwort: Überschriften, Fettdruck, Listen und die optionalen Callouts `> [!MERKSATZ]`, `> [!BEISPIEL]`, `> [!TIPP]`, `> [!WICHTIG]` oder `> [!DEFINITION]` nur, wenn sie wirklich Orientierung oder Verständnis schaffen. Definiere keine offensichtlichen Begriffe und nutze kein Element bloß zur optischen Abwechslung. Sage offen, wenn die Quelle die Frage nicht beantwortet."""
     async for event in generate_stream(prompt, model=PRO_MODEL):
         yield event
 

@@ -158,6 +158,8 @@ async def get_course(
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
 
+    uses_sections = (course.kind or "teacher") == "book" and not course.source_document_id
+
     return {
         "id": str(course.id),
         "topic": course.topic,
@@ -185,8 +187,8 @@ async def get_course(
                 "enabled": u.enabled,
                 "status": u.status,
                 "order_index": u.order_index,
-                "sections": u.sections or [],
-                "current_section": u.current_section or 0,
+                "sections": (u.sections or []) if uses_sections else [],
+                "current_section": (u.current_section or 0) if uses_sections else 0,
                 "summary": u.summary,
                 "summary_generated_at": u.summary_generated_at.isoformat() if u.summary_generated_at else None,
             }
@@ -625,6 +627,9 @@ async def _pregen_all_sections(course_id: str, is_book: bool, course_title: str,
     Each unit is processed concurrently (up to 8 at a time) to avoid hammering
     the API while still being fast.
     """
+    if not is_book:
+        return
+
     try:
         async with async_session() as db:
             result = await db.execute(
@@ -759,31 +764,31 @@ async def unit_chat(
     next_title = _get_next_unit_title(list(course.units), unit.order_index)
 
     is_book = (course.kind or "teacher") == "book"
+    # Only metadata-only books keep the legacy guided-section structure.
+    # Teacher lessons intentionally receive one coherent explanation, and old
+    # stored section plans are ignored rather than migrated.
+    uses_sections = is_book
 
-    # ── Lesson sections: lazily generate a section plan, then walk through it ──
-    # Sections turn one lesson into a guided sequence of steps instead of one wall
-    # of text. We generate them on first contact ([START]) and cache on the unit.
-    if not unit.sections:
+    if uses_sections and not unit.sections:
         try:
             unit.sections = await generate_lesson_sections(
                 title=unit.title,
                 description=unit.description or "",
                 learning_objectives=unit.learning_objectives or [],
-                kind="book" if is_book else "lesson",
-                book_title=course.title if is_book else None,
-                book_authors=course.book_authors if is_book else None,
+                kind="book",
+                book_title=course.title,
+                book_authors=course.book_authors,
             )
             unit.current_section = 0
         except Exception:
             unit.sections = None
 
-    # Advance to the next section when the student asks to continue
-    if user_message == "[ABSCHNITT_WEITER]" and unit.sections:
+    if uses_sections and user_message == "[ABSCHNITT_WEITER]" and unit.sections:
         if (unit.current_section or 0) < len(unit.sections) - 1:
             unit.current_section = (unit.current_section or 0) + 1
 
-    sections_list = unit.sections or None
-    current_section_idx = unit.current_section or 0
+    sections_list = (unit.sections or None) if uses_sections else None
+    current_section_idx = (unit.current_section or 0) if uses_sections else 0
 
     # Save user message
     user_msg = CourseMessage(
@@ -910,29 +915,31 @@ async def unit_chat_stream(
 
     # PDF-backed books are one coherent chapter explanation, not forced micro-sections.
     is_pdf_book = bool(course.source_document_id and unit.source_chapter_id)
+    is_book = (course.kind or "teacher") == "book"
+    # Metadata-only books retain their guided structure. Normal Teacher courses
+    # always use the no-section mode, regardless of legacy stored plans.
+    uses_sections = is_book and not is_pdf_book
 
-    # Sections remain available for normal courses and legacy metadata-only book courses.
-    if not is_pdf_book and not unit.sections:
+    if uses_sections and not unit.sections:
         try:
-            is_book = (course.kind or "teacher") == "book"
             unit.sections = await generate_lesson_sections(
                 title=unit.title,
                 description=unit.description or "",
                 learning_objectives=unit.learning_objectives or [],
-                kind="book" if is_book else "lesson",
-                book_title=course.title if is_book else None,
-                book_authors=course.book_authors if is_book else None,
+                kind="book",
+                book_title=course.title,
+                book_authors=course.book_authors,
             )
             unit.current_section = 0
         except Exception:
             unit.sections = None
 
-    if not is_pdf_book and user_message == "[ABSCHNITT_WEITER]" and unit.sections:
+    if uses_sections and user_message == "[ABSCHNITT_WEITER]" and unit.sections:
         if (unit.current_section or 0) < len(unit.sections) - 1:
             unit.current_section = (unit.current_section or 0) + 1
 
-    sections_list = None if is_pdf_book else (unit.sections or None)
-    current_section_idx = 0 if is_pdf_book else (unit.current_section or 0)
+    sections_list = (unit.sections or None) if uses_sections else None
+    current_section_idx = (unit.current_section or 0) if uses_sections else 0
 
     # Save user message and flush DB state before the background task
     user_msg = CourseMessage(course_id=course.id, unit_id=unit.id, role="user", content=user_message)
