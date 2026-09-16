@@ -18,6 +18,11 @@ logger = logging.getLogger(__name__)
 
 # ── PDF text extraction ───────────────────────────────────────────────
 
+def sanitize_pdf_text(text: str) -> str:
+    """Remove embedded NUL bytes, which PostgreSQL and JSON cannot store safely."""
+    return text.replace("\x00", "")
+
+
 def extract_pdf_text(pdf_bytes: bytes) -> str:
     """Extract all text from a PDF as a single string.
 
@@ -29,7 +34,7 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
         reader = PdfReader(io.BytesIO(pdf_bytes))
         pages: list[str] = []
         for page in reader.pages:
-            text = page.extract_text() or ""
+            text = sanitize_pdf_text(page.extract_text() or "")
             if text.strip():
                 pages.append(text)
         return "\n\n".join(pages)

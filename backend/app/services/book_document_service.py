@@ -18,7 +18,7 @@ from sqlalchemy.orm import selectinload
 
 from app.models import BookDocument, BookDocumentChapter, BookDocumentChunk
 from app.services.ai_service import FLASH_MODEL, PRO_MODEL, generate_json, generate_stream
-from app.services.book_service import get_pdf_toc
+from app.services.book_service import get_pdf_toc, sanitize_pdf_text
 
 logger = logging.getLogger(__name__)
 BOOK_DOCUMENT_DIR = Path(os.environ.get("BOOK_DOCUMENT_DIR", "book_documents")).resolve()
@@ -46,7 +46,7 @@ def extract_pdf_pages(pdf_bytes: bytes) -> list[str]:
     reader = PdfReader(io.BytesIO(pdf_bytes))
     if reader.is_encrypted:
         raise ValueError("Die PDF ist verschlüsselt und kann nicht gelesen werden.")
-    return [(page.extract_text() or "").strip() for page in reader.pages]
+    return [sanitize_pdf_text(page.extract_text() or "").strip() for page in reader.pages]
 
 
 def _extract_pdf_pages_with_progress(pdf_bytes: bytes, notify) -> list[str]:
@@ -59,7 +59,7 @@ def _extract_pdf_pages_with_progress(pdf_bytes: bytes, notify) -> list[str]:
     total = len(reader.pages)
     pages: list[str] = []
     for index, page in enumerate(reader.pages, start=1):
-        pages.append((page.extract_text() or "").strip())
+        pages.append(sanitize_pdf_text(page.extract_text() or "").strip())
         notify(index, total)
     return pages
 
