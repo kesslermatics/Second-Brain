@@ -92,6 +92,64 @@ def _get_next_unit_title(units: list[CourseUnit], current_order: int) -> str | N
     return None
 
 
+def _select_relevant_book_memory(
+    messages: list[tuple[CourseMessage, str, str]],
+    question: str,
+    limit: int = 2,
+) -> list[dict]:
+    """Keep a few complete, relevant Q&A pairs from other book chapters."""
+    question_terms = {
+        term.strip(".,;:!?()[]{}\"'“”„–—-").lower()
+        for term in question.split()
+        if len(term.strip(".,;:!?()[]{}\"'“”„–—-")) >= 4
+    }
+    pairs: list[dict] = []
+    pending_question: dict | None = None
+    for message, chapter_number, chapter_title in messages:
+        if message.role == "user":
+            pending_question = {
+                "chapter_number": chapter_number,
+                "chapter_title": chapter_title,
+                "question": message.content,
+            }
+        elif message.role == "assistant" and pending_question:
+            if (
+                pending_question["chapter_number"] == chapter_number
+                and pending_question["chapter_title"] == chapter_title
+            ):
+                pair_text = f"{pending_question['question']} {message.content}".lower()
+                pairs.append({
+                    **pending_question,
+                    "answer": message.content,
+                    "score": sum(pair_text.count(term) for term in question_terms),
+                })
+            pending_question = None
+
+    relevant = [pair for pair in pairs if pair["score"] > 0]
+    selected = (
+        sorted(relevant, key=lambda pair: pair["score"], reverse=True)[:limit]
+        if relevant
+        else pairs[-limit:]
+    )
+    memory: list[dict] = []
+    for pair in selected:
+        memory.extend([
+            {
+                "role": "user",
+                "content": pair["question"][:700],
+                "chapter_number": pair["chapter_number"],
+                "chapter_title": pair["chapter_title"],
+            },
+            {
+                "role": "assistant",
+                "content": pair["answer"][:900],
+                "chapter_number": pair["chapter_number"],
+                "chapter_title": pair["chapter_title"],
+            },
+        ])
+    return memory
+
+
 # ── Course CRUD ───────────────────────────────────────────────────────
 
 @router.get("/courses")
@@ -900,21 +958,47 @@ async def unit_chat_stream(
     if not unit:
         raise HTTPException(status_code=404, detail="Unit not found")
 
-    # Get chat history
+    # Get the local conversation. Control messages are sent separately and must
+    # not be mistaken for learning context on a later question.
+    control_messages = {"[START]", "[ABSCHNITT_WEITER]", "[NOTIZEN_ERSTELLT]"}
     msg_result = await db.execute(
         select(CourseMessage)
         .where(CourseMessage.course_id == course_id, CourseMessage.unit_id == unit_id)
         .order_by(CourseMessage.created_at)
     )
     existing_messages = msg_result.scalars().all()
-    chat_history = [{"role": m.role, "content": m.content} for m in existing_messages]
+    chat_history = [
+        {"role": message.role, "content": message.content}
+        for message in existing_messages
+        if message.role in ("user", "assistant") and message.content not in control_messages
+    ]
+
+    # PDF-backed books receive a small, relevant memory from other chapters.
+    # The current PDF chapter remains the sole factual source for the answer.
+    is_pdf_book = bool(course.source_document_id and unit.source_chapter_id)
+    book_memory: list[dict] = []
+    if is_pdf_book:
+        memory_result = await db.execute(
+            select(CourseMessage, CourseUnit.unit_number, CourseUnit.title)
+            .join(CourseUnit, CourseMessage.unit_id == CourseUnit.id)
+            .where(
+                CourseMessage.course_id == course.id,
+                CourseUnit.course_id == course.id,
+                CourseMessage.unit_id != unit.id,
+                CourseMessage.role.in_(("user", "assistant")),
+                CourseMessage.content.notin_(control_messages),
+            )
+            .order_by(CourseMessage.created_at.desc())
+            .limit(40)
+        )
+        memory_messages = list(reversed(memory_result.all()))
+        book_memory = _select_relevant_book_memory(memory_messages, user_message)
 
     # Context
     previous_summary = _build_previous_units_summary(list(course.units), unit.order_index)
     next_title = _get_next_unit_title(list(course.units), unit.order_index)
 
     # PDF-backed books are one coherent chapter explanation, not forced micro-sections.
-    is_pdf_book = bool(course.source_document_id and unit.source_chapter_id)
     is_book = (course.kind or "teacher") == "book"
     # Metadata-only books retain their guided structure. Normal Teacher courses
     # always use the no-section mode, regardless of legacy stored plans.
@@ -1045,7 +1129,12 @@ async def unit_chat_stream(
                 else:
                     yield {"type": "status", "content": "Passende Stellen in der PDF werden nachgeschlagen…"}
                     async for event in stream_pdf_chapter_answer(
-                        source_chapter, course.title, course.book_authors or [], user_message, chat_history,
+                        source_chapter,
+                        course.title,
+                        course.book_authors or [],
+                        user_message,
+                        chat_history,
+                        book_memory=book_memory,
                     ):
                         if event.get("type") == "chunk":
                             full_response_parts.append(event["content"])

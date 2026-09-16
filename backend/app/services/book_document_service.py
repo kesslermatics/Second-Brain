@@ -374,6 +374,7 @@ async def stream_pdf_chapter_answer(
     authors: list[str],
     question: str,
     chat_history: list[dict] | None = None,
+    book_memory: list[dict] | None = None,
 ) -> AsyncGenerator[dict, None]:
     """Answer a free question with the cached chapter explanation plus relevant source passages."""
     selected = select_relevant_chunks(list(chapter.chunks), question)
@@ -384,6 +385,12 @@ async def stream_pdf_chapter_answer(
         for message in (chat_history or [])[-6:]
         if message.get("role") in ("user", "assistant")
     )
+    memory = "\n".join(
+        f"Kapitel {message.get('chapter_number', '?')}: {message.get('chapter_title', 'Unbekannt')} — "
+        f"{'Leser' if message.get('role') == 'user' else 'Tutor'}: {message.get('content', '')[:900]}"
+        for message in (book_memory or [])
+        if message.get("role") in ("user", "assistant")
+    )
     prompt = f"""Du beantwortest eine Frage zu einer konkreten PDF-Buchausgabe.
 
 BUCH: {book_title} — {authors_text}
@@ -392,15 +399,18 @@ KAPITEL {chapter.chapter_number}: {chapter.title}
 KAPITEL-ERKLÄRUNG:
 {chapter.explanation or '(Noch nicht vorbereitet)'}
 
-LETZTE GESPRÄCHSNACHRICHTEN:
+LETZTE GESPRÄCHSNACHRICHTEN IM AKTUELLEN KAPITEL:
 {history or '(keine)'}
+
+KAPITELÜBERGREIFENDES LERNGEDÄCHTNIS:
+{memory or '(keine relevanten früheren Fragen oder Antworten)'}
 
 RELEVANTE PDF-PASSAGEN:
 {source}
 
 FRAGE: {question}
 
-Antworte auf Deutsch und in direkter, natürlicher Du-Ansprache. Nutze ausschließlich die Erklärung und PDF-Passagen. Führe verständlich durch das Warum und Wie; schreibe keine Seitenverweise, Quellenmarker oder Klammercodes wie [S. 42]. Die PDF-Quelle wird außerhalb des Textes angezeigt. Formatiere als ruhige, gut lesbare Markdown-Antwort: Überschriften, Fettdruck, Listen und die optionalen Callouts `> [!MERKSATZ]`, `> [!BEISPIEL]`, `> [!TIPP]`, `> [!WICHTIG]` oder `> [!DEFINITION]` nur, wenn sie wirklich Orientierung oder Verständnis schaffen. Definiere keine offensichtlichen Begriffe und nutze kein Element bloß zur optischen Abwechslung. Sage offen, wenn die Quelle die Frage nicht beantwortet."""
+Antworte auf Deutsch und in direkter, natürlicher Du-Ansprache. Agiere als verständnisorientierter Tutor, nicht als Kapitel-Zusammenfasser. Das kapitelübergreifende Lerngedächtnis zeigt nur, was der Leser früher gefragt oder besprochen hat: Knüpfe daran an, vermeide Wiederholungen und korrigiere Missverständnisse behutsam, aber behandle es nie als Quelle für Fakten zum aktuellen Kapitel. Nutze Kapitel-Erklärung und PDF-Passagen als internes Fundament, niemals als Antwortvorlage. Beantworte zuerst die konkrete Frage und erkläre sie in eigenen Worten. Wiederhole, paraphrasiere oder zitiere den Kapiteltext nicht absatzweise und gib keine allgemeine Kapitelzusammenfassung, außer der Nutzer verlangt sie ausdrücklich. Hole den Leser beim mutmaßlichen Verständnisstand ab und ergänze nur den Kontext, der für die Frage nötig ist. Mache das Warum und Wie mit einem passenden gedanklichen Zwischenschritt, einer Analogie oder einem neuen Beispiel verständlich, sofern die Quelle das trägt. Schreibe keine Seitenverweise, Quellenmarker oder Klammercodes wie [S. 42]. Die PDF-Quelle wird außerhalb des Textes angezeigt. Formatiere als ruhige, gut lesbare Markdown-Antwort: Überschriften, Fettdruck, Listen und die optionalen Callouts `> [!MERKSATZ]`, `> [!BEISPIEL]`, `> [!TIPP]`, `> [!WICHTIG]` oder `> [!DEFINITION]` nur, wenn sie wirklich Orientierung oder Verständnis schaffen. Definiere keine offensichtlichen Begriffe und nutze kein Element bloß zur optischen Abwechslung. Sage offen, wenn die Quelle die Frage nicht beantwortet."""
     async for event in generate_stream(prompt, model=PRO_MODEL):
         yield event
 
