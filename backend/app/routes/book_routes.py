@@ -15,7 +15,7 @@ from app.services.book_service import (
     ai_edit_book_content, get_pdf_toc, generate_chapter_note_from_pdf, extract_pdf_text,
     fetch_book_cover,
 )
-from app.services.book_document_service import document_hash, ingest_book_document, store_document_pdf
+from app.services.book_document_service import document_hash, ingest_book_document, store_document_file, store_document_pdf
 
 router = APIRouter(prefix="/books", tags=["books"])
 
@@ -62,16 +62,22 @@ async def ingest_pdf_book_document(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Persist and asynchronously prepare a PDF as a grounded book source."""
-    if not pdf.content_type or "pdf" not in pdf.content_type.lower():
-        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    """Persist and asynchronously prepare a PDF or EPUB as a grounded book source."""
+    content_type = (pdf.content_type or "").lower()
+    filename = (pdf.filename or "").lower()
+    is_epub = "epub" in content_type or filename.endswith(".epub")
+    is_pdf = "pdf" in content_type or filename.endswith(".pdf")
+    if not is_epub and not is_pdf:
+        raise HTTPException(status_code=400, detail="Nur PDF- und EPUB-Dateien werden unterstützt.")
+    file_extension = "epub" if is_epub else "pdf"
+
     if not title.strip():
         raise HTTPException(status_code=400, detail="Book title required")
-    pdf_bytes = await pdf.read()
-    if not pdf_bytes:
-        raise HTTPException(status_code=400, detail="The uploaded PDF is empty")
-    if len(pdf_bytes) > 50 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="PDF too large (max 50 MB)")
+    file_bytes = await pdf.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty")
+    if len(file_bytes) > 50 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Datei zu groß (max. 50 MB)")
     try:
         authors_list = json.loads(authors)
         if not isinstance(authors_list, list):
@@ -79,7 +85,7 @@ async def ingest_pdf_book_document(
     except Exception:
         authors_list = []
 
-    digest = document_hash(pdf_bytes)
+    digest = document_hash(file_bytes)
     existing_result = await db.execute(
         select(BookDocument)
         .where(
@@ -92,10 +98,6 @@ async def ingest_pdf_book_document(
     if existing and existing.status == "ready":
         return {"document_id": str(existing.id), "job_id": None, "reused": True, "status": "ready"}
     if existing:
-        # A new upload of the same source is an explicit request to discard a
-        # stuck/failed attempt. Cancel the known in-memory job first; after an
-        # application restart there is no job to cancel, so reset the orphaned
-        # queued/processing record directly.
         from app.services.job_store import job_store
 
         active_job = job_store.find_active_by_resource(_pdf_ingestion_resource(existing.id))
@@ -105,7 +107,7 @@ async def ingest_pdf_book_document(
                 await asyncio.gather(active_job.task, return_exceptions=True)
 
         existing.original_filename = pdf.filename or existing.original_filename
-        existing.stored_path = store_document_pdf(str(current_user.id), str(existing.id), pdf_bytes)
+        existing.stored_path = store_document_file(str(current_user.id), str(existing.id), file_bytes, file_extension)
         existing.title = title.strip()
         existing.authors = authors_list
         existing.status = "queued"
@@ -125,11 +127,11 @@ async def ingest_pdf_book_document(
         }
 
     document_id = uuid.uuid4()
-    stored_path = store_document_pdf(str(current_user.id), str(document_id), pdf_bytes)
+    stored_path = store_document_file(str(current_user.id), str(document_id), file_bytes, file_extension)
     document = BookDocument(
         id=document_id,
         user_id=current_user.id,
-        original_filename=pdf.filename or "book.pdf",
+        original_filename=pdf.filename or f"book.{file_extension}",
         stored_path=stored_path,
         content_hash=digest,
         title=title.strip(),

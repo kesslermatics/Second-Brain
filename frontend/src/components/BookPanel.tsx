@@ -296,7 +296,7 @@ export default function BookPanel() {
             setMappedChapters(0);
             // Pre-fill the search field with the filename (sans extension) if empty
             if (!searchQuery.trim()) {
-                const name = file.name.replace(/\.pdf$/i, '').replace(/[-_]/g, ' ');
+                const name = file.name.replace(/\.(pdf|epub)$/i, '').replace(/[-_]/g, ' ');
                 setSearchQuery(name);
             }
         }
@@ -327,7 +327,7 @@ export default function BookPanel() {
                 setView({
                     kind: 'confirm-book', bookInfo: {
                         found: true,
-                        title: searchQuery.trim() || pdfFile.name.replace(/\.pdf$/i, ''),
+                        title: searchQuery.trim() || pdfFile.name.replace(/\.(pdf|epub)$/i, ''),
                         authors: [],
                         description: '',
                     }
@@ -340,7 +340,7 @@ export default function BookPanel() {
                 setView({
                     kind: 'confirm-book', bookInfo: {
                         found: true,
-                        title: searchQuery.trim() || pdfFile.name.replace(/\.pdf$/i, ''),
+                        title: searchQuery.trim() || pdfFile.name.replace(/\.(pdf|epub)$/i, ''),
                         authors: [],
                         description: '',
                     }
@@ -430,7 +430,7 @@ export default function BookPanel() {
                 documentId = started.document_id;
                 await finishPdfIngestion(documentId, started.job_id, bookInfo);
             } catch (caught) {
-                const message = requestErrorMessage(caught, 'Fehler beim Vorbereiten der PDF.');
+                const message = requestErrorMessage(caught, 'Fehler beim Vorbereiten der Datei.');
                 showPdfIngestionFailure(documentId, message);
                 if (!documentId) setView({ kind: 'confirm-book', bookInfo });
             } finally {
@@ -469,7 +469,7 @@ export default function BookPanel() {
             const started = await retryBookPdfIngestion(documentId);
             await finishPdfIngestion(started.document_id, started.job_id, view.bookInfo);
         } catch (caught) {
-            const message = requestErrorMessage(caught, 'Fehler beim erneuten Vorbereiten der PDF.');
+            const message = requestErrorMessage(caught, 'Fehler beim erneuten Vorbereiten der Datei.');
             showPdfIngestionFailure(documentId, message);
         }
     };
@@ -963,18 +963,18 @@ export default function BookPanel() {
                                 className="flex-1 px-4 py-3 bg-dark-800 border border-dark-700 rounded-xl text-white text-sm placeholder-dark-600 focus:outline-none focus:border-amber-500"
                                 autoFocus
                             />
-                            {/* Hidden file input for PDF */}
+                            {/* Hidden file input for PDF/EPUB */}
                             <input
                                 ref={pdfInputRef}
                                 type="file"
-                                accept="application/pdf"
+                                accept="application/pdf,.pdf,application/epub+zip,.epub"
                                 className="hidden"
                                 onChange={handlePdfSelect}
                             />
-                            {/* PDF upload button */}
+                            {/* PDF/EPUB upload button */}
                             <button
                                 onClick={() => pdfInputRef.current?.click()}
-                                title="PDF hochladen — Inhalte direkt aus dem Buch"
+                                title="PDF oder EPUB hochladen — Inhalte direkt aus dem Buch"
                                 className={`px-3 py-3 rounded-xl border transition-colors ${pdfMode
                                     ? 'bg-amber-600/20 border-amber-500 text-amber-400'
                                     : 'bg-dark-800 border-dark-700 text-dark-500 hover:text-amber-400 hover:border-amber-600'
@@ -1001,11 +1001,13 @@ export default function BookPanel() {
                                     <FiPaperclip className="w-3 h-3 flex-shrink-0" />
                                     <span className="truncate max-w-[220px]">{pdfFile.name}</span>
                                     <span className="text-amber-500/60">·</span>
-                                    <span className="text-amber-500">Inhalte aus PDF</span>
+                                    <span className="text-amber-500">
+                                        {pdfFile.name.toLowerCase().endsWith('.epub') ? 'Inhalte aus EPUB' : 'Inhalte aus PDF'}
+                                    </span>
                                     <button
                                         onClick={handleRemovePdf}
                                         className="ml-1 text-amber-500/60 hover:text-red-400 transition-colors"
-                                        title="PDF entfernen"
+                                        title="Datei entfernen"
                                     >
                                         <FiX className="w-3 h-3" />
                                     </button>
@@ -1151,8 +1153,8 @@ export default function BookPanel() {
                             >
                                 <FiCheck className="w-4 h-4" />
                                 {startingPdfIngestion
-                                    ? 'PDF-Import läuft…'
-                                    : pdfMode ? 'Richtig — Inhaltsverzeichnis aus PDF laden' : 'Richtig — Inhaltsverzeichnis laden'}
+                                    ? 'Import läuft…'
+                                    : pdfMode ? 'Richtig — Inhaltsverzeichnis aus Datei laden' : 'Richtig — Inhaltsverzeichnis laden'}
                             </button>
                             <button
                                 onClick={() => { setView({ kind: 'books' }); setError(null); }}
@@ -1182,7 +1184,7 @@ export default function BookPanel() {
                 <div className="text-center">
                     <div className="w-12 h-12 border-2 border-amber-500 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
                     <h3 className="text-lg font-semibold text-white mb-2">
-                        {pdfMode ? 'PDF wird analysiert...' : 'Inhaltsverzeichnis wird geladen...'}
+                        {pdfMode ? 'Datei wird analysiert...' : 'Inhaltsverzeichnis wird geladen...'}
                     </h3>
                     <p className="text-sm text-dark-500">
                         <span className="text-amber-400">{view.bookInfo.title}</span>
@@ -1244,7 +1246,7 @@ export default function BookPanel() {
                             )}
                         </div>
                     )}
-                    <p className="mt-5 text-xs leading-relaxed text-dark-500">Die PDF wird nur einmal extrahiert. Danach werden Kapitel und Antworten dauerhaft aus dieser Ausgabe erzeugt.</p>
+                    <p className="mt-5 text-xs leading-relaxed text-dark-500">Die Datei wird nur einmal extrahiert. Danach werden Kapitel und Antworten dauerhaft aus dieser Ausgabe erzeugt.</p>
                 </div>
             </div>
         );

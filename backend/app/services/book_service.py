@@ -150,8 +150,7 @@ async def get_pdf_toc(
     book_title: str,
     authors: list[str],
     on_retry: Callable[[int, int, float], None] | None = None,
-) -> dict:
-    """Extract a TOC solely from the PDF, retrying transient provider failures.
+) -> dict:    """Extract a TOC solely from the PDF, retrying transient provider failures.
 
     PDF outline metadata needs no model call. The text-based path makes at most
     three bounded attempts and never substitutes web-derived book information.
@@ -248,6 +247,147 @@ Lasse folgende Einträge KOMPLETT WEG (sie haben keinen inhaltlichen Mehrwert):
             )
             next_attempt = attempt + 1
             logger.info("Retrying PDF TOC provider in %ss (attempt %s/%s)", delay_seconds, next_attempt, PDF_TOC_MAX_ATTEMPTS)
+            if on_retry:
+                on_retry(next_attempt, PDF_TOC_MAX_ATTEMPTS, delay_seconds)
+            await asyncio.sleep(delay_seconds)
+
+
+# ── EPUB-aware TOC extraction ─────────────────────────────────────────
+
+def extract_epub_text(epub_bytes: bytes, max_chars: int = 15_000) -> str:
+    """Extract plain text from an EPUB for use in the AI-TOC prompt.
+
+    Returns the concatenated text of all spine items up to *max_chars* characters,
+    or an empty string on any failure so callers can fall back gracefully.
+    """
+    try:
+        import ebooklib
+        from ebooklib import epub as epub_lib
+        from bs4 import BeautifulSoup
+
+        book = epub_lib.read_epub(io.BytesIO(epub_bytes), options={"ignore_ncx": True})
+        items_by_id = {
+            item.get_id(): item
+            for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT)
+        }
+        spine_order = [iid for iid, _ in book.spine]
+        ordered = [items_by_id[iid] for iid in spine_order if iid in items_by_id] or list(items_by_id.values())
+        parts: list[str] = []
+        total = 0
+        for item in ordered:
+            html = item.get_body_content().decode("utf-8", errors="replace")
+            soup = BeautifulSoup(html, "lxml")
+            for tag in soup(["script", "style"]):
+                tag.decompose()
+            text = sanitize_pdf_text(soup.get_text(separator="\n")).strip()
+            if text:
+                parts.append(text)
+                total += len(text)
+                if total >= max_chars:
+                    break
+        return "\n\n".join(parts)[:max_chars]
+    except Exception as exc:
+        logger.warning("EPUB text extraction failed: %s", exc)
+        return ""
+
+
+async def get_epub_toc(
+    epub_bytes: bytes,
+    book_title: str,
+    authors: list[str],
+    pages: list[str] | None = None,
+    on_retry: Callable[[int, int, float], None] | None = None,
+) -> dict:
+    """Extract a TOC from an EPUB, retrying transient provider failures.
+
+    Fast path: read the EPUB's own NCX/NAV table of contents (no AI call needed).
+    Slow path: feed the opening text to the AI model, same retry logic as PDFs.
+
+    *pages* — already-extracted spine page texts. When provided the first
+    15 000 chars are used as the AI prompt sample instead of re-extracting.
+    """
+    from app.services.book_document_service import _extract_epub_toc
+
+    # Fast path — built-in EPUB TOC
+    epub_toc = _extract_epub_toc(epub_bytes)
+    if epub_toc:
+        return {"chapters": epub_toc, "total_chapters": len(epub_toc), "source": "epub_metadata"}
+
+    # Slow path — AI extraction from the opening text
+    if pages is not None:
+        sample_text = "\n\n".join(pages)[:15_000]
+    else:
+        sample_text = extract_epub_text(epub_bytes, max_chars=15_000)
+
+    if not sample_text:
+        return {"chapters": [], "total_chapters": 0, "source": "epub_no_extractable_text"}
+
+    authors_str = ", ".join(authors) if authors else "Unbekannt"
+    prompt = f"""Das folgende ist der Anfang des Buches „{book_title}" von {authors_str}.
+Extrahiere das vollständige Inhaltsverzeichnis direkt aus diesem Text.
+
+BUCHTEXT (Anfang):
+{sample_text}
+
+Gib das Inhaltsverzeichnis als JSON zurück. Jeder Eintrag hat:
+- "title": Kapitelname (genau wie im Text)
+- "level": Verschachtelungstiefe (1 = Hauptkapitel, 2 = Unterkapitel, 3 = Unter-Unterkapitel)
+- "chapter_number": Kapitelnummer als String (z.B. "1", "1.1", "1.1.1")
+
+Antworte NUR mit dem JSON:
+{{
+    "chapters": [
+        {{"chapter_number": "1", "title": "Einleitung", "level": 1}},
+        {{"chapter_number": "1.1", "title": "Unterkapitel", "level": 2}}
+    ],
+    "total_chapters": 10
+}}
+
+Lasse folgende Einträge KOMPLETT WEG (sie haben keinen inhaltlichen Mehrwert):
+- Titelseite, Impressum, Copyright, Half Title, Title Card, Cover
+- Vorwort, Geleitwort, Danksagung, Widmung
+- Preface, Foreword, Acknowledgements, Dedication
+- Inhaltsverzeichnis, Abbildungsverzeichnis, Tabellenverzeichnis, Abkürzungsverzeichnis
+- Table of Contents, List of Figures, List of Tables, List of Abbreviations
+- Index, Stichwortverzeichnis, Register, Glossar, Glossary
+- Literaturverzeichnis, Quellenverzeichnis, Bibliografie, Bibliography, References
+- Anhang, Appendix, Nachwort, Afterword, Colophon
+- Über den Autor, About the Author, Front Matter, Back Matter"""
+
+    for attempt in range(1, PDF_TOC_MAX_ATTEMPTS + 1):
+        try:
+            result = await asyncio.wait_for(
+                generate_json(
+                    prompt,
+                    BOOK_TOC_SCHEMA,
+                    model=PRO_MODEL,
+                    temperature=0.1,
+                    raise_on_error=True,
+                ),
+                timeout=PDF_TOC_ATTEMPT_TIMEOUT_SECONDS,
+            )
+            if isinstance(result, dict):
+                result["source"] = "epub_text_ai"
+                result.setdefault("total_chapters", len(result.get("chapters") or []))
+                return result
+            return {"chapters": [], "total_chapters": 0, "source": "epub_text_ai"}
+        except Exception as exc:
+            if not _is_transient_provider_error(exc):
+                logger.warning("EPUB TOC provider request failed without retry: %s", exc)
+                raise ValueError(
+                    "Die Inhaltsverzeichnis-Erkennung durch den KI-Dienst ist fehlgeschlagen. "
+                    "Bitte später erneut versuchen."
+                ) from exc
+            if attempt == PDF_TOC_MAX_ATTEMPTS:
+                logger.warning("EPUB TOC provider unavailable after %s attempts: %s", attempt, exc)
+                raise PdfTocProviderUnavailableError(_unavailable_provider_message(exc)) from exc
+            retry_after_seconds = _retry_after_seconds(exc)
+            delay_seconds = retry_after_seconds if retry_after_seconds is not None else round(
+                (1.5 * (2 ** (attempt - 1))) + random.uniform(0, 0.5),
+                1,
+            )
+            next_attempt = attempt + 1
+            logger.info("Retrying EPUB TOC provider in %ss (attempt %s/%s)", delay_seconds, next_attempt, PDF_TOC_MAX_ATTEMPTS)
             if on_retry:
                 on_retry(next_attempt, PDF_TOC_MAX_ATTEMPTS, delay_seconds)
             await asyncio.sleep(delay_seconds)
