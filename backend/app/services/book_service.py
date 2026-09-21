@@ -150,7 +150,8 @@ async def get_pdf_toc(
     book_title: str,
     authors: list[str],
     on_retry: Callable[[int, int, float], None] | None = None,
-) -> dict:    """Extract a TOC solely from the PDF, retrying transient provider failures.
+) -> dict:
+    """Extract a TOC solely from the PDF, retrying transient provider failures.
 
     PDF outline metadata needs no model call. The text-based path makes at most
     three bounded attempts and never substitutes web-derived book information.
