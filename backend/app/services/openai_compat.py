@@ -238,8 +238,8 @@ def _patch_schema(schema: dict) -> dict:
         }
         if config and config.system_instruction:
             kwargs["instructions"] = config.system_instruction
-        if config and config.temperature is not None:
-            kwargs["temperature"] = config.temperature
+        # GPT-5.6 Sol/Luna do not accept the temperature parameter. Existing
+        # callers may still provide it, but model routing controls variability.
         if config and config.max_output_tokens:
             kwargs["max_output_tokens"] = config.max_output_tokens
         tools = _response_tools(config)
