@@ -198,7 +198,36 @@ def _extract_sources(response: Any) -> list[dict[str, str]]:
     return [source for source in sources if not (source["url"] in seen or seen.add(source["url"]))][:8]
 
 
-class _Models:
+def _patch_schema(schema: dict) -> dict:
+    """Recursively add 'additionalProperties': false to every object node.
+
+    OpenAI's structured-output mode requires this on every object in the schema,
+    including nested ones. Our existing schemas were written for Gemini which does
+    not have this requirement, so we normalise them here rather than touching each
+    schema definition individually.
+    """
+    import copy
+    schema = copy.deepcopy(schema)
+
+    def _walk(node: Any) -> None:
+        if not isinstance(node, dict):
+            return
+        if node.get("type") == "object":
+            node.setdefault("additionalProperties", False)
+            for prop in (node.get("properties") or {}).values():
+                _walk(prop)
+        elif node.get("type") == "array":
+            _walk(node.get("items"))
+        # handle anyOf / oneOf / allOf
+        for key in ("anyOf", "oneOf", "allOf"):
+            for sub in node.get(key) or []:
+                _walk(sub)
+
+    _walk(schema)
+    return schema
+
+
+
     def __init__(self, client: AsyncOpenAI):
         self._client = client
 
@@ -222,7 +251,7 @@ class _Models:
                     "type": "json_schema",
                     "name": "structured_response",
                     "strict": True,
-                    "schema": config.response_schema,
+                    "schema": _patch_schema(config.response_schema),
                 }
             }
 
