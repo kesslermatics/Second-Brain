@@ -35,7 +35,7 @@ import asyncio
 import logging
 from typing import AsyncGenerator
 
-from google.genai import types
+from app.services.openai_compat import types
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.ai_service import get_client, PRO_MODEL
@@ -315,7 +315,8 @@ async def run_teacher_agent(
         # Use LOW thinking level for the teacher agent: didactic explanation is a
         # well-defined task, not a hard reasoning problem. LOW reduces time-to-first-token
         # from ~10-40s (HIGH default) to ~2-5s while matching quality on tool-calling tasks.
-        # gemini-3.5-flash uses the thinking_level enum (minimal|low|medium|high).
+        # The compatibility adapter keeps this setting as a no-op; the UI uses
+        # server-generated status phrases rather than exposing model reasoning.
         thinking_config = types.ThinkingConfig(thinking_level="low")
     except Exception:
         thinking_config = None

@@ -10,7 +10,7 @@ from uuid import UUID
 from app.database import get_db, async_session
 from app.auth import get_current_user
 from app.models import User, ChatSession, ChatMessage, Note, Folder, UserSettings
-from app.services.ai_service import get_client, FLASH_MODEL, PRO_MODEL, DEFAULT_RAG_PROMPT, generate_chat_title
+from app.services.ai_service import PRO_MODEL, DEFAULT_RAG_PROMPT, generate_chat_title, generate_stream
 from app.services.vector_service import hybrid_search
 
 router = APIRouter(prefix="/chat", tags=["chat-stream"])
@@ -87,15 +87,11 @@ async def stream_message(
     full_response_parts = []
 
     async def event_stream():
-        client = get_client()
-
-        async for chunk in await client.aio.models.generate_content_stream(
-            model=PRO_MODEL,
-            contents=prompt,
-        ):
-            if chunk.text:
-                full_response_parts.append(chunk.text)
-                data = json.dumps({"type": "chunk", "content": chunk.text}, ensure_ascii=False)
+        async for event in generate_stream(prompt, model=PRO_MODEL):
+            if event["type"] == "chunk":
+                text_chunk = event["content"]
+                full_response_parts.append(text_chunk)
+                data = json.dumps({"type": "chunk", "content": text_chunk}, ensure_ascii=False)
                 yield f"data: {data}\n\n"
 
         # Append sources

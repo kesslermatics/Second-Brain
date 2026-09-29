@@ -1,28 +1,22 @@
-"""Quick connectivity check: do both candidate models actually respond?"""
+"""Quick connectivity check for the configured OpenAI Sol and Luna models."""
 import asyncio
-from google.genai import types
-from app.services.ai_service import get_client
 
-MODELS = ["gemini-3.1-pro-preview", "gemini-3.5-flash"]
+from app.services.ai_service import FLASH_MODEL, PRO_MODEL, generate
+
+MODELS = [PRO_MODEL, FLASH_MODEL]
 
 
-async def ping(model: str):
-    client = get_client()
+async def ping(model: str) -> str:
     try:
-        r = await client.aio.models.generate_content(
-            model=model,
-            contents="Antworte nur mit dem Wort: OK",
-            config=types.GenerateContentConfig(temperature=0),
-        )
-        um = getattr(r, "usage_metadata", None)
-        return f"{model}: OK -> {repr((r.text or '').strip()[:40])} | usage={um}"
-    except Exception as e:
-        return f"{model}: FEHLER -> {type(e).__name__}: {e}"
+        text = await generate("Antworte nur mit dem Wort: OK", model=model, temperature=0)
+        return f"{model}: OK -> {text.strip()[:40]!r}"
+    except Exception as exc:
+        return f"{model}: FEHLER -> {type(exc).__name__}: {exc}"
 
 
-async def main():
-    for m in MODELS:
-        print(await ping(m))
+async def main() -> None:
+    for model in MODELS:
+        print(await ping(model))
 
 
 if __name__ == "__main__":

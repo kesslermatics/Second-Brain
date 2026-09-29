@@ -1,8 +1,8 @@
 """
-Real A/B evaluation: gemini-3.1-pro-preview  vs  gemini-3.5-flash
-as the "Infinite Teacher" model.
+Real A/B evaluation: configured OpenAI primary model vs fast model
+for the "Infinite Teacher" model.
 
-This is NOT a mock. It fires real Gemini calls with the SAME system instruction
+This is NOT a mock. It fires real OpenAI calls with the SAME system instruction
 and lesson context the live teacher uses, across a small sample course, and
 measures for each model:
   - wall-clock latency per task
@@ -29,24 +29,20 @@ import json
 import time
 from dataclasses import dataclass, field
 
-from google.genai import types
+from app.services.openai_compat import types
 
-from app.services.ai_service import get_client
+from app.services.ai_service import FLASH_MODEL, PRO_MODEL, get_client
 from app.services.teacher_service import (
     FORMATTING_RULES, _build_sections_block, CURRICULUM_SCHEMA,
 )
 
 # ── Candidate models ──────────────────────────────────────────────────
-MODEL_A = "gemini-3.1-pro-preview"   # current
-MODEL_B = "gemini-3.5-flash"         # candidate: faster/cheaper/newer
-JUDGE_MODEL = "gemini-3.1-pro-preview"
+MODEL_A = PRO_MODEL       # primary: GPT-5.6 Sol by default
+MODEL_B = FLASH_MODEL     # fast: GPT-5.6 Luna by default
+JUDGE_MODEL = PRO_MODEL
 
-# ── Rough pricing ($ per 1M tokens). EDIT to match official pricing. ──
-# Thought tokens are billed as output tokens on Gemini.
-RATES = {
-    "gemini-3.1-pro-preview": {"in": 1.25, "out": 10.00},
-    "gemini-3.5-flash":       {"in": 0.30, "out": 2.50},
-}
+# Add current contracted pricing here if cost comparisons are needed.
+RATES: dict[str, dict[str, float]] = {}
 
 
 # ── Sample course ─────────────────────────────────────────────────────
@@ -139,7 +135,7 @@ async def _run_call(model: str, task: str, *, system: str | None, contents,
         cfg_kwargs["system_instruction"] = system
     tools = []
     if grounded:
-        tools.append(types.Tool(google_search=types.GoogleSearch()))
+        tools.append(types.Tool(web_search=types.OpenAIWebSearch()))
     if tools:
         cfg_kwargs["tools"] = tools
     if thinking:

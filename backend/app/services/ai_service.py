@@ -1,11 +1,7 @@
-"""
-AI Service — shared Gemini client and utility functions for all AI features.
-Uses the new google-genai SDK.
-"""
+"""Shared OpenAI Responses API helpers for all AI features."""
 
-from google import genai
-from google.genai import types
 from app.config import get_settings
+from app.services.openai_compat import OpenAICompatClient, types
 from typing import AsyncGenerator
 import asyncio
 import json
@@ -15,29 +11,23 @@ settings = get_settings()
 
 # ── Shared client (singleton) ─────────────────────────────────────────
 
-_client: genai.Client | None = None
+_client: OpenAICompatClient | None = None
 
 
-def get_client() -> genai.Client:
-    """Get or create the shared Gemini client."""
+def get_client() -> OpenAICompatClient:
+    """Get the shared OpenAI-backed compatibility client."""
     global _client
     if _client is None:
-        _client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        _client = OpenAICompatClient(api_key=settings.OPENAI_API_KEY)
     return _client
 
 
 # ── Model constants ───────────────────────────────────────────────────
-# FLASH_MODEL: ultra-cheap tier for trivial tasks (vision, tag/link suggestion,
-#   chat titles, the tutor's "thinking" status line).
-# PRO_MODEL:   the primary high-quality reasoning model used by the teacher,
-#   the agentic workspace, the book service and RAG/summaries.
-#
-# Model choice (2026-07): an A/B eval (see backend/eval_teacher_models.py) showed
-# gemini-3.5-flash matches gemini-3.1-pro-preview on didactic quality while being
-# ~1.4x faster and ~74% cheaper (far fewer thinking tokens). It also thinks and
-# grounds. We therefore use it as the primary model everywhere PRO_MODEL is used.
-FLASH_MODEL = "gemini-3-flash-preview"
-PRO_MODEL = "gemini-3.8-flash"
+# Fast/high-volume tasks use Luna; complex reasoning, RAG and agents use Sol.
+# Values are deliberately environment-driven so model routing can be adjusted
+# without a source change.
+FLASH_MODEL = settings.OPENAI_FAST_MODEL
+PRO_MODEL = settings.OPENAI_PRIMARY_MODEL
 
 
 async def generate(prompt: str, model: str = None, system_instruction: str = None, temperature: float = None, tools=None) -> str:
@@ -73,8 +63,7 @@ async def generate_json(
 ) -> dict | list | None:
     """Generate content constrained to a JSON schema using native structured output.
 
-    `schema` is a JSON-schema dict (google.genai accepts this directly for
-    response_schema). Returns the parsed object/list, or None on failure unless
+    `schema` is an OpenAI JSON-schema dict. Returns the parsed object/list, or None on failure unless
     ``raise_on_error`` is true, in which case provider errors are propagated.
     This eliminates the whole class of "LLM returned broken JSON" errors.
     """
@@ -166,7 +155,7 @@ async def generate_with_search_sources(
     model_name = model or FLASH_MODEL
 
     config = types.GenerateContentConfig(
-        tools=[types.Tool(google_search=types.GoogleSearch())],
+        tools=[types.Tool(web_search=types.OpenAIWebSearch())],
     )
     if system_instruction:
         config.system_instruction = system_instruction
@@ -228,7 +217,7 @@ async def generate_with_search(prompt: str, model: str = None, system_instructio
     model_name = model or FLASH_MODEL
 
     config = types.GenerateContentConfig(
-        tools=[types.Tool(google_search=types.GoogleSearch())],
+        tools=[types.Tool(web_search=types.OpenAIWebSearch())],
     )
     if system_instruction:
         config.system_instruction = system_instruction
@@ -251,7 +240,7 @@ async def generate_with_search_stream(
     model_name = model or FLASH_MODEL
 
     config = types.GenerateContentConfig(
-        tools=[types.Tool(google_search=types.GoogleSearch())],
+        tools=[types.Tool(web_search=types.OpenAIWebSearch())],
     )
     if system_instruction:
         config.system_instruction = system_instruction

@@ -1,10 +1,6 @@
-"""
-Gemini Vision service — interprets images and generates text descriptions for RAG.
-Uses the new google-genai SDK.
-"""
-import asyncio
+"""OpenAI Vision service — interprets images and documents for RAG."""
 from pathlib import Path
-from google.genai import types
+from app.services.openai_compat import types
 from app.services.ai_service import get_client, FLASH_MODEL
 
 VISION_MODEL = FLASH_MODEL
@@ -23,8 +19,7 @@ Wenn es ein Diagramm oder eine Grafik ist, beschreibe alle Daten und Zusammenhä
 
 
 async def describe_image(file_path: str, custom_prompt: str | None = None) -> str:
-    """
-    Send an image to Gemini Vision and get a detailed text description.
+    """Send an image to OpenAI vision and return a detailed text description.
 
     Args:
         file_path: Absolute or relative path to the image file on disk.
@@ -91,8 +86,7 @@ Gib auch an, wie viele Seiten/Abschnitte das Dokument ungefähr hat."""
 
 
 async def analyze_document(file_bytes: bytes, content_type: str, filename: str, custom_prompt: str | None = None) -> str:
-    """
-    Analyze a document (PDF, DOCX, etc.) using Gemini's document understanding.
+    """Analyze a document with OpenAI file understanding.
 
     Args:
         file_bytes: Raw bytes of the document.
@@ -121,7 +115,7 @@ async def analyze_document(file_bytes: bytes, content_type: str, filename: str, 
         )
         return response.text.strip()
 
-    # For PDFs and Office docs, use Gemini's native document processing
+    # PDFs and supported office documents are passed to the OpenAI Responses API as input files.
     response = await client.aio.models.generate_content(
         model=VISION_MODEL,
         contents=[

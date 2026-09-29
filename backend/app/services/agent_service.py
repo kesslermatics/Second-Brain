@@ -3,9 +3,9 @@ Agentic Workspace Service — true multi-turn, function-calling agent using
 the primary reasoning model (PRO_MODEL) with thinking and streaming.
 
 Architecture:
-- Uses the new google-genai SDK with native function calling (no JSON simulation)
+- Uses OpenAI's Responses API with native function calling
 - Multi-turn chat: real conversation history with proper roles
-- Thinking model: streams thought summaries + response chunks
+- The UI uses status phrases and response chunks; provider reasoning remains private
 - Autonomous tool loop: model decides when to call tools, we execute and feed back
 """
 
@@ -18,8 +18,7 @@ from pathlib import Path
 from typing import Optional, AsyncGenerator
 from uuid import UUID
 
-from google import genai
-from google.genai import types
+from app.services.openai_compat import types
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, func
 
@@ -825,7 +824,7 @@ async def _execute_tool(name: str, args: dict, user_id: str, db: AsyncSession) -
             return {"status": "folder_deleted"}
 
         elif name == "web_search":
-            # Execute a separate Gemini call with Google Search grounding
+            # Execute a separate OpenAI Responses API call with built-in web search
             query = args.get("query", "")
             try:
                 search_client = get_client()
@@ -833,7 +832,7 @@ async def _execute_tool(name: str, args: dict, user_id: str, db: AsyncSession) -
                     model=FLASH_MODEL,
                     contents=f"Recherchiere: {query}\n\nGib eine präzise, faktenbasierte Zusammenfassung.",
                     config=types.GenerateContentConfig(
-                        tools=[types.Tool(google_search=types.GoogleSearch())],
+                        tools=[types.Tool(web_search=types.OpenAIWebSearch())],
                     ),
                 )
                 # Extract grounding sources — try multiple attribute paths
