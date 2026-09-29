@@ -227,7 +227,7 @@ def _patch_schema(schema: dict) -> dict:
     return schema
 
 
-
+class _Models:
     def __init__(self, client: AsyncOpenAI):
         self._client = client
 
