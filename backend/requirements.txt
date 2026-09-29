@@ -12,6 +12,7 @@ bcrypt>=4.0
 qdrant-client>=1.11
 openai==2.49.0
 numpy>=1.26
+greenlet>=3.0
 apscheduler>=3.10
 python-multipart>=0.0.9
 httpx>=0.27

@@ -83,6 +83,9 @@ def _normalize(vector: list[float]) -> list[float]:
 
 
 def _embed(text_value: str) -> list[float]:
+    # text-embedding-3-large has a hard 8192-token limit (~32 000 chars).
+    # We truncate conservatively at 30 000 chars so even token-heavy content fits.
+    text_value = text_value[:30000]
     response = _get_embedding_client().embeddings.create(
         model=EMBEDDING_MODEL,
         input=text_value,
