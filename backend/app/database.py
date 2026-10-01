@@ -6,7 +6,14 @@ settings = get_settings()
 
 DATABASE_URL = settings.DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
 
-engine = create_async_engine(DATABASE_URL, echo=False, pool_size=20, max_overflow=10)
+engine = create_async_engine(
+    DATABASE_URL,
+    echo=False,
+    pool_size=20,
+    max_overflow=10,
+    pool_pre_ping=True,          # test connection before using from pool
+    pool_recycle=1800,           # recycle connections after 30 min
+)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
