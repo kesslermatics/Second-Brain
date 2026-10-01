@@ -214,7 +214,13 @@ def _patch_schema(schema: dict) -> dict:
             return
         if node.get("type") == "object":
             node.setdefault("additionalProperties", False)
-            for prop in (node.get("properties") or {}).values():
+            props = node.get("properties") or {}
+            # OpenAI strict mode requires *every* property to be listed in
+            # "required". Backfill any missing keys so existing schemas that
+            # were written for Gemini (which is lenient) still work.
+            if props:
+                node["required"] = sorted(props.keys())
+            for prop in props.values():
                 _walk(prop)
         elif node.get("type") == "array":
             _walk(node.get("items"))
