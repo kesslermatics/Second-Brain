@@ -606,7 +606,9 @@ async def _apply_create(p: dict, user_id: UUID, db: AsyncSession, background_tas
     note = Note(title=title, content=content, note_type="text", folder_id=folder.id, user_id=user_id)
     db.add(note)
     await db.flush()
-    await db.refresh(note)
+    # Explicitly load the tags collection before appending — accessing a lazy
+    # relationship without awaiting it first raises greenlet_spawn in async SQLAlchemy.
+    await db.refresh(note, ["tags"])
 
     for tag_name in tag_names:
         tag = await _get_or_create_tag(tag_name, user_id, db)
