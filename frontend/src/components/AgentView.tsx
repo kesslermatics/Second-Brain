@@ -40,12 +40,55 @@ interface DiffViewData {
 
 // Rewrite the agent's [[cite:N]] markers into markdown fragment links so they
 // survive the markdown pipeline and can be rendered as chips by the `a` override.
-// Markers without a matching source entry are dropped rather than shown raw.
+// Within each paragraph/list block (text between blank lines), keep only the LAST
+// occurrence of each cite id — so a list where every item cites the same note ends
+// up with a single chip at the end instead of one per line.
 const CITE_MARKER = /\[\[cite:(\d+)\]\]/g;
 
+function collapseBlockCites(block: string): string {
+    // Collect positions of every marker grouped by cite-id
+    const positions = new Map<string, number[]>(); // id → [start, ...]
+    const re = /\[\[cite:(\d+)\]\]/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(block)) !== null) {
+        const id = m[1];
+        if (!positions.has(id)) positions.set(id, []);
+        positions.get(id)!.push(m.index);
+    }
+
+    // Build a set of indices to remove (all but last per id)
+    const remove = new Set<number>();
+    positions.forEach((idxs) => {
+        idxs.slice(0, -1).forEach((idx) => remove.add(idx));
+    });
+    if (remove.size === 0) return block;
+
+    // Rebuild string, skipping removed markers
+    let result = '';
+    let cursor = 0;
+    const matchRe = /\[\[cite:(\d+)\]\]/g;
+    while ((m = matchRe.exec(block)) !== null) {
+        if (remove.has(m.index)) {
+            result += block.slice(cursor, m.index);
+            cursor = m.index + m[0].length;
+        }
+    }
+    result += block.slice(cursor);
+    return result;
+}
+
 function injectCitationLinks(content: string, citations?: Record<string, AgentCitation>): string {
-    return content.replace(CITE_MARKER, (_full, n: string) =>
-        citations && citations[n] ? `[${n}](#cite-${n})` : ''
+    if (!citations) return content.replace(CITE_MARKER, '');
+
+    // Collapse duplicate cites within each block (paragraph / list)
+    const collapsed = content
+        .split(/\n{2,}/)
+        .map(collapseBlockCites)
+        .join('\n\n');
+
+    // Convert remaining markers to fragment links (unknown ids are dropped)
+    return collapsed.replace(CITE_MARKER, (_full, n: string) =>
+        citations[n] ? `[${n}](#cite-${n})` : ''
     );
 }
 

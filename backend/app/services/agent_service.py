@@ -118,8 +118,10 @@ Jedes Tool-Ergebnis, das eine Quelle liefert (Notizen aus `search_notes`/`read_n
 Wenn du eine Information aus einer solchen Quelle verwendest, setze direkt hinter die betreffende Passage den Marker `[[cite:N]]` — mit genau der Zahl aus dem `cite`-Feld.
 
 Regeln:
-- Setze den Marker ans ENDE des Satzes oder Absatzes, der die Information enthält — nach dem Punkt.
-- Mehrere Quellen für eine Passage: `[[cite:2]][[cite:5]]` direkt hintereinander.
+- Setze den Marker ans ENDE eines **Absatzes oder thematischen Abschnitts** — nicht nach jedem einzelnen Satz oder Listenpunkt.
+- Wenn mehrere aufeinanderfolgende Sätze oder Listeneinträge aus **derselben Quelle** stammen, reicht ein einziger Marker am Ende des letzten Eintrags dieser Quelle.
+- Wenn ein ganzer Listenblock (z.B. alle Punkte unter einer Überschrift) aus derselben Notiz kommt, setze den Marker nur **einmal am Ende des Blocks** — nicht nach jedem Listenpunkt.
+- Mehrere **verschiedene** Quellen für eine Passage: `[[cite:2]][[cite:5]]` direkt hintereinander.
 - Zitiere nur, wenn die Information wirklich aus dieser Quelle kommt. Eigene Schlussfolgerungen, Vorschläge und allgemeines Wissen brauchen KEINEN Marker.
 - Erfinde NIEMALS Zahlen. Nutze ausschließlich `cite`-Werte, die du tatsächlich in einem Tool-Ergebnis gesehen hast.
 - Schreibe die Marker als reinen Text, nicht in Code-Blöcken, nicht in Backticks.
