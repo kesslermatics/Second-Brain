@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     FORGE_API_KEY: str = ""
     VESTI_API_URL: str = ""
     VESTI_API_KEY: str = ""
+    GLOWUP_MCP_URL: str = ""
+    GLOWUP_MCP_API_KEY: str = ""
 
     class Config:
         env_file = ".env"

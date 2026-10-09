@@ -136,6 +136,14 @@ Schreibe Notiz-Inhalte immer in gut formatiertem Markdown mit Headings, Listen, 
    - Bei Outfit-Fragen: Lade die relevanten Kategorien und schlage konkrete Kombinationen vor basierend auf Stil, Anlass und Saison.
    - Vesti-Daten sind Live-Daten — immer aktuell, nicht in Notizen zwischenspeichern.
 
+12. **Glowup Routinen & Gewohnheiten**: Du hast Zugriff auf die Glowup-App des Benutzers mit drei Tools:
+   - `list_routines` — Kompakte Übersicht aller Routinen (Name, ID, Typ, Frequenz). Nutze dies als ersten Schritt wenn der Benutzer nach seinen Gewohnheiten oder Routinen fragt, oder bevor du mit den anderen Tools tiefer einsteigst.
+   - `get_routine_summary` — Schedule-bewusste Performance-Zusammenfassung einer Routine: Streaks, Erfolgsquote, Fehlschläge. Nutze dies für: 'Wie gut halte ich X durch?', 'Wie ist mein Streak?', 'Zeig mir meine Performance'.
+   - `get_routine_entries` — Rohe Tageseinträge einer Routine mit Status, Wert, Notiz, Mood und Energy. Nutze dies wenn konkrete Einzel-Daten gefragt sind: 'Was habe ich diese Woche eingetragen?', 'An welchen Tagen habe ich gefehlt?'.
+   - Workflow: Starte meist mit `list_routines` um die IDs zu kennen, dann hole Details mit Summary oder Entries.
+   - Verbinde Glowup-Daten mit Notizen: Wenn der Benutzer über Gewohnheiten, Selbstentwicklung oder Tagesstruktur spricht, prüfe sowohl seine Notizen als auch Glowup.
+   - Glowup-Daten sind Live-Daten — immer aktuell, nicht in Notizen zwischenspeichern.
+
 ## Sprache:
 Antworte IMMER in der Sprache des Benutzers (Standard: Deutsch)."""
 
@@ -723,6 +731,88 @@ def _get_agent_tools() -> list:
         },
     )
 
+    # ── Glowup Routine-Tracker Tools ─────────────────────────────────
+
+    list_routines = types.FunctionDeclaration(
+        name="list_routines",
+        description=(
+            "Listet alle Routinen des Benutzers aus der Glowup-App auf (kompakt, ohne Eintragshistorie). "
+            "Nutze dies um einen Überblick zu bekommen: 'Welche Routinen habe ich?', "
+            "'Zeig mir meine aktiven Gewohnheiten', 'Was tracke ich gerade?'. "
+            "Liefert Name, ID, Typ, Frequenz und Status jeder Routine — "
+            "anschließend kannst du mit get_routine_summary oder get_routine_entries tiefer einsteigen."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "include_archived": {
+                    "type": "boolean",
+                    "description": "Archivierte Routinen einschließen (Standard: false)",
+                },
+                "name_query": {
+                    "type": "string",
+                    "description": "Namensteil zum Filtern, z.B. 'Sport' oder 'Morgen'",
+                },
+            },
+        },
+    )
+
+    get_routine_summary = types.FunctionDeclaration(
+        name="get_routine_summary",
+        description=(
+            "Schedule-bewusste Performance-Zusammenfassung einer einzelnen Routine: "
+            "Streaks, Erfolgsquote, Fehlschläge und Trend — basierend auf dem Zeitfenster. "
+            "Nutze dies bei Fragen zu Fortschritt oder Konsistenz einer bestimmten Routine: "
+            "'Wie gut halte ich meine Morgenroutine durch?', 'Wie ist mein Streak bei X?', "
+            "'Zeig mir meine Performance der letzten 30 Tage'. "
+            "Hole dir zuerst die routine_id via list_routines wenn du sie noch nicht kennst."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "routine_id": {
+                    "type": "string",
+                    "description": "UUID der Routine (aus list_routines)",
+                },
+                "days": {
+                    "type": "integer",
+                    "enum": [7, 30, 90],
+                    "description": "Analysefenster in Tagen — nur 7, 30 oder 90 erlaubt",
+                },
+            },
+            "required": ["routine_id", "days"],
+        },
+    )
+
+    get_routine_entries = types.FunctionDeclaration(
+        name="get_routine_entries",
+        description=(
+            "Ruft die rohen Tageseinträge einer Routine ab: Status (done/skipped/missed), "
+            "Wert, Notiz, Mood und Energy pro Tag. "
+            "Nutze dies wenn du konkrete Einzeldaten brauchst: 'Was habe ich diese Woche eingetragen?', "
+            "'Zeig mir meine Notizen zur Routine', 'An welchen Tagen habe ich gefehlt?'. "
+            "Maximaler Zeitraum: 90 Tage. Hole dir zuerst die routine_id via list_routines."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "routine_id": {
+                    "type": "string",
+                    "description": "UUID der Routine (aus list_routines)",
+                },
+                "from": {
+                    "type": "string",
+                    "description": "Startdatum inklusiv (YYYY-MM-DD)",
+                },
+                "to": {
+                    "type": "string",
+                    "description": "Enddatum inklusiv (YYYY-MM-DD) — max. 90 Tage Abstand zu 'from'",
+                },
+            },
+            "required": ["routine_id", "from", "to"],
+        },
+    )
+
     return [
         types.Tool(function_declarations=[
             search_notes,
@@ -747,6 +837,9 @@ def _get_agent_tools() -> list:
             get_health_data,
             get_wardrobe,
             get_wardrobe_analytics,
+            list_routines,
+            get_routine_summary,
+            get_routine_entries,
         ]),
     ]
 
@@ -1022,6 +1115,7 @@ async def _execute_tool(name: str, args: dict, user_id: str, db: AsyncSession) -
         elif name == "create_note":
             # Execute directly — no proposal flow
             from app.routes.agent_routes import _apply_create as _do_create, _apply_update as _do_update, _apply_delete as _do_delete, _apply_rename_note as _do_rename, _apply_move_note as _do_move, _apply_create_folder as _do_create_folder, _apply_rename_folder as _do_rename_folder, _apply_delete_folder as _do_delete_folder
+            from app.services.vector_service import upsert_note_embedding, delete_note_embedding
             p = {
                 "type": "create",
                 "folder_path": args.get("folder_path", "Allgemein"),
@@ -1031,10 +1125,21 @@ async def _execute_tool(name: str, args: dict, user_id: str, db: AsyncSession) -
                 "attach_file_ids": args.get("attach_file_ids", []),
             }
             result = await _do_create(p, UUID(user_id), db)
+            # Upsert embedding directly — no background_tasks available here
+            try:
+                await asyncio.to_thread(
+                    upsert_note_embedding,
+                    result["note_id"], user_id,
+                    result.get("title", ""), args.get("content", ""),
+                    result.get("folder_path", ""),
+                )
+            except Exception as emb_err:
+                logger.warning(f"Embedding upsert failed for created note {result.get('note_id')}: {emb_err}")
             return {"status": "created", "note_id": result.get("note_id"), "title": result.get("title")}
 
         elif name == "update_note":
             from app.routes.agent_routes import _apply_update as _do_update
+            from app.services.vector_service import upsert_note_embedding
             p = {
                 "type": "update",
                 "note_id": args.get("note_id", ""),
@@ -1042,35 +1147,87 @@ async def _execute_tool(name: str, args: dict, user_id: str, db: AsyncSession) -
                 "new_content": args.get("new_content"),
             }
             result = await _do_update(p, UUID(user_id), db)
+            # Re-embed with the updated content/title
+            try:
+                updated_title = result.get("title", "")
+                updated_content = args.get("new_content") or ""
+                updated_folder = result.get("folder_path", "")
+                if not updated_content:
+                    # Reload from DB so we embed the full current content
+                    from app.models import Note as _Note
+                    note_obj = await db.get(_Note, UUID(result["note_id"]))
+                    if note_obj:
+                        updated_content = note_obj.content
+                await asyncio.to_thread(
+                    upsert_note_embedding,
+                    result["note_id"], user_id,
+                    updated_title, updated_content, updated_folder,
+                )
+            except Exception as emb_err:
+                logger.warning(f"Embedding upsert failed for updated note {result.get('note_id')}: {emb_err}")
             return {"status": "updated", "note_id": result.get("note_id"), "title": result.get("title")}
 
         elif name == "delete_note":
             from app.routes.agent_routes import _apply_delete as _do_delete
+            from app.services.vector_service import delete_note_embedding
+            note_id_to_delete = args.get("note_id", "")
             p = {
                 "type": "delete",
-                "note_id": args.get("note_id", ""),
+                "note_id": note_id_to_delete,
             }
             await _do_delete(p, UUID(user_id), db)
+            try:
+                await asyncio.to_thread(delete_note_embedding, note_id_to_delete)
+            except Exception as emb_err:
+                logger.warning(f"Embedding delete failed for note {note_id_to_delete}: {emb_err}")
             return {"status": "deleted"}
 
         elif name == "rename_note":
             from app.routes.agent_routes import _apply_rename_note as _do_rename
+            from app.services.vector_service import upsert_note_embedding
             p = {
                 "type": "rename_note",
                 "note_id": args.get("note_id", ""),
                 "new_title": args.get("new_title", ""),
             }
             result = await _do_rename(p, UUID(user_id), db)
+            # Re-embed with new title (content unchanged)
+            try:
+                from app.models import Note as _Note
+                note_obj = await db.get(_Note, UUID(result["note_id"]))
+                if note_obj:
+                    await asyncio.to_thread(
+                        upsert_note_embedding,
+                        result["note_id"], user_id,
+                        result.get("title", ""), note_obj.content,
+                        result.get("folder_path", ""),
+                    )
+            except Exception as emb_err:
+                logger.warning(f"Embedding upsert failed for renamed note {result.get('note_id')}: {emb_err}")
             return {"status": "renamed", "note_id": result.get("note_id"), "title": result.get("title")}
 
         elif name == "move_note":
             from app.routes.agent_routes import _apply_move_note as _do_move
+            from app.services.vector_service import upsert_note_embedding
             p = {
                 "type": "move_note",
                 "note_id": args.get("note_id", ""),
                 "target_folder_path": args.get("target_folder_path", ""),
             }
             result = await _do_move(p, UUID(user_id), db)
+            # Re-embed with updated folder_path
+            try:
+                from app.models import Note as _Note
+                note_obj = await db.get(_Note, UUID(result["note_id"]))
+                if note_obj:
+                    await asyncio.to_thread(
+                        upsert_note_embedding,
+                        result["note_id"], user_id,
+                        result.get("title", ""), note_obj.content,
+                        result.get("folder_path", ""),
+                    )
+            except Exception as emb_err:
+                logger.warning(f"Embedding upsert failed for moved note {result.get('note_id')}: {emb_err}")
             return {"status": "moved", "note_id": result.get("note_id"), "title": result.get("title")}
 
         elif name == "create_folder":
@@ -1084,21 +1241,74 @@ async def _execute_tool(name: str, args: dict, user_id: str, db: AsyncSession) -
 
         elif name == "rename_folder":
             from app.routes.agent_routes import _apply_rename_folder as _do_rename_folder
+            from app.services.vector_service import upsert_note_embedding
             p = {
                 "type": "rename_folder",
                 "folder_path": args.get("folder_path", ""),
                 "new_name": args.get("new_name", ""),
             }
-            await _do_rename_folder(p, UUID(user_id), db)
+            result = await _do_rename_folder(p, UUID(user_id), db)
+            # Re-embed all notes that moved to the new folder path
+            try:
+                from app.models import Note as _Note, Folder as _Folder
+                new_path = result.get("path", "")
+                if new_path:
+                    folder_result = await db.execute(
+                        select(_Folder).where(_Folder.path == new_path, _Folder.user_id == UUID(user_id))
+                    )
+                    folder_obj = folder_result.scalar_one_or_none()
+                    if folder_obj:
+                        notes_result = await db.execute(
+                            select(_Note).where(_Note.folder_id == folder_obj.id)
+                        )
+                        for note_obj in notes_result.scalars().all():
+                            try:
+                                await asyncio.to_thread(
+                                    upsert_note_embedding,
+                                    str(note_obj.id), user_id,
+                                    note_obj.title, note_obj.content, new_path,
+                                )
+                            except Exception as emb_err:
+                                logger.warning(f"Embedding upsert failed for note {note_obj.id} after folder rename: {emb_err}")
+            except Exception as emb_err:
+                logger.warning(f"Embedding re-index failed after folder rename: {emb_err}")
             return {"status": "folder_renamed"}
 
         elif name == "delete_folder":
             from app.routes.agent_routes import _apply_delete_folder as _do_delete_folder
+            from app.services.vector_service import delete_note_embedding
+            folder_path_to_delete = args.get("folder_path", "")
+            # Collect note IDs before deletion so we can remove their embeddings
+            deleted_note_ids: list[str] = []
+            try:
+                from app.models import Note as _Note, Folder as _Folder
+                folders_result = await db.execute(
+                    select(_Folder).where(
+                        _Folder.user_id == UUID(user_id),
+                        or_(
+                            _Folder.path == folder_path_to_delete,
+                            _Folder.path.like(f"{folder_path_to_delete}/%"),
+                        ),
+                    )
+                )
+                folder_ids = [f.id for f in folders_result.scalars().all()]
+                if folder_ids:
+                    notes_result = await db.execute(
+                        select(_Note.id).where(_Note.folder_id.in_(folder_ids))
+                    )
+                    deleted_note_ids = [str(row[0]) for row in notes_result.all()]
+            except Exception:
+                pass
             p = {
                 "type": "delete_folder",
-                "folder_path": args.get("folder_path", ""),
+                "folder_path": folder_path_to_delete,
             }
             await _do_delete_folder(p, UUID(user_id), db)
+            for nid in deleted_note_ids:
+                try:
+                    await asyncio.to_thread(delete_note_embedding, nid)
+                except Exception as emb_err:
+                    logger.warning(f"Embedding delete failed for note {nid} after folder delete: {emb_err}")
             return {"status": "folder_deleted"}
 
         elif name == "web_search":
@@ -1359,6 +1569,51 @@ async def _execute_tool(name: str, args: dict, user_id: str, db: AsyncSession) -
                 return {"error": "Vesti Analytics konnte keine Daten liefern"}
             return combined
 
+        # ── Glowup Routine-Tracker Tools ──────────────────────────────────
+
+        elif name == "list_routines":
+            from app.services.glowup_mcp_client import call_glowup_tool
+
+            arguments: dict = {}
+            if args.get("include_archived") is not None:
+                arguments["include_archived"] = bool(args["include_archived"])
+            if args.get("name_query"):
+                arguments["name_query"] = args["name_query"]
+            return await call_glowup_tool("list_routines", arguments)
+
+        elif name == "get_routine_summary":
+            from app.services.glowup_mcp_client import call_glowup_tool
+
+            routine_id = args.get("routine_id", "").strip()
+            if not routine_id:
+                return {"error": "routine_id ist erforderlich"}
+            try:
+                days = int(args.get("days", 30))
+            except (ValueError, TypeError):
+                days = 30
+            if days not in (7, 30, 90):
+                days = min((7, 30, 90), key=lambda d: abs(d - days))
+            return await call_glowup_tool("get_routine_summary", {
+                "routine_id": routine_id,
+                "days": days,
+            })
+
+        elif name == "get_routine_entries":
+            from app.services.glowup_mcp_client import call_glowup_tool
+
+            routine_id = args.get("routine_id", "").strip()
+            from_date = args.get("from", "").strip()
+            to_date = args.get("to", "").strip()
+            if not routine_id:
+                return {"error": "routine_id ist erforderlich"}
+            if not from_date or not to_date:
+                return {"error": "'from' und 'to' sind erforderlich"}
+            return await call_glowup_tool("get_routine_entries", {
+                "routine_id": routine_id,
+                "from": from_date,
+                "to": to_date,
+            })
+
         else:
             return {"error": f"Unbekanntes Tool: {name}"}
 
@@ -1465,6 +1720,9 @@ _STATUS_PHRASES = {
     "get_health_data": "Checkt deine Ernährung",
     "get_wardrobe": "Schaut Klamotten durch",
     "get_wardrobe_analytics": "Analysiert deine Garderobe",
+    "list_routines": "Lädt deine Routinen",
+    "get_routine_summary": "Analysiert Routine-Performance",
+    "get_routine_entries": "Liest Routine-Einträge",
 }
 
 
@@ -1539,6 +1797,24 @@ def _detail_from_tool_result(tool_name: str, result: dict) -> dict:
         return {k: len(v) if isinstance(v, list) else v for k, v in result.items() if k in ("clothing", "watches", "fragrances", "accessories")}
     if tool_name == "get_wardrobe_analytics":
         return {k: v for k, v in result.items() if not isinstance(v, (list, dict)) or len(str(v)) < 200}
+    if tool_name == "list_routines":
+        routines = result.get("routines", result if isinstance(result, list) else [])
+        return {
+            "count": len(routines),
+            "routines": [
+                {"name": r.get("name", "?"), "id": r.get("id", "?"), "type": r.get("type", "")}
+                for r in routines[:15]
+            ],
+        }
+    if tool_name == "get_routine_summary":
+        return {k: v for k, v in result.items() if k in (
+            "routine_name", "days", "success_rate", "current_streak",
+            "longest_streak", "total_done", "total_missed", "total_scheduled",
+        ) and v is not None}
+    if tool_name == "get_routine_entries":
+        entries = result.get("entries", result if isinstance(result, list) else [])
+        done = sum(1 for e in entries if (e.get("status") or "") == "done")
+        return {"total_entries": len(entries), "done": done, "missed": len(entries) - done}
 
     # Fallback: a shallow dict with primitive values only
     out = {}
