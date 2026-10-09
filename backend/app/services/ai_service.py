@@ -1,4 +1,4 @@
-"""Shared OpenAI Responses API helpers for all AI features."""
+"""Shared AI helpers — backed by OpenRouter (Chat Completions API)."""
 
 from app.config import get_settings
 from app.services.openai_compat import OpenAICompatClient, types
@@ -15,19 +15,21 @@ _client: OpenAICompatClient | None = None
 
 
 def get_client() -> OpenAICompatClient:
-    """Get the shared OpenAI-backed compatibility client."""
+    """Get the shared OpenRouter-backed compatibility client."""
     global _client
     if _client is None:
-        _client = OpenAICompatClient(api_key=settings.OPENAI_API_KEY)
+        _client = OpenAICompatClient(
+            api_key=settings.OPENROUTER_API_KEY,
+            base_url=settings.OPENROUTER_BASE_URL,
+        )
     return _client
 
 
 # ── Model constants ───────────────────────────────────────────────────
-# Fast/high-volume tasks use Luna; complex reasoning, RAG and agents use Sol.
-# Values are deliberately environment-driven so model routing can be adjusted
-# without a source change.
-FLASH_MODEL = settings.OPENAI_FAST_MODEL
-PRO_MODEL = settings.OPENAI_PRIMARY_MODEL
+# Fast/high-volume tasks use the lite model; complex reasoning, RAG and agents use primary.
+# Values are environment-driven so model routing can be adjusted without a source change.
+FLASH_MODEL = settings.FAST_MODEL
+PRO_MODEL = settings.PRIMARY_MODEL
 
 
 async def generate(prompt: str, model: str = None, system_instruction: str = None, temperature: float = None, tools=None) -> str:

@@ -1,4 +1,4 @@
-"""OpenAI embeddings and Qdrant-backed hybrid search."""
+"""OpenRouter embeddings (google/gemini-embedding-2) and Qdrant-backed hybrid search."""
 
 import asyncio
 import logging
@@ -16,11 +16,11 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-# A separate collection prevents prior-provider and OpenAI vectors from ever being mixed.
-# Run ``python reindex_embeddings.py --recreate`` after deployment.
-COLLECTION_NAME = "brain_notes_openai"
-EMBEDDING_MODEL = settings.OPENAI_EMBEDDING_MODEL
-EMBEDDING_DIMENSION = settings.OPENAI_EMBEDDING_DIMENSIONS
+# A separate collection name ensures old OpenAI vectors are never mixed with
+# the new Gemini vectors. Run ``python reindex_embeddings.py --recreate`` after deployment.
+COLLECTION_NAME = "brain_notes_gemini"
+EMBEDDING_MODEL = settings.EMBEDDING_MODEL
+EMBEDDING_DIMENSION = settings.EMBEDDING_DIMENSIONS
 
 _qdrant_client: QdrantClient | None = None
 _embedding_client: OpenAI | None = None
@@ -37,7 +37,10 @@ def _get_qdrant() -> QdrantClient:
 def _get_embedding_client() -> OpenAI:
     global _embedding_client
     if _embedding_client is None:
-        _embedding_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        _embedding_client = OpenAI(
+            api_key=settings.OPENROUTER_API_KEY,
+            base_url=settings.OPENROUTER_BASE_URL,
+        )
     return _embedding_client
 
 
@@ -59,7 +62,7 @@ async def ensure_collection() -> None:
     if size is not None and size != EMBEDDING_DIMENSION:
         raise RuntimeError(
             f"Qdrant collection '{COLLECTION_NAME}' has {size} dimensions, but "
-            f"OPENAI_EMBEDDING_DIMENSIONS is {EMBEDDING_DIMENSION}. "
+            f"EMBEDDING_DIMENSIONS is {EMBEDDING_DIMENSION}. "
             "Choose the existing dimension or run reindex_embeddings.py --recreate."
         )
 
@@ -83,7 +86,7 @@ def _normalize(vector: list[float]) -> list[float]:
 
 
 def _embed(text_value: str) -> list[float]:
-    # text-embedding-3-large: hard 8192-token limit.
+    # gemini-embedding-2: 8192-token limit.
     # ~4 chars per token → 8000 tokens ≈ 32 000 chars. Stay well below with 20 000.
     text_value = text_value[:20000]
     response = _get_embedding_client().embeddings.create(
@@ -106,7 +109,7 @@ def get_query_embedding(text_value: str) -> list[float]:
 
 
 def upsert_note_embedding(note_id: str, user_id: str, title: str, content: str, folder_path: str) -> None:
-    """Embed and upsert a note or file-description payload into the OpenAI collection."""
+    """Embed and upsert a note or file-description payload into the Gemini collection."""
     vector = get_embedding(f"Title: {title}\nPath: {folder_path}\n\n{content}")
     _get_qdrant().upsert(
         collection_name=COLLECTION_NAME,
