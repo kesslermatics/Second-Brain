@@ -392,25 +392,32 @@ body {
 }
 
 /* ── Agent: Gemini-style shimmering activity line ───────────────── */
+/* The shimmer moves a wide gradient window across the text.
+   Key fixes for Chrome/Desktop:
+   - display:inline-block is required for background-clip:text to repaint during animation
+   - background-size must be >> 100% so the sweep is visible
+   - will-change:background-position forces GPU compositing                  */
 @keyframes agentShimmer {
-  0% { background-position: 150% 0; }
-  100% { background-position: -150% 0; }
+  0%   { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
 }
 .agent-shimmer {
-  background: linear-gradient(
+  display: inline-block;
+  background-image: linear-gradient(
     90deg,
     #6b7280 0%,
-    #6b7280 30%,
-    #f0f4ff 50%,
-    #6b7280 70%,
+    #6b7280 25%,
+    #e2e8f0 50%,
+    #6b7280 75%,
     #6b7280 100%
   );
-  background-size: 200% 100%;
+  background-size: 400% 100%;
   -webkit-background-clip: text;
-  background-clip: text;
+          background-clip: text;
   -webkit-text-fill-color: transparent;
   color: transparent;
-  animation: agentShimmer 2.4s linear infinite;
+  will-change: background-position;
+  animation: agentShimmer 2s linear infinite;
 }
 
 /* Status phrase crossfade when the agent rotates from one tool to the next */
