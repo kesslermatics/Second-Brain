@@ -390,3 +390,46 @@ body {
 .tiptap-editor .ProseMirror .tableWrapper {
   overflow-x: auto;
 }
+
+/* ── Agent: Gemini-style shimmering activity line ───────────────── */
+@keyframes agentShimmer {
+  0% { background-position: 150% 0; }
+  100% { background-position: -150% 0; }
+}
+.agent-shimmer {
+  background: linear-gradient(
+    90deg,
+    #6b7280 0%,
+    #6b7280 30%,
+    #f0f4ff 50%,
+    #6b7280 70%,
+    #6b7280 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: agentShimmer 2.4s linear infinite;
+}
+
+/* Status phrase crossfade when the agent rotates from one tool to the next */
+@keyframes agentPhraseIn {
+  0% { opacity: 0; transform: translateY(5px); filter: blur(3px); }
+  100% { opacity: 1; transform: translateY(0); filter: blur(0); }
+}
+.agent-phrase { animation: agentPhraseIn 0.45s cubic-bezier(0.22, 1, 0.36, 1); }
+
+/* Soft expand for the agent's collapsible reasoning detail */
+@keyframes agentExpand {
+  0% { opacity: 0; max-height: 0; }
+  100% { opacity: 1; max-height: 480px; }
+}
+.agent-expand { animation: agentExpand 0.35s ease-out; overflow: hidden; }
+
+/* Agent chat: clean message fade-in without any container box */
+@keyframes agentMessageIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.agent-message-in { animation: agentMessageIn 0.3s ease-out; }

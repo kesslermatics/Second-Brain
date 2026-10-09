@@ -446,6 +446,17 @@ export interface TeacherChatResponse {
 export interface AgentStep {
   type: 'thinking' | 'tool_call' | 'tool_result' | 'done' | 'error';
   content: string;
+  status?: string | null;
+  tool?: string | null;
+}
+
+export interface AgentStats {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cost: number;
+  model: string;
+  duration_ms: number;
 }
 
 export type AgentProposalType =

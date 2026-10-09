@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, useRef, useEffect, memo, useCallback, type RefObject, type ClipboardEvent as RClipboardEvent, type DragEvent as RDragEvent, type SetStateAction, type Dispatch } from 'react';
+import { useState, useRef, useEffect, useMemo, memo, useCallback, type RefObject, type ClipboardEvent as RClipboardEvent, type DragEvent as RDragEvent, type SetStateAction, type Dispatch } from 'react';
 import {
     FiSend, FiCheck, FiX, FiCheckCircle, FiCpu,
-    FiChevronDown, FiChevronRight, FiZap, FiLoader,
+    FiChevronDown, FiChevronRight, FiLoader,
     FiFilePlus, FiEdit3, FiTrash2, FiToggleLeft, FiToggleRight,
     FiEdit2, FiImage, FiEye, FiColumns,
     FiFile,
@@ -13,7 +13,7 @@ import { markdownComponents, remarkPlugins, rehypePlugins } from '@/lib/markdown
 import { runAgentStream, cancelAgentJob, updateChatMessage, applyAgentProposals, markProposalsApplied, createChatSession, getChatSession, getNote } from '@/lib/api';
 import type { AgentStreamEvent } from '@/lib/api';
 import { useStore } from '@/lib/store';
-import type { AgentStep, AgentProposal, ChatMessage, ChatSessionDetail, Note } from '@/lib/types';
+import type { AgentStep, AgentProposal, AgentStats, ChatMessage, ChatSessionDetail, Note } from '@/lib/types';
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -27,6 +27,7 @@ interface ParsedAgentMessage {
     appliedIndices?: number[];
     attachments?: { name: string; type: string; url?: string }[];
     sources?: { title: string; url: string }[];
+    stats?: AgentStats;
     created_at: string;
 }
 
@@ -41,6 +42,7 @@ function parseAgentMessage(msg: ChatMessage): ParsedAgentMessage {
     let steps: AgentStep[] | undefined;
     let proposals: AgentProposal[] | undefined;
     let appliedIndices: number[] | undefined;
+    let stats: AgentStats | undefined;
     const metaMatch = content.match(/<!-- AGENT_META\n([\s\S]*?)\nAGENT_META -->/);
     if (metaMatch) {
         content = content.replace(metaMatch[0], '').trim();
@@ -49,9 +51,10 @@ function parseAgentMessage(msg: ChatMessage): ParsedAgentMessage {
             steps = meta.steps;
             proposals = meta.proposals;
             appliedIndices = meta.applied_indices;
+            stats = meta.stats;
         } catch { }
     }
-    return { id: msg.id, role: msg.role, content, steps, proposals, appliedIndices, created_at: msg.created_at };
+    return { id: msg.id, role: msg.role, content, steps, proposals, appliedIndices, stats, created_at: msg.created_at };
 }
 
 // ── Main Component ───────────────────────────────────────────────────
@@ -63,9 +66,9 @@ export default function AgentView() {
     const [parsedMessages, setParsedMessages] = useState<ParsedAgentMessage[]>([]);
     const [streamingThought, setStreamingThought] = useState('');
     const [streamingSteps, setStreamingSteps] = useState<AgentStep[]>([]);
+    const [streamingStatus, setStreamingStatus] = useState('Denkt nach');
     const [appliedProposals, setAppliedProposals] = useState(new Set<string>());
     const [rejectedProposals, setRejectedProposals] = useState(new Set<string>());
-    const [expandedSteps, setExpandedSteps] = useState(new Set<string>());
     const [pendingFiles, setPendingFiles] = useState<File[]>([]);
     const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
     const [editingContent, setEditingContent] = useState('');
@@ -164,6 +167,7 @@ export default function AgentView() {
         setRunNotice(null);
         setStreamingThought('');
         setStreamingSteps([]);
+        setStreamingStatus('Denkt nach');
         let fullContent = '';
         let fullThought = '';
         const allSteps: AgentStep[] = [];
@@ -179,8 +183,12 @@ export default function AgentView() {
                 (event: AgentStreamEvent) => {
                     switch (event.type) {
                         case 'thinking': fullThought += event.content; setStreamingThought(fullThought); break;
-                        case 'chunk': fullContent += event.content; break;
-                        case 'tool_call': allSteps.push({ type: 'tool_call', content: event.content }); setStreamingSteps([...allSteps]); break;
+                        case 'chunk': fullContent += event.content; setStreamingStatus('Formuliert Antwort'); break;
+                        case 'tool_call':
+                            allSteps.push({ type: 'tool_call', content: event.content });
+                            setStreamingSteps([...allSteps]);
+                            if (event.status) setStreamingStatus(event.status);
+                            break;
                         case 'tool_result': allSteps.push({ type: 'tool_result', content: event.content }); setStreamingSteps([...allSteps]); break;
                         case 'proposal': allProposals.push(event.proposal); break;
                         case 'cancelled': cancelled = true; setRunNotice('Antwort wurde abgebrochen. Du kannst sie neu starten oder die Nachricht bearbeiten.'); break;
@@ -216,6 +224,7 @@ export default function AgentView() {
             activeJobIdRef.current = null;
             setStreamingThought('');
             setStreamingSteps([]);
+            setStreamingStatus('Denkt nach');
             setLoading(false);
         }
     };
@@ -420,80 +429,54 @@ export default function AgentView() {
                 {/* RIGHT PANEL: Agent Chat */}
                 <div className="flex-1 flex flex-col overflow-hidden">
                     {/* Chat messages */}
-                    <div className="flex-1 overflow-y-auto p-3 space-y-3">
-                        {parsedMessages.length === 0 && !loading && <EmptyState textareaRef={textareaRef} />}
+                    <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-6">
+                        <div className="max-w-3xl mx-auto w-full space-y-6">
+                            {parsedMessages.length === 0 && !loading && <EmptyState textareaRef={textareaRef} />}
 
-                        {parsedMessages.map((msg, idx) => {
-                            const isLast = idx === parsedMessages.length - 1;
-                            return (
-                                <div key={msg.id} ref={isLast && msg.role === 'assistant' ? lastAssistantRef : undefined}>
-                                    <MessageBubble msg={msg}
-                                        expandedSteps={expandedSteps} setExpandedSteps={setExpandedSteps}
-                                        appliedProposals={appliedProposals} rejectedProposals={rejectedProposals}
-                                        onAcceptProposal={handleAcceptProposal} onRejectProposal={handleRejectProposal}
-                                        onAcceptAll={handleAcceptAll} onOpenDiff={openDiffInLeft} onOpenNote={openNoteInLeft}
-                                        onEdit={beginEdit} />
-                                </div>
-                            );
-                        })}
-                        {runNotice && (
-                            <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-                                <span className="whitespace-pre-line">{runNotice}</span>
-                                <div className="flex gap-1.5 flex-shrink-0">
-                                    {restartableMessage && !loading && <button onClick={handleRestart} className="rounded-md bg-rose-600 px-2 py-1 font-medium text-white hover:bg-rose-500">Neu starten</button>}
-                                    <button onClick={() => setRunNotice(null)} className="p-1 text-amber-200 hover:text-white" title="Hinweis schließen"><FiX className="w-3.5 h-3.5" /></button>
-                                </div>
-                            </div>
-                        )}
-                        {editingMessageId && (
-                            <div className="rounded-xl border border-rose-500/40 bg-dark-800 p-3 space-y-2">
-                                <p className="text-xs font-medium text-dark-200">Nachricht bearbeiten – spätere Antworten werden aus dem Verlauf entfernt.</p>
-                                <textarea value={editingContent} onChange={(event) => setEditingContent(event.target.value)} rows={3}
-                                    className="w-full resize-y rounded-lg border border-dark-700 bg-dark-900 px-2 py-1.5 text-sm text-white focus:border-rose-500 focus:outline-none" />
-                                <div className="flex justify-end gap-2">
-                                    <button onClick={() => { setEditingMessageId(null); setEditingContent(''); }} className="rounded-lg px-2 py-1 text-xs text-dark-300 hover:text-white">Abbrechen</button>
-                                    <button onClick={saveEdit} disabled={!editingContent.trim()} className="rounded-lg bg-rose-600 px-2 py-1 text-xs font-medium text-white hover:bg-rose-500 disabled:opacity-50">Speichern</button>
-                                </div>
-                            </div>
-                        )}
-                        {loading && (streamingThought || streamingSteps.length > 0) && (
-                            <div className="flex gap-2">
-                                <div className="w-7 h-7 rounded-lg bg-rose-600/20 flex items-center justify-center flex-shrink-0 mt-0.5">
-                                    <FiCpu className="w-3.5 h-3.5 text-rose-400 animate-pulse" />
-                                </div>
-                                <div className="flex-1 min-w-0 space-y-2">
-                                    {/* Live thinking / reasoning */}
-                                    {streamingThought && (
-                                        <ThinkingBox thought={streamingThought} live />
-                                    )}
-                                    {/* Steps: clean timeline */}
-                                    {streamingSteps.length > 0 && (
-                                        <div className="flex flex-wrap gap-1.5">
-                                            {streamingSteps.map((step, i) => (
-                                                <span key={i} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${step.type === 'tool_call'
-                                                    ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                                                    : 'bg-green-500/10 text-green-400 border border-green-500/20'
-                                                    }`}>
-                                                    {step.type === 'tool_call' ? '○' : '✓'} {step.content}
-                                                </span>
-                                            ))}
-                                        </div>
-                                    )}
-                                    {/* Progress indicator — the answer itself is rendered
-                                        formatted only once complete (no live text streaming) */}
-                                    <div className="flex items-center gap-2 text-xs text-dark-500">
-                                        <div className="flex gap-0.5">
-                                            <div className="w-1.5 h-1.5 bg-rose-400 rounded-full animate-pulse" />
-                                            <div className="w-1.5 h-1.5 bg-rose-400 rounded-full animate-pulse" style={{ animationDelay: '0.15s' }} />
-                                            <div className="w-1.5 h-1.5 bg-rose-400 rounded-full animate-pulse" style={{ animationDelay: '0.3s' }} />
-                                        </div>
-                                        <span>{streamingSteps.length > 0 ? 'Formuliere Antwort...' : 'Denkt nach...'}</span>
+                            {parsedMessages.map((msg, idx) => {
+                                const isLast = idx === parsedMessages.length - 1;
+                                return (
+                                    <div key={msg.id} ref={isLast && msg.role === 'assistant' ? lastAssistantRef : undefined}>
+                                        <MessageBubble msg={msg}
+                                            appliedProposals={appliedProposals} rejectedProposals={rejectedProposals}
+                                            onAcceptProposal={handleAcceptProposal} onRejectProposal={handleRejectProposal}
+                                            onAcceptAll={handleAcceptAll} onOpenDiff={openDiffInLeft} onOpenNote={openNoteInLeft}
+                                            onEdit={beginEdit} />
+                                    </div>
+                                );
+                            })}
+                            {runNotice && (
+                                <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                                    <span className="whitespace-pre-line">{runNotice}</span>
+                                    <div className="flex gap-1.5 flex-shrink-0">
+                                        {restartableMessage && !loading && <button onClick={handleRestart} className="rounded-md bg-rose-600 px-2 py-1 font-medium text-white hover:bg-rose-500">Neu starten</button>}
+                                        <button onClick={() => setRunNotice(null)} className="p-1 text-amber-200 hover:text-white" title="Hinweis schließen"><FiX className="w-3.5 h-3.5" /></button>
                                     </div>
                                 </div>
-                            </div>
-                        )}
-                        {loading && !streamingThought && streamingSteps.length === 0 && <ThinkingIndicator />}
-                        <div ref={messagesEndRef} />
+                            )}
+                            {editingMessageId && (
+                                <div className="rounded-xl border border-rose-500/40 bg-dark-800 p-3 space-y-2">
+                                    <p className="text-xs font-medium text-dark-200">Nachricht bearbeiten – spätere Antworten werden aus dem Verlauf entfernt.</p>
+                                    <textarea value={editingContent} onChange={(event) => setEditingContent(event.target.value)} rows={3}
+                                        className="w-full resize-y rounded-lg border border-dark-700 bg-dark-900 px-2 py-1.5 text-sm text-white focus:border-rose-500 focus:outline-none" />
+                                    <div className="flex justify-end gap-2">
+                                        <button onClick={() => { setEditingMessageId(null); setEditingContent(''); }} className="rounded-lg px-2 py-1 text-xs text-dark-300 hover:text-white">Abbrechen</button>
+                                        <button onClick={saveEdit} disabled={!editingContent.trim()} className="rounded-lg bg-rose-600 px-2 py-1 text-xs font-medium text-white hover:bg-rose-500 disabled:opacity-50">Speichern</button>
+                                    </div>
+                                </div>
+                            )}
+                            {loading && (
+                                <div className="agent-message-in py-1">
+                                    <ActivityLine
+                                        status={streamingStatus}
+                                        thought={streamingThought}
+                                        steps={streamingSteps}
+                                        live
+                                    />
+                                </div>
+                            )}
+                            <div ref={messagesEndRef} />
+                        </div>
                     </div>
 
                     {/* Input */}
@@ -555,47 +538,99 @@ function EmptyState({ textareaRef }: { textareaRef: RefObject<HTMLTextAreaElemen
     );
 }
 
-function ThinkingIndicator() {
-    const [dots, setDots] = useState('');
-    useEffect(() => { const i = setInterval(() => setDots((d) => d.length >= 3 ? '' : d + '.'), 500); return () => clearInterval(i); }, []);
-    return (
-        <div className="flex justify-start">
-            <div className="bg-dark-800/50 border border-dark-700 rounded-2xl px-4 py-2.5">
-                <div className="flex items-center gap-2.5 text-sm">
-                    <div className="relative w-3.5 h-3.5"><div className="absolute inset-0 bg-rose-400 rounded-full animate-ping opacity-30" /><div className="absolute inset-0.5 bg-rose-500 rounded-full" /></div>
-                    <span className="text-dark-300">Lese Notizen, plane und formuliere{dots}</span>
-                </div>
-            </div>
-        </div>
-    );
-}
+// ── Gemini-style activity line ───────────────────────────────────────
+// A single shimmering status phrase that rotates as the agent moves from
+// tool to tool. Click to expand the full reasoning + tool timeline.
 
-function ThinkingBox({ thought, live = false }: { thought: string; live?: boolean }) {
-    const [expanded, setExpanded] = useState(live);
-    useEffect(() => { if (live) setExpanded(true); }, [live]);
+function ActivityLine({ status, thought, steps, live = false }: {
+    status: string;
+    thought?: string;
+    steps?: AgentStep[];
+    live?: boolean;
+}) {
+    const [expanded, setExpanded] = useState(false);
+    const hasDetail = !!(thought || (steps && steps.length > 0));
+
     return (
-        <div className="bg-dark-800/30 border border-dark-700/50 rounded-xl overflow-hidden">
-            <button onClick={() => setExpanded((e) => !e)}
-                className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-dark-400 hover:text-white">
-                {expanded ? <FiChevronDown className="w-3 h-3" /> : <FiChevronRight className="w-3 h-3" />}
-                <span className={live ? 'text-rose-400' : 'text-purple-400'}>🧠</span>
-                <span>{live ? 'Denkt nach…' : 'Gedankengang'}</span>
+        <div>
+            <button
+                onClick={() => hasDetail && setExpanded((e) => !e)}
+                className={`flex items-center gap-1.5 text-sm ${hasDetail ? 'cursor-pointer' : 'cursor-default'}`}
+            >
+                <span
+                    key={status}
+                    className={`agent-phrase ${live ? 'agent-shimmer font-medium' : 'text-dark-500 hover:text-dark-300 transition-colors'}`}
+                >
+                    {status}
+                </span>
+                {hasDetail && (
+                    <FiChevronRight className={`w-3 h-3 text-dark-600 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+                )}
             </button>
-            {expanded && (
-                <div className="px-3 pb-2.5 pt-0.5">
-                    <div className="text-xs text-dark-400 italic whitespace-pre-wrap border-l-2 border-dark-700 pl-2.5 max-h-64 overflow-y-auto">
-                        {thought}
-                    </div>
+
+            {expanded && hasDetail && (
+                <div className="agent-expand mt-2 ml-1 pl-3 border-l border-dark-800 space-y-2">
+                    {thought && (
+                        <div className="text-xs text-dark-400 italic whitespace-pre-wrap max-h-64 overflow-y-auto">{thought}</div>
+                    )}
+                    {steps && steps.length > 0 && (
+                        <div className="space-y-1">
+                            {steps.map((s, i) => (
+                                <div key={i} className="flex items-start gap-2 text-xs text-dark-500">
+                                    <span className="mt-px flex-shrink-0">{s.type === 'tool_call' ? '○' : s.type === 'tool_result' ? '✓' : '🧠'}</span>
+                                    <span>{s.content}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
                 </div>
             )}
         </div>
     );
 }
 
+// ── Compact stats line under each answer ─────────────────────────────
+
+function shortModel(model: string): string {
+    return model.includes('/') ? model.split('/').pop()! : model;
+}
+
+function formatDuration(ms: number): string {
+    if (ms < 1000) return `${ms} ms`;
+    const s = ms / 1000;
+    if (s < 60) return `${s.toFixed(1)} s`;
+    const m = Math.floor(s / 60);
+    return `${m}m ${Math.round(s % 60)}s`;
+}
+
+function StatsBar({ content, stats }: { content: string; stats?: AgentStats }) {
+    const wordCount = useMemo(() => {
+        const trimmed = content.trim();
+        return trimmed ? trimmed.split(/\s+/).length : 0;
+    }, [content]);
+
+    const parts: string[] = [`${wordCount} Wörter`];
+    if (stats) {
+        if (stats.total_tokens) parts.push(`${stats.input_tokens} ↑ · ${stats.output_tokens} ↓ Tokens`);
+        if (stats.cost) parts.push(`$${stats.cost.toFixed(4)}`);
+        if (stats.model) parts.push(shortModel(stats.model));
+        if (stats.duration_ms) parts.push(formatDuration(stats.duration_ms));
+    }
+
+    return (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-dark-600 select-none">
+            {parts.map((p, i) => (
+                <span key={i} className="flex items-center gap-2">
+                    {i > 0 && <span className="text-dark-700">·</span>}
+                    {p}
+                </span>
+            ))}
+        </div>
+    );
+}
+
 interface MessageBubbleProps {
     msg: ParsedAgentMessage;
-    expandedSteps: Set<string>;
-    setExpandedSteps: (fn: (prev: Set<string>) => Set<string>) => void;
     appliedProposals: Set<string>;
     rejectedProposals: Set<string>;
     onAcceptProposal: (msgId: string, idx: number, p: AgentProposal) => void;
@@ -606,83 +641,73 @@ interface MessageBubbleProps {
     onEdit: (message: ParsedAgentMessage) => void;
 }
 
-const MessageBubble = memo(function MessageBubble({ msg, expandedSteps, setExpandedSteps, appliedProposals, rejectedProposals, onAcceptProposal, onRejectProposal, onAcceptAll, onOpenDiff, onOpenNote, onEdit }: MessageBubbleProps) {
+const MessageBubble = memo(function MessageBubble({ msg, appliedProposals, rejectedProposals, onAcceptProposal, onRejectProposal, onAcceptAll, onOpenDiff, onOpenNote, onEdit }: MessageBubbleProps) {
     if (msg.role === 'user') {
         return (
-            <div className="flex justify-end">
-                <div className="max-w-[80%] space-y-1.5">
-                    {msg.attachments && msg.attachments.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5 justify-end">
-                            {msg.attachments.map((att, i) => (
-                                <div key={i} className="flex items-center gap-1.5 px-2 py-1 bg-dark-800/80 border border-dark-700 rounded-lg">
-                                    {att.type === 'image' && att.url ? (
-                                        <img src={att.url} alt={att.name} className="w-8 h-8 object-cover rounded" />
-                                    ) : (
-                                        <span className="text-sm">📄</span>
-                                    )}
-                                    <span className="text-[11px] text-dark-300 max-w-[120px] truncate">{att.name}</span>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                    <div className="flex justify-end">
-                        <button onClick={() => onEdit(msg)} className="flex items-center gap-1 px-1 text-[11px] text-dark-500 hover:text-rose-300" title="Nachricht bearbeiten und spätere Historie ersetzen"><FiEdit2 className="w-3 h-3" /> Bearbeiten</button>
+            <div className="group flex flex-col items-end gap-1.5">
+                {msg.attachments && msg.attachments.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 justify-end">
+                        {msg.attachments.map((att, i) => (
+                            <div key={i} className="flex items-center gap-1.5 px-2 py-1 bg-dark-800/60 rounded-lg">
+                                {att.type === 'image' && att.url ? (
+                                    <img src={att.url} alt={att.name} className="w-8 h-8 object-cover rounded" />
+                                ) : (
+                                    <span className="text-sm">📄</span>
+                                )}
+                                <span className="text-[11px] text-dark-300 max-w-[120px] truncate">{att.name}</span>
+                            </div>
+                        ))}
                     </div>
-                    <div className="bg-rose-900/30 border border-rose-800/30 rounded-2xl px-3 py-2">
-                        <p className="text-sm text-white whitespace-pre-wrap">{msg.content}</p>
-                    </div>
-                </div>
+                )}
+                <p className="text-[15px] leading-relaxed text-white whitespace-pre-wrap text-right max-w-[85%]">{msg.content}</p>
+                <button onClick={() => onEdit(msg)} className="flex items-center gap-1 text-[11px] text-dark-600 opacity-0 group-hover:opacity-100 transition-opacity hover:text-rose-300" title="Nachricht bearbeiten und spätere Historie ersetzen"><FiEdit2 className="w-3 h-3" /> Bearbeiten</button>
             </div>
         );
     }
 
     return (
-        <div className="flex justify-start">
-            <div className="max-w-[95%] space-y-2">
-                {msg.thought && <ThinkingBox thought={msg.thought} />}
-                {msg.steps && msg.steps.length > 0 && (
-                    <div className="bg-dark-800/30 border border-dark-700/50 rounded-xl overflow-hidden">
-                        <button onClick={() => setExpandedSteps((p) => { const n = new Set(p); n.has(msg.id) ? n.delete(msg.id) : n.add(msg.id); return n; })}
-                            className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-dark-400 hover:text-white">
-                            {expandedSteps.has(msg.id) ? <FiChevronDown className="w-3 h-3" /> : <FiChevronRight className="w-3 h-3" />}
-                            <FiZap className="w-3 h-3 text-amber-400" /> {msg.steps.length} Schritte
-                        </button>
-                        {expandedSteps.has(msg.id) && (<div className="px-3 pb-2 space-y-0.5">{msg.steps.map((s, i) => (<div key={i} className="flex items-start gap-2 text-xs text-dark-400"><span>{s.type === 'tool_call' ? '🔧' : s.type === 'tool_result' ? '✅' : '🧠'}</span><span>{s.content}</span></div>))}</div>)}
-                    </div>
-                )}
+        <div className="space-y-3">
+            {(msg.thought || (msg.steps && msg.steps.length > 0)) && (
+                <ActivityLine
+                    status={msg.steps && msg.steps.length > 0 ? `${msg.steps.length} Schritte` : 'Gedankengang'}
+                    thought={msg.thought}
+                    steps={msg.steps}
+                />
+            )}
 
-                {msg.content && (
-                    <div className="bg-dark-800/50 border border-dark-700 rounded-2xl px-3 py-2.5">
-                        <div className="markdown-content text-sm text-dark-200"><ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>{msg.content}</ReactMarkdown></div>
-                    </div>
-                )}
+            {msg.content && (
+                <div className="markdown-content lesson-prose text-[15px] text-dark-100">
+                    <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>{msg.content}</ReactMarkdown>
+                </div>
+            )}
 
-                {msg.sources && msg.sources.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 px-1">
-                        {msg.sources.map((src, i) => (
-                            <a key={i} href={src.url} target="_blank" rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-600/10 border border-blue-600/20 rounded-full text-[11px] text-blue-400 hover:bg-blue-600/20 hover:text-blue-300 transition-colors">
-                                🌐 {src.title || new URL(src.url).hostname}
-                            </a>
-                        ))}
-                    </div>
-                )}
+            {msg.content && <StatsBar content={msg.content} stats={msg.stats} />}
 
-                {msg.proposals && msg.proposals.length > 0 && (
-                    <div className="space-y-1.5">
-                        <div className="flex items-center justify-between px-1">
-                            <span className="text-xs font-medium text-dark-400">{msg.proposals.length} Vorschläge</span>
-                            <button onClick={() => onAcceptAll(msg.id, msg.proposals!)} className="flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-green-600 hover:bg-green-500 text-white rounded-lg"><FiCheckCircle className="w-3 h-3" /> Alle</button>
-                        </div>
-                        {msg.proposals.map((p, i) => (
-                            <ProposalCard key={i} proposal={p} msgId={msg.id} index={i}
-                                isApplied={appliedProposals.has(`${msg.id}-${i}`)} isRejected={rejectedProposals.has(`${msg.id}-${i}`)}
-                                onAccept={() => onAcceptProposal(msg.id, i, p)} onReject={() => onRejectProposal(msg.id, i)}
-                                onOpenDiff={() => onOpenDiff(p, msg.id, i)} onOpenNote={p.note_id ? () => onOpenNote(p.note_id!) : undefined} />
-                        ))}
+            {msg.sources && msg.sources.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                    {msg.sources.map((src, i) => (
+                        <a key={i} href={src.url} target="_blank" rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-600/10 border border-blue-600/20 rounded-full text-[11px] text-blue-400 hover:bg-blue-600/20 hover:text-blue-300 transition-colors">
+                            🌐 {src.title || new URL(src.url).hostname}
+                        </a>
+                    ))}
+                </div>
+            )}
+
+            {msg.proposals && msg.proposals.length > 0 && (
+                <div className="space-y-1.5">
+                    <div className="flex items-center justify-between px-1">
+                        <span className="text-xs font-medium text-dark-400">{msg.proposals.length} Vorschläge</span>
+                        <button onClick={() => onAcceptAll(msg.id, msg.proposals!)} className="flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-green-600 hover:bg-green-500 text-white rounded-lg"><FiCheckCircle className="w-3 h-3" /> Alle</button>
                     </div>
-                )}
-            </div>
+                    {msg.proposals.map((p, i) => (
+                        <ProposalCard key={i} proposal={p} msgId={msg.id} index={i}
+                            isApplied={appliedProposals.has(`${msg.id}-${i}`)} isRejected={rejectedProposals.has(`${msg.id}-${i}`)}
+                            onAccept={() => onAcceptProposal(msg.id, i, p)} onReject={() => onRejectProposal(msg.id, i)}
+                            onOpenDiff={() => onOpenDiff(p, msg.id, i)} onOpenNote={p.note_id ? () => onOpenNote(p.note_id!) : undefined} />
+                    ))}
+                </div>
+            )}
         </div>
     );
 });

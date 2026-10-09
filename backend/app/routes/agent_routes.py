@@ -360,6 +360,7 @@ async def agent_stream_message(
         full_response_parts: list[str] = []
         all_proposals: list = []
         all_steps: list = []
+        agent_stats: dict | None = None
 
         async with async_session() as bg_db:
             async for event in run_agent_stream(
@@ -379,7 +380,12 @@ async def agent_stream_message(
                     yield {"type": "chunk", "content": event["content"]}
                 elif event_type == "tool_call":
                     all_steps.append(event)
-                    yield {"type": "tool_call", "content": event["content"]}
+                    yield {
+                        "type": "tool_call",
+                        "content": event["content"],
+                        "status": event.get("status"),
+                        "tool": event.get("tool"),
+                    }
                 elif event_type == "tool_result":
                     all_steps.append(event)
                     yield {"type": "tool_result", "content": event["content"]}
@@ -391,6 +397,7 @@ async def agent_stream_message(
                 elif event_type == "done":
                     all_proposals = event.get("proposals", all_proposals)
                     all_steps = event.get("steps", all_steps)
+                    agent_stats = event.get("stats", agent_stats)
 
             # Save assistant message to DB
             agent_response = "".join(full_response_parts)
@@ -399,6 +406,8 @@ async def agent_stream_message(
                 metadata["proposals"] = all_proposals
             if all_steps:
                 metadata["steps"] = all_steps
+            if agent_stats:
+                metadata["stats"] = agent_stats
 
             stored_content = agent_response
             if metadata:
@@ -443,6 +452,7 @@ async def agent_stream_message(
             "steps": all_steps,
             "apply_result": apply_result,
             "image_urls": file_urls,
+            "stats": agent_stats,
         }
 
     # Register job and fire the background task

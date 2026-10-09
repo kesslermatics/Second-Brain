@@ -11,6 +11,7 @@ Architecture:
 
 import json
 import re
+import time
 import asyncio
 import logging
 import os
@@ -1437,6 +1438,41 @@ def _build_contents(chat_history: list[dict], image_context: list[dict] | None =
 
 # ── Streaming agent run ───────────────────────────────────────────────
 
+# ── Short, natural German status phrases for the live activity line ───
+# Kept to ~3 words, present tense, a touch playful — shown Gemini-style as a
+# shimmering line that rotates as the agent moves from tool to tool.
+
+_STATUS_PHRASES = {
+    "search_notes": "Durchsucht deine Notizen",
+    "read_note": "Liest eine Notiz",
+    "list_folders": "Sieht Ordner durch",
+    "list_notes_in_folder": "Öffnet einen Ordner",
+    "search_images": "Sucht nach Bildern",
+    "view_image": "Betrachtet ein Bild",
+    "view_document": "Liest ein Dokument",
+    "get_recent_notes": "Holt neueste Notizen",
+    "create_note": "Schreibt eine Notiz",
+    "update_note": "Aktualisiert eine Notiz",
+    "delete_note": "Löscht eine Notiz",
+    "rename_note": "Benennt Notiz um",
+    "move_note": "Verschiebt eine Notiz",
+    "create_folder": "Legt Ordner an",
+    "rename_folder": "Benennt Ordner um",
+    "delete_folder": "Löscht einen Ordner",
+    "web_search": "Durchsucht das Web",
+    "get_fitness_overview": "Prüft deinen Trainingsplan",
+    "get_workout_data": "Schaut deine Workouts an",
+    "get_health_data": "Checkt deine Ernährung",
+    "get_wardrobe": "Schaut Klamotten durch",
+    "get_wardrobe_analytics": "Analysiert deine Garderobe",
+}
+
+
+def _status_phrase(tool_name: str) -> str:
+    """Map a tool name to a short, natural German activity phrase."""
+    return _STATUS_PHRASES.get(tool_name, "Arbeitet daran")
+
+
 async def run_agent_stream(
     instruction: str,
     user_id: str,
@@ -1506,6 +1542,18 @@ async def run_agent_stream(
 
     proposals = []
     steps = []
+    # Aggregated token usage + cost across every model round (thinking, tool
+    # rounds and the final answer) so the UI can show a single summary line.
+    usage_agg = {"input": 0, "output": 0, "cost": 0.0}
+    start_time = time.monotonic()
+
+    def _accumulate_usage(um) -> None:
+        if not um:
+            return
+        usage_agg["input"] += getattr(um, "prompt_token_count", 0) or 0
+        usage_agg["output"] += getattr(um, "candidates_token_count", 0) or 0
+        usage_agg["cost"] += getattr(um, "cost", 0.0) or 0.0
+
     # Kept intentionally low: each round is a full model call (thinking tokens
     # included). Without a tight cap the agent tends to fire many near-duplicate
     # searches instead of a couple of broad ones. See AGENT_SYSTEM_INSTRUCTION for
@@ -1526,6 +1574,7 @@ async def run_agent_stream(
                 contents=contents,
                 config=config,
             )
+            _accumulate_usage(getattr(response, "usage_metadata", None))
 
             # Extract function calls and text from complete response
             if response.candidates and response.candidates[0].content:
@@ -1572,6 +1621,9 @@ async def run_agent_stream(
                                     full_text_parts.append(part.text)
                                     yield {"type": "chunk", "content": part.text}
 
+                # Capture token usage from the terminal usage chunk
+                _accumulate_usage(getattr(chunk, "usage_metadata", None))
+
                 # Capture function calls
                 fc_list = chunk.function_calls
                 if fc_list:
@@ -1599,7 +1651,7 @@ async def run_agent_stream(
         # if the model was still calling tools at the last round).
         if round_num >= max_tool_rounds:
             steps.append({"type": "tool_call", "content": "Fasse zusammen …"})
-            yield {"type": "tool_call", "content": "Fasse zusammen …"}
+            yield {"type": "tool_call", "content": "Fasse zusammen …", "status": "Fasst alles zusammen", "tool": "_summarize"}
             # Nudge the model to answer now, without offering more tools.
             contents.append(types.Content(
                 role="user",
@@ -1616,6 +1668,7 @@ async def run_agent_stream(
             async for chunk in await client.aio.models.generate_content_stream(
                 model=AGENT_MODEL, contents=contents, config=final_config,
             ):
+                _accumulate_usage(getattr(chunk, "usage_metadata", None))
                 if chunk.candidates:
                     for candidate in chunk.candidates:
                         if candidate.content and candidate.content.parts:
@@ -1670,7 +1723,12 @@ async def run_agent_stream(
                 detail = f' in {tool_args["folder_path"]}'
             step_desc = f"{label}{detail}"
 
-            yield {"type": "tool_call", "content": step_desc}
+            yield {
+                "type": "tool_call",
+                "content": step_desc,
+                "status": _status_phrase(tool_name),
+                "tool": tool_name,
+            }
             steps.append({"type": "tool_call", "content": step_desc})
 
             # Execute
@@ -1741,7 +1799,15 @@ async def run_agent_stream(
 
         # Continue the loop — model will generate a follow-up response
 
-    yield {"type": "done", "proposals": proposals, "steps": steps}
+    stats = {
+        "input_tokens": usage_agg["input"],
+        "output_tokens": usage_agg["output"],
+        "total_tokens": usage_agg["input"] + usage_agg["output"],
+        "cost": round(usage_agg["cost"], 6),
+        "model": AGENT_MODEL,
+        "duration_ms": int((time.monotonic() - start_time) * 1000),
+    }
+    yield {"type": "done", "proposals": proposals, "steps": steps, "stats": stats}
 
 
 def _summarize_tool_result(tool_name: str, result: dict) -> str:

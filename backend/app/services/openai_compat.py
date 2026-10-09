@@ -291,6 +291,22 @@ def _extract_sources(choices: list[Any]) -> list[dict[str, str]]:
     return [s for s in sources if not (s["url"] in seen or seen.add(s["url"]))][:8]  # type: ignore[func-returns-value]
 
 
+def _extract_cost(usage: Any) -> float:
+    """Pull the credit cost out of an OpenRouter usage object (0.0 if absent).
+
+    OpenRouter returns the cost either directly on ``usage.cost`` or nested in
+    ``usage.cost_details.upstream_inference_cost`` depending on the model."""
+    if usage is None:
+        return 0.0
+    cost = getattr(usage, "cost", None)
+    if cost is None and isinstance(usage, dict):
+        cost = usage.get("cost")
+    try:
+        return float(cost) if cost is not None else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _patch_schema(schema: dict) -> dict:
     """Recursively add 'additionalProperties': false and fill 'required' for strict JSON output."""
     import copy
@@ -365,6 +381,9 @@ class _Models:
         elif config and config.response_mime_type == "application/json":
             kwargs["response_format"] = {"type": "json_object"}
 
+        # Ask OpenRouter to include the real credit cost in the usage object.
+        kwargs["extra_body"] = {"usage": {"include": True}}
+
         raw = await self._client.chat.completions.create(**kwargs)
 
         # Extract text from the response
@@ -415,6 +434,7 @@ class _Models:
             thoughts_token_count=0,
             candidates_token_count=getattr(usage, "completion_tokens", 0) or 0,
             total_token_count=getattr(usage, "total_tokens", 0) or 0,
+            cost=_extract_cost(usage),
         )
 
         return _Response(
@@ -448,6 +468,10 @@ class _Models:
             "model": model,
             "messages": messages,
             "stream": True,
+            # Ask for a final usage chunk once the stream completes …
+            "stream_options": {"include_usage": True},
+            # … and have OpenRouter include the real credit cost in it.
+            "extra_body": {"usage": {"include": True}},
         }
 
         if config and config.temperature is not None:
@@ -477,8 +501,13 @@ class _Models:
 
         async def iterator() -> AsyncGenerator[_Response, None]:
             nonlocal tool_call_accum
+            final_usage: Any = None
             stream = await self._client.chat.completions.create(**kwargs)
             async for chunk in stream:
+                # The final chunk (with include_usage) carries usage and no choices.
+                chunk_usage = getattr(chunk, "usage", None)
+                if chunk_usage is not None:
+                    final_usage = chunk_usage
                 for choice in chunk.choices or []:
                     delta = choice.delta
 
@@ -509,6 +538,15 @@ class _Models:
                             function_calls=[],
                         )
 
+            # Build usage metadata from the final usage chunk (zeros if absent).
+            usage_metadata = SimpleNamespace(
+                prompt_token_count=getattr(final_usage, "prompt_tokens", 0) or 0,
+                thoughts_token_count=0,
+                candidates_token_count=getattr(final_usage, "completion_tokens", 0) or 0,
+                total_token_count=getattr(final_usage, "total_tokens", 0) or 0,
+                cost=_extract_cost(final_usage),
+            )
+
             # After stream ends: emit accumulated tool calls as a final chunk
             if tool_call_accum:
                 function_calls: list[FunctionCall] = []
@@ -528,11 +566,18 @@ class _Models:
                     text="",
                     parsed=None,
                     candidates=[_Candidate(Content("model", parts), None)],
-                    usage_metadata=SimpleNamespace(
-                        prompt_token_count=0, thoughts_token_count=0,
-                        candidates_token_count=0, total_token_count=0,
-                    ),
+                    usage_metadata=usage_metadata,
                     function_calls=function_calls,
+                )
+            elif final_usage is not None:
+                # No tool calls — emit a usage-only terminal chunk so the agent
+                # loop can still read the token counts for this round.
+                yield _Response(
+                    text="",
+                    parsed=None,
+                    candidates=[_Candidate(Content("model", []), None)],
+                    usage_metadata=usage_metadata,
+                    function_calls=[],
                 )
 
         return iterator()

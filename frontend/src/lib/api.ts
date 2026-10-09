@@ -9,7 +9,7 @@ import type {
   CourseListItem, CourseDetail, CourseMessage as CourseMsg, CourseNoteResult, AdvancedFocusSuggestion,
   BookSummariesResponse, QuizQuestion, LessonRecap, TeacherChatResponse,
   BookDocument, BookIngestionEvent,
-  AgentRunResult, AgentStep, AgentProposal,
+  AgentRunResult, AgentStep, AgentProposal, AgentStats,
 } from './types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -873,13 +873,13 @@ export const runAgent = async (sessionId: string, content: string, autoAccept: b
 export type AgentStreamEvent =
   | { type: 'thinking'; content: string }
   | { type: 'chunk'; content: string }
-  | { type: 'tool_call'; content: string }
+  | { type: 'tool_call'; content: string; status?: string | null; tool?: string | null }
   | { type: 'tool_result'; content: string }
   | { type: 'proposal'; proposal: AgentProposal }
   | { type: 'sources'; sources: { title: string; url: string }[] }
   | { type: 'cancelled' }
   | { type: 'error'; message: string; detail?: string }
-  | { type: 'done'; proposals: AgentProposal[]; steps: AgentStep[]; apply_result?: unknown; image_urls?: string[] };
+  | { type: 'done'; proposals: AgentProposal[]; steps: AgentStep[]; apply_result?: unknown; image_urls?: string[]; stats?: AgentStats | null };
 
 export interface AgentStreamOptions {
   existingMessageId?: string;
