@@ -374,7 +374,12 @@ async def agent_stream_message(
                 event_type = event.get("type")
 
                 if event_type == "thinking":
-                    yield {"type": "thinking", "content": event["content"]}
+                    all_steps.append({
+                        "type": "thinking",
+                        "content": event["content"],
+                        "round": event.get("round"),
+                    })
+                    yield {"type": "thinking", "content": event["content"], "round": event.get("round")}
                 elif event_type == "chunk":
                     full_response_parts.append(event["content"])
                     yield {"type": "chunk", "content": event["content"]}
@@ -385,10 +390,18 @@ async def agent_stream_message(
                         "content": event["content"],
                         "status": event.get("status"),
                         "tool": event.get("tool"),
+                        "args": event.get("args"),
+                        "round": event.get("round"),
                     }
                 elif event_type == "tool_result":
                     all_steps.append(event)
-                    yield {"type": "tool_result", "content": event["content"]}
+                    yield {
+                        "type": "tool_result",
+                        "content": event["content"],
+                        "tool": event.get("tool"),
+                        "details": event.get("details"),
+                        "round": event.get("round"),
+                    }
                 elif event_type == "proposal":
                     all_proposals.append(event["proposal"])
                     yield {"type": "proposal", "proposal": event["proposal"]}

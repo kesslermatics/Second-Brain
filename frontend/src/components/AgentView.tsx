@@ -182,14 +182,34 @@ export default function AgentView() {
                 files,
                 (event: AgentStreamEvent) => {
                     switch (event.type) {
-                        case 'thinking': fullThought += event.content; setStreamingThought(fullThought); break;
+                        case 'thinking':
+                            fullThought += event.content;
+                            setStreamingThought(fullThought);
+                            allSteps.push({ type: 'thinking', content: event.content, round: event.round ?? undefined });
+                            setStreamingSteps([...allSteps]);
+                            break;
                         case 'chunk': fullContent += event.content; setStreamingStatus('Formuliert Antwort'); break;
                         case 'tool_call':
-                            allSteps.push({ type: 'tool_call', content: event.content });
+                            allSteps.push({
+                                type: 'tool_call',
+                                content: event.content,
+                                tool: event.tool ?? undefined,
+                                args: event.args ?? undefined,
+                                round: event.round ?? undefined,
+                            });
                             setStreamingSteps([...allSteps]);
                             if (event.status) setStreamingStatus(event.status);
                             break;
-                        case 'tool_result': allSteps.push({ type: 'tool_result', content: event.content }); setStreamingSteps([...allSteps]); break;
+                        case 'tool_result':
+                            allSteps.push({
+                                type: 'tool_result',
+                                content: event.content,
+                                tool: event.tool ?? undefined,
+                                details: event.details ?? undefined,
+                                round: event.round ?? undefined,
+                            });
+                            setStreamingSteps([...allSteps]);
+                            break;
                         case 'proposal': allProposals.push(event.proposal); break;
                         case 'cancelled': cancelled = true; setRunNotice('Antwort wurde abgebrochen. Du kannst sie neu starten oder die Nachricht bearbeiten.'); break;
                         case 'error': setRunNotice(event.detail ? `${event.message}\n${event.detail}` : event.message); break;
@@ -540,7 +560,7 @@ function EmptyState({ textareaRef }: { textareaRef: RefObject<HTMLTextAreaElemen
 
 // ── Gemini-style activity line ───────────────────────────────────────
 // A single shimmering status phrase that rotates as the agent moves from
-// tool to tool. Click to expand the full reasoning + tool timeline.
+// tool to tool. Click to expand the full timeline grouped by round.
 
 function ActivityLine({ status, thought, steps, live = false }: {
     status: string;
@@ -569,22 +589,260 @@ function ActivityLine({ status, thought, steps, live = false }: {
             </button>
 
             {expanded && hasDetail && (
-                <div className="agent-expand mt-2 ml-1 pl-3 border-l border-dark-800 space-y-2">
-                    {thought && (
-                        <div className="text-xs text-dark-400 italic whitespace-pre-wrap max-h-64 overflow-y-auto">{thought}</div>
-                    )}
-                    {steps && steps.length > 0 && (
-                        <div className="space-y-1">
-                            {steps.map((s, i) => (
-                                <div key={i} className="flex items-start gap-2 text-xs text-dark-500">
-                                    <span className="mt-px flex-shrink-0">{s.type === 'tool_call' ? '○' : s.type === 'tool_result' ? '✓' : '🧠'}</span>
-                                    <span>{s.content}</span>
-                                </div>
-                            ))}
-                        </div>
-                    )}
+                <div className="agent-expand mt-2">
+                    <TimelineView steps={steps || []} fallbackThought={thought} />
                 </div>
             )}
+        </div>
+    );
+}
+
+// ── Timeline: round-grouped tool trace ──────────────────────────────
+// Each round contains the model's thought summary + every tool call it
+// decided to make, with the tool arguments and the structured result.
+
+const TOOL_META: Record<string, { icon: string; label: string }> = {
+    search_notes: { icon: '🔎', label: 'Notizen-Suche' },
+    read_note: { icon: '📖', label: 'Notiz gelesen' },
+    list_folders: { icon: '📂', label: 'Ordner geladen' },
+    list_notes_in_folder: { icon: '📂', label: 'Notizen im Ordner' },
+    search_images: { icon: '🖼️', label: 'Bild-Suche' },
+    view_image: { icon: '🖼️', label: 'Bild angesehen' },
+    view_document: { icon: '📄', label: 'Dokument gelesen' },
+    get_recent_notes: { icon: '🕐', label: 'Letzte Notizen' },
+    create_note: { icon: '✏️', label: 'Notiz erstellt' },
+    update_note: { icon: '✏️', label: 'Notiz bearbeitet' },
+    delete_note: { icon: '🗑️', label: 'Notiz gelöscht' },
+    rename_note: { icon: '✏️', label: 'Notiz umbenannt' },
+    move_note: { icon: '📦', label: 'Notiz verschoben' },
+    create_folder: { icon: '📁', label: 'Ordner angelegt' },
+    rename_folder: { icon: '📁', label: 'Ordner umbenannt' },
+    delete_folder: { icon: '🗑️', label: 'Ordner gelöscht' },
+    web_search: { icon: '🌐', label: 'Web-Recherche' },
+    get_fitness_overview: { icon: '💪', label: 'Fitness-Status' },
+    get_workout_data: { icon: '🏋️', label: 'Workouts' },
+    get_health_data: { icon: '🥗', label: 'Ernährung/Schlaf' },
+    get_wardrobe: { icon: '👔', label: 'Garderobe' },
+    get_wardrobe_analytics: { icon: '📊', label: 'Garderobe-Analyse' },
+    _summarize: { icon: '✨', label: 'Zusammenfassung' },
+};
+
+interface RoundGroup {
+    round: number;
+    thoughts: string[];
+    calls: Array<{ call?: AgentStep; result?: AgentStep }>;
+}
+
+function groupStepsByRound(steps: AgentStep[]): RoundGroup[] {
+    const rounds = new Map<number, RoundGroup>();
+    const getRound = (r: number) => {
+        if (!rounds.has(r)) rounds.set(r, { round: r, thoughts: [], calls: [] });
+        return rounds.get(r)!;
+    };
+
+    // Pair tool_call with the next tool_result that has the same tool+round.
+    const pendingByRound: Record<number, Array<{ call?: AgentStep; result?: AgentStep }>> = {};
+
+    for (const step of steps) {
+        const r = step.round ?? 0;
+        const g = getRound(r);
+        if (step.type === 'thinking') {
+            g.thoughts.push(step.content);
+        } else if (step.type === 'tool_call') {
+            const pending = (pendingByRound[r] ||= []);
+            const slot = { call: step };
+            pending.push(slot);
+            g.calls.push(slot);
+        } else if (step.type === 'tool_result') {
+            const pending = pendingByRound[r] || [];
+            // Attach to the earliest open call that doesn't have a result yet
+            const open = pending.find((p) => p.call && !p.result);
+            if (open) open.result = step;
+            else {
+                const slot = { result: step };
+                (pendingByRound[r] ||= []).push(slot);
+                g.calls.push(slot);
+            }
+        }
+    }
+
+    return Array.from(rounds.values()).sort((a, b) => a.round - b.round);
+}
+
+function TimelineView({ steps, fallbackThought }: { steps: AgentStep[]; fallbackThought?: string }) {
+    const groups = useMemo(() => groupStepsByRound(steps), [steps]);
+    const hasAnything = groups.length > 0 || !!fallbackThought;
+    if (!hasAnything) return null;
+
+    return (
+        <div className="rounded-lg border border-dark-800 bg-dark-900/40 p-3 space-y-3">
+            {fallbackThought && groups.length === 0 && (
+                <ThoughtBlock text={fallbackThought} />
+            )}
+            {groups.map((g, i) => (
+                <RoundBlock key={g.round} group={g} index={i} total={groups.length} />
+            ))}
+        </div>
+    );
+}
+
+function RoundBlock({ group, index, total }: { group: RoundGroup; index: number; total: number }) {
+    return (
+        <div className="space-y-2">
+            {total > 1 && (
+                <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-dark-600">
+                    <span>Runde {index + 1}</span>
+                    <div className="flex-1 h-px bg-dark-800" />
+                </div>
+            )}
+            {group.thoughts.map((t, i) => (
+                <ThoughtBlock key={`t-${i}`} text={t} />
+            ))}
+            {group.calls.map((c, i) => (
+                <ToolBlock key={`c-${i}`} call={c.call} result={c.result} />
+            ))}
+        </div>
+    );
+}
+
+function ThoughtBlock({ text }: { text: string }) {
+    return (
+        <div className="flex items-start gap-2 text-xs text-dark-400">
+            <span className="mt-0.5 flex-shrink-0 text-purple-400">🧠</span>
+            <span className="italic whitespace-pre-wrap leading-relaxed">{text}</span>
+        </div>
+    );
+}
+
+function ToolBlock({ call, result }: { call?: AgentStep; result?: AgentStep }) {
+    const toolName = call?.tool || result?.tool || '';
+    const meta = TOOL_META[toolName] || { icon: '🔧', label: toolName || 'Tool' };
+    const isError = result?.details && typeof result.details === 'object' && 'error' in (result.details as Record<string, unknown>);
+
+    return (
+        <div className="rounded-md border border-dark-800 bg-dark-950/50 overflow-hidden">
+            <div className="flex items-center gap-2 px-2.5 py-1.5 text-xs">
+                <span className="flex-shrink-0">{meta.icon}</span>
+                <span className="text-dark-300 font-medium">{meta.label}</span>
+                {call?.args && Object.keys(call.args).length > 0 && (
+                    <ArgsPreview args={call.args} />
+                )}
+                {result?.content && (
+                    <span className={`ml-auto text-[11px] ${isError ? 'text-red-400' : 'text-dark-500'}`}>
+                        {result.content}
+                    </span>
+                )}
+            </div>
+            {result?.details && Object.keys(result.details as object).length > 0 && (
+                <div className="px-2.5 py-1.5 border-t border-dark-800/60 bg-dark-950/40">
+                    <ResultDetails tool={toolName} details={result.details as Record<string, unknown>} />
+                </div>
+            )}
+        </div>
+    );
+}
+
+function ArgsPreview({ args }: { args: Record<string, unknown> }) {
+    const entries = Object.entries(args).filter(([, v]) => v !== null && v !== undefined && v !== '');
+    if (entries.length === 0) return null;
+    const primary = entries.find(([k]) => k === 'query' || k === 'q') || entries[0];
+    const [k, v] = primary;
+    const value = typeof v === 'string' ? v : JSON.stringify(v);
+    return (
+        <code className="text-[11px] text-dark-500 font-mono bg-dark-900/60 px-1.5 py-0.5 rounded truncate max-w-[260px]" title={`${k}: ${value}`}>
+            {k === 'query' ? `„${value}"` : `${k}: ${value}`}
+        </code>
+    );
+}
+
+function ResultDetails({ tool, details }: { tool: string; details: Record<string, unknown> }) {
+    if ('error' in details) {
+        return <div className="text-[11px] text-red-400">{String(details.error)}</div>;
+    }
+
+    // search_notes / get_recent_notes / list_notes_in_folder-style hit lists
+    if (Array.isArray(details.hits)) {
+        return (
+            <ul className="space-y-0.5 text-[11px]">
+                {(details.hits as Array<Record<string, unknown>>).map((h, i) => (
+                    <li key={i} className="text-dark-300">
+                        <span className="text-dark-400">·</span>{' '}
+                        <span className="text-white">{String(h.title)}</span>
+                        {h.folder_path ? <span className="text-dark-600"> · 📁 {String(h.folder_path)}</span> : null}
+                        {h.snippet ? <div className="text-dark-500 ml-2 italic">{String(h.snippet)}</div> : null}
+                    </li>
+                ))}
+            </ul>
+        );
+    }
+    if (Array.isArray(details.sources)) {
+        return (
+            <ul className="space-y-0.5 text-[11px]">
+                {(details.sources as Array<Record<string, unknown>>).map((s, i) => (
+                    <li key={i}>
+                        <a href={String(s.url)} target="_blank" rel="noopener noreferrer"
+                            className="text-blue-400 hover:underline">
+                            🌐 {String(s.title || s.url)}
+                        </a>
+                    </li>
+                ))}
+            </ul>
+        );
+    }
+    if (Array.isArray(details.images)) {
+        return (
+            <ul className="space-y-0.5 text-[11px] text-dark-300">
+                {(details.images as Array<Record<string, unknown>>).map((img, i) => (
+                    <li key={i}>
+                        <span className="text-white">{String(img.filename)}</span>
+                        {img.snippet ? <span className="text-dark-500"> — {String(img.snippet)}</span> : null}
+                    </li>
+                ))}
+            </ul>
+        );
+    }
+    if (Array.isArray(details.folders)) {
+        return (
+            <div className="text-[11px] text-dark-400 flex flex-wrap gap-1">
+                {(details.folders as string[]).map((f, i) => (
+                    <span key={i} className="bg-dark-800/60 px-1.5 py-0.5 rounded">📁 {f}</span>
+                ))}
+                {typeof details.total === 'number' && details.total > (details.folders as string[]).length && (
+                    <span className="text-dark-600">+{details.total - (details.folders as string[]).length} weitere</span>
+                )}
+            </div>
+        );
+    }
+    if (Array.isArray(details.notes)) {
+        return (
+            <ul className="space-y-0.5 text-[11px] text-dark-300">
+                {(details.notes as string[]).map((n, i) => <li key={i}>· {n}</li>)}
+            </ul>
+        );
+    }
+    if (typeof details.snippet === 'string') {
+        return (
+            <div className="text-[11px]">
+                {details.title ? <div className="text-white">{String(details.title)}</div> : null}
+                <div className="text-dark-500 italic">{String(details.snippet)}</div>
+                {typeof details.chars === 'number' && (
+                    <div className="text-dark-700 mt-0.5">{details.chars} Zeichen</div>
+                )}
+            </div>
+        );
+    }
+
+    // Fallback: compact key/value grid
+    const entries = Object.entries(details).filter(([, v]) => v !== null && v !== undefined && v !== '');
+    if (entries.length === 0) return null;
+    return (
+        <div className="text-[11px] text-dark-400 space-y-0.5">
+            {entries.map(([k, v]) => (
+                <div key={k} className="flex gap-2">
+                    <span className="text-dark-600">{k}:</span>
+                    <span className="text-dark-300 break-all">{typeof v === 'string' ? v : JSON.stringify(v)}</span>
+                </div>
+            ))}
         </div>
     );
 }

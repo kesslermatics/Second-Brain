@@ -448,6 +448,12 @@ export interface AgentStep {
   content: string;
   status?: string | null;
   tool?: string | null;
+  // Tool-call rounds: args payload shown in the timeline
+  args?: Record<string, unknown> | null;
+  // Tool-result rounds: structured, chat-safe details for the timeline
+  details?: Record<string, unknown> | null;
+  // Index of the agent round this step belongs to (0 = first turn)
+  round?: number | null;
 }
 
 export interface AgentStats {

@@ -871,10 +871,10 @@ export const runAgent = async (sessionId: string, content: string, autoAccept: b
 };
 
 export type AgentStreamEvent =
-  | { type: 'thinking'; content: string }
+  | { type: 'thinking'; content: string; round?: number | null }
   | { type: 'chunk'; content: string }
-  | { type: 'tool_call'; content: string; status?: string | null; tool?: string | null }
-  | { type: 'tool_result'; content: string }
+  | { type: 'tool_call'; content: string; status?: string | null; tool?: string | null; args?: Record<string, unknown> | null; round?: number | null }
+  | { type: 'tool_result'; content: string; tool?: string | null; details?: Record<string, unknown> | null; round?: number | null }
   | { type: 'proposal'; proposal: AgentProposal }
   | { type: 'sources'; sources: { title: string; url: string }[] }
   | { type: 'cancelled' }

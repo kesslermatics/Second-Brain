@@ -1473,6 +1473,85 @@ def _status_phrase(tool_name: str) -> str:
     return _STATUS_PHRASES.get(tool_name, "Arbeitet daran")
 
 
+def _detail_from_tool_result(tool_name: str, result: dict) -> dict:
+    """Pull out a compact, user-readable detail payload from a raw tool result.
+
+    This is what the UI timeline shows under "Ergebnis". Everything that would
+    make the chat unreadable (full note bodies, long base64, etc.) is trimmed."""
+    if not isinstance(result, dict):
+        return {"preview": str(result)[:400]}
+    if "error" in result:
+        return {"error": str(result["error"])[:400]}
+
+    def _snip(text: str, n: int = 180) -> str:
+        text = (text or "").strip().replace("\n", " ")
+        return text if len(text) <= n else text[:n].rstrip() + "…"
+
+    if tool_name == "search_notes":
+        hits = result.get("results", [])[:8]
+        return {"hits": [
+            {
+                "title": h.get("title", "?"),
+                "folder_path": h.get("folder_path", ""),
+                "snippet": _snip(h.get("snippet") or h.get("content", "")),
+            }
+            for h in hits
+        ]}
+    if tool_name == "read_note":
+        body = result.get("content", "") or ""
+        return {
+            "title": result.get("title", "?"),
+            "folder_path": result.get("folder_path", ""),
+            "chars": len(body),
+            "snippet": _snip(body, 320),
+        }
+    if tool_name == "list_folders":
+        folders = result.get("folders", [])
+        return {"folders": [f.get("path", str(f)) if isinstance(f, dict) else str(f) for f in folders[:30]], "total": len(folders)}
+    if tool_name == "list_notes_in_folder":
+        notes = result.get("notes", [])
+        return {"notes": [n.get("title", "?") for n in notes[:20]], "total": len(notes)}
+    if tool_name == "search_images":
+        imgs = result.get("images", [])[:8]
+        return {"images": [
+            {"filename": i.get("filename", "?"), "snippet": _snip(i.get("description", ""))}
+            for i in imgs
+        ]}
+    if tool_name in ("view_image", "view_document"):
+        return {"filename": result.get("filename", "?"), "status": result.get("status", "")}
+    if tool_name == "get_recent_notes":
+        notes = result.get("notes", [])
+        return {"notes": [n.get("title", "?") for n in notes[:15]], "total": len(notes)}
+    if tool_name in ("create_note", "update_note", "rename_note", "move_note"):
+        return {k: v for k, v in result.items() if k in ("title", "note_id", "folder_path", "new_title", "target_folder_path") and v}
+    if tool_name in ("create_folder", "rename_folder", "delete_folder"):
+        return {k: v for k, v in result.items() if k in ("folder_path", "new_name", "deleted") and v}
+    if tool_name == "web_search":
+        sources = result.get("sources", [])[:8]
+        return {"sources": [{"title": s.get("title", s.get("url", "")), "url": s.get("url", "")} for s in sources]}
+    if tool_name == "get_fitness_overview":
+        return {k: v for k, v in result.items() if k in ("weight_count", "has_training_plan", "coaching_count") and v is not None}
+    if tool_name == "get_workout_data":
+        return {k: v for k, v in result.items() if k in ("mode", "count", "exercise_name") and v}
+    if tool_name == "get_health_data":
+        return {k: v for k, v in result.items() if k in ("mode", "date", "days") and v}
+    if tool_name == "get_wardrobe":
+        return {k: len(v) if isinstance(v, list) else v for k, v in result.items() if k in ("clothing", "watches", "fragrances", "accessories")}
+    if tool_name == "get_wardrobe_analytics":
+        return {k: v for k, v in result.items() if not isinstance(v, (list, dict)) or len(str(v)) < 200}
+
+    # Fallback: a shallow dict with primitive values only
+    out = {}
+    for k, v in result.items():
+        if k.startswith("_"):
+            continue
+        if isinstance(v, (str, int, float, bool)):
+            out[k] = v if not isinstance(v, str) else _snip(v)
+        elif isinstance(v, list):
+            out[k] = f"[{len(v)} items]"
+    return out
+
+
 async def run_agent_stream(
     instruction: str,
     user_id: str,
@@ -1587,7 +1666,8 @@ async def run_agent_stream(
                         function_calls.append(part.function_call)
                     elif hasattr(part, 'text') and part.text:
                         if hasattr(part, 'thought') and part.thought:
-                            yield {"type": "thinking", "content": part.text}
+                            steps.append({"type": "thinking", "content": part.text, "round": round_num})
+                            yield {"type": "thinking", "content": part.text, "round": round_num}
                         else:
                             full_text_parts.append(part.text)
 
@@ -1615,7 +1695,8 @@ async def run_agent_stream(
                                 # Thought summary parts → stream as "thinking"
                                 if getattr(part, 'thought', False) and getattr(part, 'text', None):
                                     emitted_via_parts = True
-                                    yield {"type": "thinking", "content": part.text}
+                                    steps.append({"type": "thinking", "content": part.text, "round": round_num})
+                                    yield {"type": "thinking", "content": part.text, "round": round_num}
                                 elif getattr(part, 'text', None) and not getattr(part, 'function_call', None):
                                     emitted_via_parts = True
                                     full_text_parts.append(part.text)
@@ -1650,8 +1731,8 @@ async def run_agent_stream(
         # stopping (previously: `break` here meant zero text was ever streamed
         # if the model was still calling tools at the last round).
         if round_num >= max_tool_rounds:
-            steps.append({"type": "tool_call", "content": "Fasse zusammen …"})
-            yield {"type": "tool_call", "content": "Fasse zusammen …", "status": "Fasst alles zusammen", "tool": "_summarize"}
+            steps.append({"type": "tool_call", "content": "Fasse zusammen …", "round": round_num, "tool": "_summarize"})
+            yield {"type": "tool_call", "content": "Fasse zusammen …", "status": "Fasst alles zusammen", "tool": "_summarize", "round": round_num}
             # Nudge the model to answer now, without offering more tools.
             contents.append(types.Content(
                 role="user",
@@ -1674,7 +1755,8 @@ async def run_agent_stream(
                         if candidate.content and candidate.content.parts:
                             for part in candidate.content.parts:
                                 if getattr(part, 'thought', False) and getattr(part, 'text', None):
-                                    yield {"type": "thinking", "content": part.text}
+                                    steps.append({"type": "thinking", "content": part.text, "round": round_num})
+                                    yield {"type": "thinking", "content": part.text, "round": round_num}
                                 elif getattr(part, 'text', None):
                                     yield {"type": "chunk", "content": part.text}
             break
@@ -1723,13 +1805,28 @@ async def run_agent_stream(
                 detail = f' in {tool_args["folder_path"]}'
             step_desc = f"{label}{detail}"
 
+            # Compact, chat-safe copy of the args for the UI timeline.
+            display_args = {
+                k: (v if (not isinstance(v, str) or len(v) <= 240) else v[:240] + "…")
+                for k, v in tool_args.items()
+                if not isinstance(v, (bytes, bytearray)) and not k.startswith("_")
+            }
+
             yield {
                 "type": "tool_call",
                 "content": step_desc,
                 "status": _status_phrase(tool_name),
                 "tool": tool_name,
+                "args": display_args,
+                "round": round_num,
             }
-            steps.append({"type": "tool_call", "content": step_desc})
+            steps.append({
+                "type": "tool_call",
+                "content": step_desc,
+                "tool": tool_name,
+                "args": display_args,
+                "round": round_num,
+            })
 
             # Execute
             result = await _execute_tool(tool_name, tool_args, user_id, db)
@@ -1757,8 +1854,21 @@ async def run_agent_stream(
 
             # Summarize result for streaming UI
             result_summary = _summarize_tool_result(tool_name, result)
-            yield {"type": "tool_result", "content": result_summary}
-            steps.append({"type": "tool_result", "content": result_summary})
+            result_details = _detail_from_tool_result(tool_name, result)
+            yield {
+                "type": "tool_result",
+                "content": result_summary,
+                "tool": tool_name,
+                "details": result_details,
+                "round": round_num,
+            }
+            steps.append({
+                "type": "tool_result",
+                "content": result_summary,
+                "tool": tool_name,
+                "details": result_details,
+                "round": round_num,
+            })
 
             # Emit sources from web_search
             if tool_name == "web_search" and result.get("sources"):
