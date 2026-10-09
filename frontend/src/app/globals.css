@@ -440,3 +440,48 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 .agent-message-in { animation: agentMessageIn 0.3s ease-out; }
+
+/* ── Agent: inline citation chips ───────────────────────────────── */
+/* Rendered inline after a cited passage. Deliberately dim so the prose
+   stays dominant, but clearly interactive on hover.                    */
+.agent-cite {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25em;
+  vertical-align: baseline;
+  max-width: 18em;
+  margin: 0 0.15em;
+  padding: 0.05em 0.4em;
+  border: 1px solid #2a3038;
+  border-radius: 0.5em;
+  background: rgba(32, 38, 46, 0.6);
+  font-size: 0.72em;
+  line-height: 1.5;
+  color: #7d8894;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.agent-cite:hover {
+  background: rgba(56, 66, 78, 0.85);
+  border-color: #3f4854;
+  color: #cbd3dc;
+  text-decoration: none;
+}
+.agent-cite-icon {
+  font-size: 0.9em;
+  line-height: 1;
+  flex-shrink: 0;
+  /* Keep emoji at full opacity-independent brightness */
+  filter: saturate(0.75);
+}
+.agent-cite-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The markdown-content anchor rules must not fight the chip styling */
+.markdown-content a.agent-cite,
+.markdown-content a.agent-cite:hover {
+  color: inherit;
+}

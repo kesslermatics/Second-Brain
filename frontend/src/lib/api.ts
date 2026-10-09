@@ -9,7 +9,7 @@ import type {
   CourseListItem, CourseDetail, CourseMessage as CourseMsg, CourseNoteResult, AdvancedFocusSuggestion,
   BookSummariesResponse, QuizQuestion, LessonRecap, TeacherChatResponse,
   BookDocument, BookIngestionEvent,
-  AgentRunResult, AgentStep, AgentProposal, AgentStats,
+  AgentRunResult, AgentStep, AgentProposal, AgentStats, AgentCitation,
 } from './types';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -879,7 +879,7 @@ export type AgentStreamEvent =
   | { type: 'sources'; sources: { title: string; url: string }[] }
   | { type: 'cancelled' }
   | { type: 'error'; message: string; detail?: string }
-  | { type: 'done'; proposals: AgentProposal[]; steps: AgentStep[]; apply_result?: unknown; image_urls?: string[]; stats?: AgentStats | null };
+  | { type: 'done'; proposals: AgentProposal[]; steps: AgentStep[]; apply_result?: unknown; image_urls?: string[]; stats?: AgentStats | null; citations?: Record<string, AgentCitation> | null };
 
 export interface AgentStreamOptions {
   existingMessageId?: string;

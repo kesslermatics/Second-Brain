@@ -456,6 +456,18 @@ export interface AgentStep {
   round?: number | null;
 }
 
+// A citable source the agent referenced with a [[cite:N]] marker
+export interface AgentCitation {
+  type: 'note' | 'web' | 'file';
+  title: string;
+  // type === 'note'
+  note_id?: string;
+  folder_path?: string;
+  // type === 'web' | 'file'
+  url?: string;
+  file_id?: string;
+}
+
 export interface AgentStats {
   input_tokens: number;
   output_tokens: number;

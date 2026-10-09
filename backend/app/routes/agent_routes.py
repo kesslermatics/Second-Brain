@@ -361,6 +361,7 @@ async def agent_stream_message(
         all_proposals: list = []
         all_steps: list = []
         agent_stats: dict | None = None
+        agent_citations: dict | None = None
 
         async with async_session() as bg_db:
             async for event in run_agent_stream(
@@ -411,6 +412,7 @@ async def agent_stream_message(
                     all_proposals = event.get("proposals", all_proposals)
                     all_steps = event.get("steps", all_steps)
                     agent_stats = event.get("stats", agent_stats)
+                    agent_citations = event.get("citations", agent_citations)
 
             # Save assistant message to DB
             agent_response = "".join(full_response_parts)
@@ -421,6 +423,8 @@ async def agent_stream_message(
                 metadata["steps"] = all_steps
             if agent_stats:
                 metadata["stats"] = agent_stats
+            if agent_citations:
+                metadata["citations"] = agent_citations
 
             stored_content = agent_response
             if metadata:
@@ -466,6 +470,7 @@ async def agent_stream_message(
             "apply_result": apply_result,
             "image_urls": file_urls,
             "stats": agent_stats,
+            "citations": agent_citations,
         }
 
     # Register job and fire the background task

@@ -111,6 +111,23 @@ Du hast Zugriff auf alle Notizen, Ordner und Bilder des Benutzers über Tools �
    - Wiederhole eine Suche NICHT mit nur leicht abgewandelten Begriffen ("Sponsor", dann "Sponsoring", dann "Sponsor Modell") — das ist Verschwendung. Wenn die erste Suche nichts Passendes fand, probiere einen grundlegend anderen Blickwinkel, nicht dieselbe Formulierung.
    - Wenn du nach 2-3 Suchen genug Kontext hast, antworte — du musst nicht jeden Stein umdrehen.
 
+## QUELLEN ZITIEREN — wichtig:
+
+Jedes Tool-Ergebnis, das eine Quelle liefert (Notizen aus `search_notes`/`read_note`/`get_recent_notes`/`list_notes_in_folder`, Web-Treffer aus `web_search`, Dateien aus `search_images`), enthält ein Feld `cite` mit einer Zahl.
+
+Wenn du eine Information aus einer solchen Quelle verwendest, setze direkt hinter die betreffende Passage den Marker `[[cite:N]]` — mit genau der Zahl aus dem `cite`-Feld.
+
+Regeln:
+- Setze den Marker ans ENDE des Satzes oder Absatzes, der die Information enthält — nach dem Punkt.
+- Mehrere Quellen für eine Passage: `[[cite:2]][[cite:5]]` direkt hintereinander.
+- Zitiere nur, wenn die Information wirklich aus dieser Quelle kommt. Eigene Schlussfolgerungen, Vorschläge und allgemeines Wissen brauchen KEINEN Marker.
+- Erfinde NIEMALS Zahlen. Nutze ausschließlich `cite`-Werte, die du tatsächlich in einem Tool-Ergebnis gesehen hast.
+- Schreibe die Marker als reinen Text, nicht in Code-Blöcken, nicht in Backticks.
+- Erwähne die Marker nicht im Fließtext („wie in Quelle 3 beschrieben") — sie werden dem Benutzer automatisch als klickbare Quellenangabe angezeigt.
+
+Beispiel:
+„Dein Autokredit läuft noch bis März 2027 mit 312 € monatlich. [[cite:1]] Laut aktuellen Marktdaten liegen vergleichbare Zinssätze derzeit bei etwa 4,2 %. [[cite:4]] Eine Umschuldung könnte sich also lohnen — das würde ich an deiner Stelle prüfen."
+
 ## Antwortformat:
 - Nutze Markdown: **Fettdruck** für Kernbegriffe, Aufzählungen, Überschriften (##) wo sinnvoll
 - Strukturiere längere Antworten klar mit Absätzen
@@ -1731,6 +1748,70 @@ def _status_phrase(tool_name: str) -> str:
     return _STATUS_PHRASES.get(tool_name, "Arbeitet daran")
 
 
+def _register_citations(
+    tool_name: str,
+    result: dict,
+    citations: dict[str, dict],
+    seen: dict[str, int],
+) -> None:
+    """Assign stable citation ids to every citable source in a tool result.
+
+    Mutates ``result`` in place by adding a ``cite`` field to each source so the
+    model sees the exact number it must use in ``[[cite:N]]`` markers. The
+    ``citations`` registry is handed to the UI so each marker can be resolved to
+    a clickable note or web link."""
+    if not isinstance(result, dict) or "error" in result:
+        return
+
+    def _add(key: str, entry: dict) -> int:
+        existing = seen.get(key)
+        if existing is not None:
+            return existing
+        cid = len(citations) + 1
+        seen[key] = cid
+        citations[str(cid)] = entry
+        return cid
+
+    def _cite_note(item: dict) -> None:
+        note_id = item.get("note_id")
+        if not note_id:
+            return
+        item["cite"] = _add(f"note:{note_id}", {
+            "type": "note",
+            "note_id": note_id,
+            "title": item.get("title", "") or "Notiz",
+            "folder_path": item.get("folder_path", ""),
+        })
+
+    if tool_name == "search_notes":
+        for item in result.get("results") or []:
+            if isinstance(item, dict):
+                _cite_note(item)
+    elif tool_name in ("get_recent_notes", "list_notes_in_folder"):
+        for item in result.get("notes") or []:
+            if isinstance(item, dict):
+                _cite_note(item)
+    elif tool_name == "read_note":
+        _cite_note(result)
+    elif tool_name == "web_search":
+        for item in result.get("sources") or []:
+            if isinstance(item, dict) and item.get("url"):
+                item["cite"] = _add(f"url:{item['url']}", {
+                    "type": "web",
+                    "url": item["url"],
+                    "title": item.get("title", "") or item["url"],
+                })
+    elif tool_name == "search_images":
+        for item in result.get("images") or []:
+            if isinstance(item, dict) and item.get("image_id"):
+                item["cite"] = _add(f"file:{item['image_id']}", {
+                    "type": "file",
+                    "file_id": item["image_id"],
+                    "title": item.get("filename", "") or "Datei",
+                    "url": item.get("url", ""),
+                })
+
+
 def _detail_from_tool_result(tool_name: str, result: dict) -> dict:
     """Pull out a compact, user-readable detail payload from a raw tool result.
 
@@ -1897,6 +1978,10 @@ async def run_agent_stream(
 
     proposals = []
     steps = []
+    # Citation registry: cite id → source entry (note / web / file). Filled as
+    # tools surface sources, handed to the UI so [[cite:N]] markers resolve.
+    citations: dict[str, dict] = {}
+    citations_seen: dict[str, int] = {}
     # Aggregated token usage + cost across every model round (thinking, tool
     # rounds and the final answer) so the UI can show a single summary line.
     usage_agg = {"input": 0, "output": 0, "cost": 0.0}
@@ -2107,6 +2192,15 @@ async def run_agent_stream(
             # Execute
             result = await _execute_tool(tool_name, tool_args, user_id, db)
 
+            # Enrich step_desc for tools where the human-readable name is only
+            # available after execution (read_note → title, view_image → filename).
+            result_name = result.get("title") or result.get("filename") or ""
+            if result_name and not detail:
+                step_desc = f'{label}: „{result_name}"'
+                # Also patch the already-pushed tool_call step so persisted AGENT_META is correct.
+                if steps and steps[-1].get("type") == "tool_call" and steps[-1].get("tool") == tool_name:
+                    steps[-1]["content"] = step_desc
+
             # ── view_image / view_document: pull out raw bytes to attach as a real part ──
             pending_image = None
             if result.get("status") == "image_loaded" and result.get("_image_bytes"):
@@ -2127,6 +2221,10 @@ async def run_agent_stream(
                 # Ensure no stray bytes ever end up in the JSON response
                 result.pop("_image_bytes", None)
                 result.pop("_doc_bytes", None)
+
+            # Assign citation ids before the model sees the result, so it can
+            # reference them with [[cite:N]] in its answer.
+            _register_citations(tool_name, result, citations, citations_seen)
 
             # Summarize result for streaming UI
             result_summary = _summarize_tool_result(tool_name, result)
@@ -2193,7 +2291,13 @@ async def run_agent_stream(
         "model": AGENT_MODEL,
         "duration_ms": int((time.monotonic() - start_time) * 1000),
     }
-    yield {"type": "done", "proposals": proposals, "steps": steps, "stats": stats}
+    yield {
+        "type": "done",
+        "proposals": proposals,
+        "steps": steps,
+        "stats": stats,
+        "citations": citations,
+    }
 
 
 def _summarize_tool_result(tool_name: str, result: dict) -> str:

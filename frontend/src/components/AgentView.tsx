@@ -13,7 +13,7 @@ import { markdownComponents, remarkPlugins, rehypePlugins } from '@/lib/markdown
 import { runAgentStream, cancelAgentJob, updateChatMessage, applyAgentProposals, markProposalsApplied, createChatSession, getChatSession, getNote } from '@/lib/api';
 import type { AgentStreamEvent } from '@/lib/api';
 import { useStore } from '@/lib/store';
-import type { AgentStep, AgentProposal, AgentStats, ChatMessage, ChatSessionDetail, Note } from '@/lib/types';
+import type { AgentStep, AgentProposal, AgentStats, AgentCitation, ChatMessage, ChatSessionDetail, Note } from '@/lib/types';
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -28,6 +28,7 @@ interface ParsedAgentMessage {
     attachments?: { name: string; type: string; url?: string }[];
     sources?: { title: string; url: string }[];
     stats?: AgentStats;
+    citations?: Record<string, AgentCitation>;
     created_at: string;
 }
 
@@ -37,12 +38,28 @@ interface DiffViewData {
     proposalIndex: number;
 }
 
+// Rewrite the agent's [[cite:N]] markers into markdown fragment links so they
+// survive the markdown pipeline and can be rendered as chips by the `a` override.
+// Markers without a matching source entry are dropped rather than shown raw.
+const CITE_MARKER = /\[\[cite:(\d+)\]\]/g;
+
+function injectCitationLinks(content: string, citations?: Record<string, AgentCitation>): string {
+    return content.replace(CITE_MARKER, (_full, n: string) =>
+        citations && citations[n] ? `[${n}](#cite-${n})` : ''
+    );
+}
+
+function stripCitationMarkers(content: string): string {
+    return content.replace(CITE_MARKER, '');
+}
+
 function parseAgentMessage(msg: ChatMessage): ParsedAgentMessage {
     let content = msg.content;
     let steps: AgentStep[] | undefined;
     let proposals: AgentProposal[] | undefined;
     let appliedIndices: number[] | undefined;
     let stats: AgentStats | undefined;
+    let citations: Record<string, AgentCitation> | undefined;
     const metaMatch = content.match(/<!-- AGENT_META\n([\s\S]*?)\nAGENT_META -->/);
     if (metaMatch) {
         content = content.replace(metaMatch[0], '').trim();
@@ -52,9 +69,10 @@ function parseAgentMessage(msg: ChatMessage): ParsedAgentMessage {
             proposals = meta.proposals;
             appliedIndices = meta.applied_indices;
             stats = meta.stats;
+            citations = meta.citations;
         } catch { }
     }
-    return { id: msg.id, role: msg.role, content, steps, proposals, appliedIndices, stats, created_at: msg.created_at };
+    return { id: msg.id, role: msg.role, content, steps, proposals, appliedIndices, stats, citations, created_at: msg.created_at };
 }
 
 // ── Main Component ───────────────────────────────────────────────────
@@ -301,16 +319,18 @@ export default function AgentView() {
     };
 
     const saveEdit = async () => {
-        if (!activeAgentSession || !editingMessageId || !editingContent.trim()) return;
+        if (!activeAgentSession || !editingMessageId || !editingContent.trim() || loading) return;
+        const editedContent = editingContent.trim();
+        const msgId = editingMessageId;
         try {
-            const updated = await updateChatMessage(activeAgentSession.id, editingMessageId, editingContent);
+            const updated = await updateChatMessage(activeAgentSession.id, msgId, editedContent);
             setActiveAgentSession(updated);
             setParsedMessages(updated.messages.map(parseAgentMessage));
-            setRestartableMessage({ id: editingMessageId, content: editingContent.trim() });
             setEditingMessageId(null);
             setEditingContent('');
-            setRunNotice('Nachricht aktualisiert. Die spätere Historie wurde entfernt; starte die Antwort bei Bedarf neu.');
             await loadAgentSessions();
+            // Immediately re-run the agent with the edited message
+            await runAgentMessage(updated, editedContent, undefined, msgId);
         } catch (error) {
             setRunNotice(error instanceof Error ? error.message : 'Nachricht konnte nicht geändert werden.');
         }
@@ -461,7 +481,13 @@ export default function AgentView() {
                                             appliedProposals={appliedProposals} rejectedProposals={rejectedProposals}
                                             onAcceptProposal={handleAcceptProposal} onRejectProposal={handleRejectProposal}
                                             onAcceptAll={handleAcceptAll} onOpenDiff={openDiffInLeft} onOpenNote={openNoteInLeft}
-                                            onEdit={beginEdit} />
+                                            onEdit={beginEdit}
+                                            isEditing={editingMessageId === msg.id}
+                                            editingContent={editingMessageId === msg.id ? editingContent : ''}
+                                            onEditChange={setEditingContent}
+                                            onEditSubmit={saveEdit}
+                                            onEditCancel={() => { setEditingMessageId(null); setEditingContent(''); }}
+                                        />
                                     </div>
                                 );
                             })}
@@ -471,17 +497,6 @@ export default function AgentView() {
                                     <div className="flex gap-1.5 flex-shrink-0">
                                         {restartableMessage && !loading && <button onClick={handleRestart} className="rounded-md bg-rose-600 px-2 py-1 font-medium text-white hover:bg-rose-500">Neu starten</button>}
                                         <button onClick={() => setRunNotice(null)} className="p-1 text-amber-200 hover:text-white" title="Hinweis schließen"><FiX className="w-3.5 h-3.5" /></button>
-                                    </div>
-                                </div>
-                            )}
-                            {editingMessageId && (
-                                <div className="rounded-xl border border-rose-500/40 bg-dark-800 p-3 space-y-2">
-                                    <p className="text-xs font-medium text-dark-200">Nachricht bearbeiten – spätere Antworten werden aus dem Verlauf entfernt.</p>
-                                    <textarea value={editingContent} onChange={(event) => setEditingContent(event.target.value)} rows={3}
-                                        className="w-full resize-y rounded-lg border border-dark-700 bg-dark-900 px-2 py-1.5 text-sm text-white focus:border-rose-500 focus:outline-none" />
-                                    <div className="flex justify-end gap-2">
-                                        <button onClick={() => { setEditingMessageId(null); setEditingContent(''); }} className="rounded-lg px-2 py-1 text-xs text-dark-300 hover:text-white">Abbrechen</button>
-                                        <button onClick={saveEdit} disabled={!editingContent.trim()} className="rounded-lg bg-rose-600 px-2 py-1 text-xs font-medium text-white hover:bg-rose-500 disabled:opacity-50">Speichern</button>
                                     </div>
                                 </div>
                             )}
@@ -861,9 +876,58 @@ function formatDuration(ms: number): string {
     return `${m}m ${Math.round(s % 60)}s`;
 }
 
+// ── Inline citation chip ─────────────────────────────────────────────
+// Rendered in place of a [[cite:N]] marker. Notes open in the left panel,
+// web sources open in a new tab.
+
+function CitationChip({ citation, onOpenNote }: {
+    citation: AgentCitation;
+    onOpenNote: (noteId: string) => void;
+}) {
+    const label = citation.title || (citation.type === 'web' ? 'Quelle' : 'Notiz');
+
+    if (citation.type === 'note' && citation.note_id) {
+        const tooltip = citation.folder_path ? `${citation.folder_path} / ${label}` : label;
+        return (
+            <button
+                type="button"
+                onClick={() => onOpenNote(citation.note_id!)}
+                className="agent-cite"
+                title={`Notiz öffnen: ${tooltip}`}
+            >
+                <span className="agent-cite-icon">📄</span>
+                <span className="agent-cite-label">{label}</span>
+            </button>
+        );
+    }
+
+    if (citation.url) {
+        let host = '';
+        try { host = new URL(citation.url).hostname.replace(/^www\./, ''); } catch { }
+        return (
+            <a
+                href={citation.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="agent-cite"
+                title={`${label}${host ? ` — ${host}` : ''}`}
+            >
+                <span className="agent-cite-icon">{citation.type === 'file' ? '🖼️' : '🌐'}</span>
+                <span className="agent-cite-label">{host || label}</span>
+            </a>
+        );
+    }
+
+    return (
+        <span className="agent-cite" title={label}>
+            <span className="agent-cite-label">{label}</span>
+        </span>
+    );
+}
+
 function StatsBar({ content, stats }: { content: string; stats?: AgentStats }) {
     const wordCount = useMemo(() => {
-        const trimmed = content.trim();
+        const trimmed = stripCitationMarkers(content).trim();
         return trimmed ? trimmed.split(/\s+/).length : 0;
     }, [content]);
 
@@ -897,9 +961,33 @@ interface MessageBubbleProps {
     onOpenDiff: (p: AgentProposal, msgId: string, idx: number) => void;
     onOpenNote: (noteId: string) => void;
     onEdit: (message: ParsedAgentMessage) => void;
+    // Inline editing state — passed down so the textarea renders in place
+    isEditing: boolean;
+    editingContent: string;
+    onEditChange: (value: string) => void;
+    onEditSubmit: () => void;
+    onEditCancel: () => void;
 }
 
-const MessageBubble = memo(function MessageBubble({ msg, appliedProposals, rejectedProposals, onAcceptProposal, onRejectProposal, onAcceptAll, onOpenDiff, onOpenNote, onEdit }: MessageBubbleProps) {
+const MessageBubble = memo(function MessageBubble({ msg, appliedProposals, rejectedProposals, onAcceptProposal, onRejectProposal, onAcceptAll, onOpenDiff, onOpenNote, onEdit, isEditing, editingContent, onEditChange, onEditSubmit, onEditCancel }: MessageBubbleProps) {
+    // Turn [[cite:N]] markers into fragment links, then render those as chips.
+    const citedContent = useMemo(
+        () => injectCitationLinks(msg.content, msg.citations),
+        [msg.content, msg.citations],
+    );
+
+    const mdComponents = useMemo(() => ({
+        ...markdownComponents,
+        a: ({ href, children, ...props }: any) => {
+            const match = typeof href === 'string' ? href.match(/^#cite-(\d+)$/) : null;
+            const citation = match && msg.citations ? msg.citations[match[1]] : undefined;
+            if (citation) {
+                return <CitationChip citation={citation} onOpenNote={onOpenNote} />;
+            }
+            return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
+        },
+    }), [msg.citations, onOpenNote]);
+
     if (msg.role === 'user') {
         return (
             <div className="group flex flex-col items-end gap-1.5">
@@ -917,8 +1005,33 @@ const MessageBubble = memo(function MessageBubble({ msg, appliedProposals, rejec
                         ))}
                     </div>
                 )}
-                <p className="text-[15px] leading-relaxed text-white whitespace-pre-wrap text-right max-w-[85%]">{msg.content}</p>
-                <button onClick={() => onEdit(msg)} className="flex items-center gap-1 text-[11px] text-dark-600 opacity-0 group-hover:opacity-100 transition-opacity hover:text-rose-300" title="Nachricht bearbeiten und spätere Historie ersetzen"><FiEdit2 className="w-3 h-3" /> Bearbeiten</button>
+                {isEditing ? (
+                    <div className="w-full max-w-[85%] space-y-2">
+                        <textarea
+                            value={editingContent}
+                            onChange={(e) => onEditChange(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onEditSubmit(); } }}
+                            rows={3}
+                            autoFocus
+                            className="w-full resize-y rounded-xl border border-dark-700 bg-dark-900 px-3 py-2 text-[15px] text-white focus:border-rose-500 focus:outline-none text-right"
+                        />
+                        <div className="flex justify-end gap-2">
+                            <button onClick={onEditCancel} className="rounded-lg px-2.5 py-1 text-xs text-dark-400 hover:text-white">Abbrechen</button>
+                            <button
+                                onClick={onEditSubmit}
+                                disabled={!editingContent.trim()}
+                                className="flex items-center gap-1.5 rounded-xl bg-rose-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-rose-500 disabled:opacity-50"
+                            >
+                                <FiSend className="w-3 h-3" /> Erneut senden
+                            </button>
+                        </div>
+                    </div>
+                ) : (
+                    <>
+                        <p className="text-[15px] leading-relaxed text-white whitespace-pre-wrap text-right max-w-[85%]">{msg.content}</p>
+                        <button onClick={() => onEdit(msg)} className="flex items-center gap-1 text-[11px] text-dark-600 opacity-0 group-hover:opacity-100 transition-opacity hover:text-rose-300" title="Nachricht bearbeiten und erneut senden"><FiEdit2 className="w-3 h-3" /> Bearbeiten</button>
+                    </>
+                )}
             </div>
         );
     }
@@ -935,7 +1048,7 @@ const MessageBubble = memo(function MessageBubble({ msg, appliedProposals, rejec
 
             {msg.content && (
                 <div className="markdown-content lesson-prose text-[15px] text-dark-100">
-                    <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>{msg.content}</ReactMarkdown>
+                    <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={mdComponents}>{citedContent}</ReactMarkdown>
                 </div>
             )}
 
