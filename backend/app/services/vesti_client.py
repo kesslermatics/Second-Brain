@@ -59,7 +59,7 @@ async def call_vesti(endpoint_key: str, params: dict[str, Any] | None = None) ->
             clean_params[k] = v
 
     headers = {
-        "Authorization": f"Bearer {api_key}",
+        "X-API-Key": api_key,
         "Accept": "application/json",
     }
 
