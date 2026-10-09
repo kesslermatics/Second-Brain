@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     JWT_SECRET: str
     FRONTEND_URLS: str = ""
     BACKEND_URL: str = ""
+    FORGE_MCP_URL: str = ""
+    FORGE_API_KEY: str = ""
+    VESTI_API_URL: str = ""
+    VESTI_API_KEY: str = ""
 
     class Config:
         env_file = ".env"

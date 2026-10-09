@@ -122,6 +122,19 @@ Alle verändernden Aktionen (Notizen erstellen/ändern/löschen, Ordner anlegen/
 
 Schreibe Notiz-Inhalte immer in gut formatiertem Markdown mit Headings, Listen, Callouts.
 
+10. **Forge Fitness & Ernährungs-Daten**: Du hast Zugriff auf die Forge-App des Benutzers mit drei Tools:
+   - `get_fitness_overview` — Profil, Gewichtsverlauf, Trainingsplan, Coaching-Briefings. Nutze dies bei Fragen zu Zielen, Fortschritt oder allgemeinem Fitnessstatus.
+   - `get_workout_data` — Workouts der letzten Tage/Wochen, letztes Training, oder die History einer bestimmten Übung (z.B. Bench Press). Nutze dies bei Fragen zu Training, Volumen, PRs, Trainingshäufigkeit.
+   - `get_health_data` — Ernährung (Kalorien, Makros, Mahlzeiten), Schritte, Schlaf. Nutze dies bei Fragen zu Kalorien, Protein, Defizit/Überschuss, Aktivität oder Schlaf.
+   - Kombiniere Forge-Daten aktiv mit deinen Notizen: Wenn der Benutzer über Training oder Ernährung spricht, schaue sowohl in seinen Notizen als auch in Forge.
+   - Forge-Daten sind Live-Daten aus der App — keine historischen Snapshots in den Notizen nötig.
+
+11. **Vesti Garderobe**: Du hast Zugriff auf die Vesti-App des Benutzers mit zwei Tools:
+   - `get_wardrobe` — Lädt Kleidungsstücke, Uhren, Düfte und/oder Accessoires mit allen Details. Nutze dies für Fragen zu konkreten Stücken, Outfit-Planung oder Bestandsübersichten. Wähle gezielt nur die relevanten Kategorien (z.B. nur `include_clothing=true` wenn es ums Outfit geht).
+   - `get_wardrobe_analytics` — Fertige Auswertungen: Stilverteilung, Investitionswerte, Service-Fälligkeiten, Lücken und Empfehlungen. Nutze dies für strategische Fragen: 'Was fehlt in meiner Garderobe?', 'Was dominiert meinen Stil?', 'Wie viel sind meine Uhren wert?', 'Welche Düfte gehen bald zur Neige?'.
+   - Bei Outfit-Fragen: Lade die relevanten Kategorien und schlage konkrete Kombinationen vor basierend auf Stil, Anlass und Saison.
+   - Vesti-Daten sind Live-Daten — immer aktuell, nicht in Notizen zwischenspeichern.
+
 ## Sprache:
 Antworte IMMER in der Sprache des Benutzers (Standard: Deutsch)."""
 
@@ -450,6 +463,265 @@ def _get_agent_tools() -> list:
         },
     )
 
+    # ── Forge Fitness & Nutrition Tools ──────────────────────────────
+
+    get_fitness_overview = types.FunctionDeclaration(
+        name="get_fitness_overview",
+        description=(
+            "Ruft ein vollständiges Fitness-Profil aus der Forge-App ab: Nutzerprofil (Name, Größe, Sprache), "
+            "aktuellen Trainingsplan, Gewichtsverlauf und Coaching-Briefings/Workout-Reviews. "
+            "Nutze dies wenn der Benutzer nach seinem Trainingsstatus, Fortschritt, Gewicht, Zielen oder "
+            "Coaching-Feedback fragt. days_weight steuert wie viele Tage Gewichtshistorie geladen werden."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "include_training_plan": {
+                    "type": "boolean",
+                    "description": "Trainingsplan einbeziehen (Standard: true)",
+                },
+                "days_weight": {
+                    "type": "integer",
+                    "description": "Wie viele Tage Gewichtshistorie (7–365, Standard: 90)",
+                },
+                "coaching_memory_limit": {
+                    "type": "integer",
+                    "description": "Anzahl Coaching-Briefings/Reviews (1–10, Standard: 3)",
+                },
+            },
+        },
+    )
+
+    get_workout_data = types.FunctionDeclaration(
+        name="get_workout_data",
+        description=(
+            "Ruft Workout-Daten aus der Forge-App ab. Kann das letzte Workout, eine Liste von Workouts "
+            "der letzten N Tage, oder die komplette Historie einer bestimmten Übung liefern. "
+            "Nutze dies für Fragen zu Trainings, Übungsfortschritt, Volumen, PRs oder Trainingshäufigkeit."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "enum": ["latest", "history", "exercise_history"],
+                    "description": (
+                        "'latest' = letztes einzelnes Workout, "
+                        "'history' = mehrere Workouts (steuerbar über limit/days), "
+                        "'exercise_history' = alle Sätze einer bestimmten Übung"
+                    ),
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Anzahl Workouts/Sessions (1–30, Standard: 10). Gilt für 'history' und 'exercise_history'.",
+                },
+                "days": {
+                    "type": "integer",
+                    "description": "Nur Workouts der letzten N Tage (1–365, Standard: 30). Gilt für 'history'.",
+                },
+                "exercise_name": {
+                    "type": "string",
+                    "description": "Exakter Übungsname (z.B. 'Bench Press'). Pflichtfeld für mode='exercise_history'.",
+                },
+            },
+            "required": ["mode"],
+        },
+    )
+
+    get_health_data = types.FunctionDeclaration(
+        name="get_health_data",
+        description=(
+            "Ruft Gesundheits- und Ernährungsdaten aus der Forge-App ab: Kalorien, Makros, Mahlzeiten, "
+            "Schritte, Schlaf. Kann einen einzelnen Tag oder einen Datumsbereich abfragen. "
+            "Nutze dies für Fragen zu Ernährung, Kaloriendefizit/-überschuss, Makros, Schlaf oder Aktivität."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "enum": ["day", "range", "steps", "sleep"],
+                    "description": (
+                        "'day' = Ernährung eines einzelnen Tages inkl. Ziele und Mahlzeiten, "
+                        "'range' = Ernährungsübersicht mehrerer Tage (Makros + Kalorien), "
+                        "'steps' = Schritte und Aktivitäts-kcal eines Tages, "
+                        "'sleep' = Schlafdaten einer Nacht"
+                    ),
+                },
+                "date": {
+                    "type": "string",
+                    "description": "Datum als YYYY-MM-DD. Standard: heute. Gilt für 'day', 'steps', 'sleep'.",
+                },
+                "days": {
+                    "type": "integer",
+                    "description": "Anzahl Tage für 'range' (1–14, Standard: 7).",
+                },
+                "include_food_items": {
+                    "type": "boolean",
+                    "description": "Bei mode='day': einzelne Lebensmittel pro Mahlzeit einbeziehen (Standard: false).",
+                },
+            },
+            "required": ["mode"],
+        },
+    )
+
+    # ── Vesti Wardrobe Tools ──────────────────────────────────────────
+
+    get_wardrobe = types.FunctionDeclaration(
+        name="get_wardrobe",
+        description=(
+            "Ruft die Garderobe des Benutzers aus der Vesti-App ab. Liefert Kleidungsstücke, Uhren, "
+            "Düfte und/oder Accessoires mit allen Details (Marke, Material, Farbe, Stil, Anlass, Saison usw.). "
+            "Alle Filter sind optional — ohne Filter kommt die komplette Kategorie zurück. "
+            "String-Filter sind case-insensitive Substring-Matches (brand='rol' trifft 'Rolex'). "
+            "Nutze dies für: 'Was habe ich für Hemden?', 'Welche Düfte passen zum Winter?', "
+            "'Zeig mir meine Lieblingsuhren', 'Was kann ich zum Vorstellungsgespräch anziehen?'. "
+            "Wähle gezielt die relevanten Kategorien — nicht alle gleichzeitig laden wenn nicht nötig."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                # ── Clothing ───────────────────────────────────────────
+                "include_clothing": {
+                    "type": "boolean",
+                    "description": "Kleidungsstücke laden (Hemden, Hosen, Jacken, Schuhe …)",
+                },
+                "clothing_category": {
+                    "type": "string",
+                    "description": "Kategorie-Filter für Kleidung, z.B. 'Oberteile', 'Hosen', 'Schuhe'",
+                },
+                "clothing_color": {
+                    "type": "string",
+                    "description": "Farb-Filter, z.B. 'Blau', 'Weiß'",
+                },
+                "clothing_style": {
+                    "type": "string",
+                    "description": "Stil-Filter, z.B. 'Business', 'Casual', 'Sportlich'",
+                },
+                "clothing_occasion": {
+                    "type": "string",
+                    "description": "Anlass-Filter, z.B. 'Formell', 'Alltag', 'Sport'",
+                },
+                "clothing_season": {
+                    "type": "string",
+                    "description": "Saison-Filter, z.B. 'Sommer', 'Winter', 'Ganzjährig'",
+                },
+                "clothing_brand": {
+                    "type": "string",
+                    "description": "Marken-Filter (Substring), z.B. 'Ralph'",
+                },
+                "clothing_favorite": {
+                    "type": "boolean",
+                    "description": "Nur Favoriten laden",
+                },
+                # ── Watches ────────────────────────────────────────────
+                "include_watches": {
+                    "type": "boolean",
+                    "description": "Uhren laden",
+                },
+                "watches_brand": {
+                    "type": "string",
+                    "description": "Marken-Filter, z.B. 'Rolex', 'Omega'",
+                },
+                "watches_style": {
+                    "type": "string",
+                    "description": "Stil-Filter, z.B. 'Sport', 'Dress', 'Casual'",
+                },
+                "watches_occasion": {
+                    "type": "string",
+                    "description": "Anlass-Filter, z.B. 'Alltag', 'Formell'",
+                },
+                "watches_favorite": {
+                    "type": "boolean",
+                    "description": "Nur Favoriten laden",
+                },
+                # ── Fragrances ─────────────────────────────────────────
+                "include_fragrances": {
+                    "type": "boolean",
+                    "description": "Düfte laden",
+                },
+                "fragrances_brand": {
+                    "type": "string",
+                    "description": "Marken-Filter, z.B. 'Dior', 'Chanel'",
+                },
+                "fragrances_family": {
+                    "type": "string",
+                    "description": "Duftfamilien-Filter (trifft family UND secondary_family), z.B. 'Holzig', 'Frisch'",
+                },
+                "fragrances_season": {
+                    "type": "string",
+                    "description": "Saison-Filter gegen seasons-Array, z.B. 'Winter', 'Sommer'",
+                },
+                "fragrances_occasion": {
+                    "type": "string",
+                    "description": "Anlass-Filter gegen occasions-Array, z.B. 'Alltag', 'Abend'",
+                },
+                "fragrances_concentration": {
+                    "type": "string",
+                    "description": "Konzentrations-Filter, z.B. 'EDP', 'EDT', 'Parfum'",
+                },
+                "fragrances_favorite": {
+                    "type": "boolean",
+                    "description": "Nur Favoriten laden",
+                },
+                # ── Accessories ────────────────────────────────────────
+                "include_accessories": {
+                    "type": "boolean",
+                    "description": "Accessoires laden (Brillen, Gürtel, Taschen, Schmuck …)",
+                },
+                "accessories_type": {
+                    "type": "string",
+                    "description": "Typ-Filter, z.B. 'Sonnenbrille', 'Ring', 'Gürtel'",
+                },
+                "accessories_brand": {
+                    "type": "string",
+                    "description": "Marken-Filter, z.B. 'Ray-Ban', 'Cartier'",
+                },
+                "accessories_style": {
+                    "type": "string",
+                    "description": "Stil-Filter, z.B. 'Casual', 'Elegant'",
+                },
+                "accessories_occasion": {
+                    "type": "string",
+                    "description": "Anlass-Filter gegen occasions-Array, z.B. 'Alltag', 'Urlaub'",
+                },
+                "accessories_favorite": {
+                    "type": "boolean",
+                    "description": "Nur Favoriten laden",
+                },
+            },
+        },
+    )
+
+    get_wardrobe_analytics = types.FunctionDeclaration(
+        name="get_wardrobe_analytics",
+        description=(
+            "Ruft fertig aufbereitete Statistiken und Analysen der Vesti-Garderobe ab. "
+            "Enthält Verteilungen (Stile, Marken, Materialien), Investitionswerte, Service-Fälligkeiten, "
+            "Lücken-Analyse und Empfehlungen. "
+            "Nutze dies bei übergeordneten Fragen: 'Was fehlt in meiner Garderobe?', "
+            "'Wie viel sind meine Uhren wert?', 'Welche Düfte gehen bald zur Neige?', "
+            "'Was dominiert meinen Stil?'. Lade nur die Kategorien die relevant sind."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "include_watches": {
+                    "type": "boolean",
+                    "description": "Uhr-Statistiken laden (Wert, Service, Stilverteilung)",
+                },
+                "include_fragrances": {
+                    "type": "boolean",
+                    "description": "Duft-Statistiken laden (Lagerbestand, Ablauf, Noten-Vielfalt)",
+                },
+                "include_accessories": {
+                    "type": "boolean",
+                    "description": "Accessoire-Statistiken laden",
+                },
+            },
+        },
+    )
+
     return [
         types.Tool(function_declarations=[
             search_notes,
@@ -469,6 +741,11 @@ def _get_agent_tools() -> list:
             rename_folder,
             delete_folder,
             web_search,
+            get_fitness_overview,
+            get_workout_data,
+            get_health_data,
+            get_wardrobe,
+            get_wardrobe_analytics,
         ]),
     ]
 
@@ -894,6 +1171,192 @@ async def _execute_tool(name: str, args: dict, user_id: str, db: AsyncSession) -
             except Exception as e:
                 logger.error(f"Web search failed: {e}")
                 return {"error": f"Web-Suche fehlgeschlagen: {str(e)[:150]}"}
+
+        # ── Forge Fitness & Nutrition Tools ──────────────────────────────
+
+        elif name == "get_fitness_overview":
+            from app.services.forge_mcp_client import call_forge_tool
+
+            include_plan = args.get("include_training_plan", True)
+            days_weight = max(7, min(int(args.get("days_weight") or 90), 365))
+            coaching_limit = max(1, min(int(args.get("coaching_memory_limit") or 3), 10))
+
+            # Fire all calls concurrently
+            profile_task = call_forge_tool("get_user_profile", {})
+            weight_task = call_forge_tool("get_weight_history", {"days": days_weight})
+            coaching_task = call_forge_tool("get_coaching_memory", {"limit": coaching_limit})
+            plan_task = call_forge_tool("get_training_plan", {}) if include_plan else None
+
+            if plan_task:
+                profile, weight, coaching, plan = await asyncio.gather(
+                    profile_task, weight_task, coaching_task, plan_task
+                )
+            else:
+                profile, weight, coaching = await asyncio.gather(
+                    profile_task, weight_task, coaching_task
+                )
+                plan = None
+
+            result: dict = {}
+            if not profile.get("error"):
+                result["profile"] = profile
+            if not weight.get("error"):
+                result["weight_history"] = weight
+            if not coaching.get("error"):
+                result["coaching"] = coaching
+            if plan and not plan.get("error"):
+                result["training_plan"] = plan
+
+            if not result:
+                return {"error": "Forge konnte keine Daten liefern"}
+            return result
+
+        elif name == "get_workout_data":
+            from app.services.forge_mcp_client import call_forge_tool
+
+            mode = args.get("mode", "latest")
+
+            if mode == "latest":
+                return await call_forge_tool("get_latest_workout", {})
+
+            elif mode == "history":
+                limit = max(1, min(int(args.get("limit") or 10), 30))
+                days = max(1, min(int(args.get("days") or 30), 365))
+                return await call_forge_tool("get_workouts", {"limit": limit, "days": days})
+
+            elif mode == "exercise_history":
+                exercise_name = args.get("exercise_name", "").strip()
+                if not exercise_name:
+                    return {"error": "exercise_name ist erforderlich für mode='exercise_history'"}
+                limit = max(1, min(int(args.get("limit") or 20), 30))
+                return await call_forge_tool(
+                    "get_exercise_history",
+                    {"exercise_name": exercise_name, "limit": limit},
+                )
+
+            else:
+                return {"error": f"Unbekannter mode: {mode}. Gültig: latest, history, exercise_history"}
+
+        elif name == "get_health_data":
+            from app.services.forge_mcp_client import call_forge_tool
+
+            mode = args.get("mode", "day")
+            date = args.get("date") or None  # None → server default = today
+
+            if mode == "day":
+                params: dict = {}
+                if date:
+                    params["date"] = date
+                params["include_food_items"] = bool(args.get("include_food_items", False))
+                return await call_forge_tool("get_nutrition_day", params)
+
+            elif mode == "range":
+                days = max(1, min(int(args.get("days") or 7), 14))
+                return await call_forge_tool("get_nutrition_range", {"days": days})
+
+            elif mode == "steps":
+                params = {}
+                if date:
+                    params["date"] = date
+                return await call_forge_tool("get_steps", params)
+
+            elif mode == "sleep":
+                params = {}
+                if date:
+                    params["date"] = date
+                return await call_forge_tool("get_sleep", params)
+
+            else:
+                return {"error": f"Unbekannter mode: {mode}. Gültig: day, range, steps, sleep"}
+
+        # ── Vesti Wardrobe Tools ──────────────────────────────────────────
+
+        elif name == "get_wardrobe":
+            from app.services.vesti_client import call_vesti
+
+            # Build per-category filter dicts from prefixed args
+            def _pick(prefix: str) -> dict:
+                mapping = {
+                    f"{prefix}_category":      "category",
+                    f"{prefix}_color":         "color",
+                    f"{prefix}_style":         "style",
+                    f"{prefix}_occasion":      "occasion",
+                    f"{prefix}_season":        "season",
+                    f"{prefix}_brand":         "brand",
+                    f"{prefix}_favorite":      "favorite",
+                    f"{prefix}_type":          "type",
+                    f"{prefix}_concentration": "concentration",
+                    f"{prefix}_family":        "family",
+                }
+                return {v: args[k] for k, v in mapping.items() if k in args and args[k] is not None and args[k] != ""}
+
+            tasks = {}
+            if args.get("include_clothing", False):
+                tasks["clothing"] = call_vesti("clothing", _pick("clothing"))
+            if args.get("include_watches", False):
+                tasks["watches"] = call_vesti("watches", _pick("watches"))
+            if args.get("include_fragrances", False):
+                tasks["fragrances"] = call_vesti("fragrances", _pick("fragrances"))
+            if args.get("include_accessories", False):
+                tasks["accessories"] = call_vesti("accessories", _pick("accessories"))
+
+            # Default: load everything unfiltered if no category was specified
+            if not tasks:
+                tasks = {
+                    "clothing":    call_vesti("clothing"),
+                    "watches":     call_vesti("watches"),
+                    "fragrances":  call_vesti("fragrances"),
+                    "accessories": call_vesti("accessories"),
+                }
+
+            keys = list(tasks.keys())
+            results = await asyncio.gather(*tasks.values())
+            combined = {}
+            for key, res in zip(keys, results):
+                if not (isinstance(res, dict) and res.get("error")):
+                    combined[key] = res
+                else:
+                    combined[key] = {"error": res.get("error")}
+
+            if not any(
+                not (isinstance(v, dict) and v.get("error")) for v in combined.values()
+            ):
+                return {"error": "Vesti konnte keine Daten liefern"}
+            return combined
+
+        elif name == "get_wardrobe_analytics":
+            from app.services.vesti_client import call_vesti
+
+            tasks = {}
+            if args.get("include_watches", False):
+                tasks["watches"] = call_vesti("analytics_watches")
+            if args.get("include_fragrances", False):
+                tasks["fragrances"] = call_vesti("analytics_fragrances")
+            if args.get("include_accessories", False):
+                tasks["accessories"] = call_vesti("analytics_accessories")
+
+            # Default: load all analytics if nothing specified
+            if not tasks:
+                tasks = {
+                    "watches":     call_vesti("analytics_watches"),
+                    "fragrances":  call_vesti("analytics_fragrances"),
+                    "accessories": call_vesti("analytics_accessories"),
+                }
+
+            keys = list(tasks.keys())
+            results = await asyncio.gather(*tasks.values())
+            combined = {}
+            for key, res in zip(keys, results):
+                if not (isinstance(res, dict) and res.get("error")):
+                    combined[key] = res
+                else:
+                    combined[key] = {"error": res.get("error")}
+
+            if not any(
+                not (isinstance(v, dict) and v.get("error")) for v in combined.values()
+            ):
+                return {"error": "Vesti Analytics konnte keine Daten liefern"}
+            return combined
 
         else:
             return {"error": f"Unbekanntes Tool: {name}"}
